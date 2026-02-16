@@ -1,0 +1,85 @@
+name: Branch Policy
+
+on:
+  pull_request:
+    branches: [dev, master]
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  enforce-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce PR branch policy
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              core.setFailed("No pull request payload available.");
+              return;
+            }
+
+            const base = pr.base.ref;
+            const head = pr.head.ref;
+
+            // Rule 1: all PRs into dev must come from a dedicated working branch.
+            if (base === "dev") {
+              const forbiddenHeads = new Set(["dev", "main", "master"]);
+              if (forbiddenHeads.has(head)) {
+                core.setFailed(
+                  `PRs into dev must come from a dedicated work branch; got head '${head}'.`
+                );
+                return;
+              }
+              core.info(`Policy check passed for ${head} -> dev`);
+              return;
+            }
+
+            // Rule 2: only dev is allowed to target master.
+            if (base === "master" && head !== "dev") {
+              core.setFailed(
+                `Only 'dev' may open PRs into 'master'; got '${head}' -> master.`
+              );
+              return;
+            }
+
+            // Rule 3: dev -> master requires at least one human approval.
+            if (base === "master" && head === "dev") {
+              const { data: reviews } = await github.rest.pulls.listReviews({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100,
+              });
+
+              const latestStateByUser = new Map();
+              for (const review of reviews) {
+                if (!review.user || !review.user.login) continue;
+                latestStateByUser.set(review.user.login, review);
+              }
+
+              const author = pr.user?.login ?? "";
+              const humanApprovals = [...latestStateByUser.values()].filter((review) => {
+                const isApproved = review.state === "APPROVED";
+                const isHuman = review.user?.type === "User";
+                const isNotAuthor = review.user?.login !== author;
+                return isApproved && isHuman && isNotAuthor;
+              });
+
+              if (humanApprovals.length < 1) {
+                core.setFailed(
+                  "dev -> master requires at least one non-author human APPROVED review."
+                );
+                return;
+              }
+
+              core.info(
+                `Policy check passed for dev -> master with ${humanApprovals.length} human approval(s).`
+              );
+            }

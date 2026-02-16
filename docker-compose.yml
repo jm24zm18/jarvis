@@ -1,0 +1,24 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  ollama:
+    image: ollama/ollama:0.11.4
+    ports:
+      - "11434:11434"
+
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml
+
+  sglang:
+    image: lmsysorg/sglang:spark
+    command: ["python3", "-m", "sglang.launch_server", "--model", "openai/gpt-oss-120b"]
+    ports:
+      - "30000:30000"

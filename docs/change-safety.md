@@ -1,0 +1,52 @@
+# Change Safety
+
+## Critical Invariants
+
+- Tool runtime remains deny-by-default (`src/jarvis/tools/runtime.py`).
+- Policy decisions must enforce lockdown/restart and permission checks (`src/jarvis/policy/engine.py`).
+- Migration ordering is append-only and monotonic (`src/jarvis/db/migrations/*`).
+- Event schema fields (`trace_id`, `span_id`, `event_type`) remain stable for observability.
+- ID format prefixes are stable (`src/jarvis/ids.py`).
+
+## High-Risk Files
+
+- `src/jarvis/config.py`
+- `src/jarvis/db/queries.py`
+- `src/jarvis/tools/runtime.py`
+- `src/jarvis/policy/engine.py`
+- `src/jarvis/orchestrator/step.py`
+
+Any behavior change in these files should include focused tests and doc updates.
+
+## Pre-Change Checklist
+
+```bash
+make lint
+make typecheck
+uv run pytest tests/unit -q
+```
+
+## Post-Change Verification
+
+```bash
+make test-gates
+uv run jarvis doctor
+curl -s http://127.0.0.1:8000/readyz
+```
+
+## Rollback Guidance
+
+- DB schema issue: restore from snapshot with `deploy/restore_db.sh`.
+- Runtime issue after deploy: rollback code via `deploy/rollback.sh <git-ref>`.
+- Self-update issue: run rollback path in self-update pipeline and verify readiness.
+
+## Agent Notes
+
+- If auth/ownership logic changes, add integration tests for both `user` and `admin` paths.
+- If migration changes behavior, document expected compatibility in `docs/architecture.md`.
+
+## Related Docs
+
+- `docs/testing.md`
+- `docs/runbook.md`
+- `docs/build-release.md`
