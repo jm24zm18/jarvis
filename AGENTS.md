@@ -4,8 +4,8 @@ Primary AI-agent operating guide for this repository.
 
 ## Quick Facts
 
-- Stack: FastAPI + Celery + SQLite + React/Vite web UI.
-- Runtime: API (`make api`) + worker (`make worker`) + Docker services (`make dev`).
+- Stack: FastAPI + in-process asyncio task runner + SQLite + React/Vite web UI.
+- Runtime: API (`make api`) + Docker services (`make dev`).
 - DB migrations: `src/jarvis/db/migrations/001..023` auto-run at startup and via `make migrate`.
 - Tool runtime is deny-by-default (`src/jarvis/tools/runtime.py`, `src/jarvis/policy/engine.py`).
 - Auth/RBAC: bearer session tokens with `user`/`admin` roles and ownership scoping.
@@ -21,7 +21,6 @@ make migrate
 # run
 make dev
 make api
-make worker
 make web-dev
 
 # quality gates
@@ -79,7 +78,7 @@ uv run jarvis skill list
 
 ## File Map
 
-- Runtime/bootstrap: `src/jarvis/main.py`, `src/jarvis/celery_app.py`
+- Runtime/bootstrap: `src/jarvis/main.py`, `src/jarvis/tasks/runner.py`
 - Configuration/env contract: `src/jarvis/config.py`, `.env.example`, `docs/configuration.md`
 - Data model/query invariants: `src/jarvis/db/queries.py`, `src/jarvis/db/migrations/`
 - Orchestration/tool policies: `src/jarvis/orchestrator/step.py`, `src/jarvis/tools/runtime.py`, `src/jarvis/policy/engine.py`

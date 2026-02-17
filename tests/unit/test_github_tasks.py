@@ -287,3 +287,79 @@ def test_github_pr_chat_help_mode_skips_pr_fetch(monkeypatch) -> None:
     )
     assert result["ok"] is True
     assert result["result"]["comment_id"] == 999
+
+
+def test_github_issue_sync_bug_report_success(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_ISSUE_SYNC_ENABLED", "1")
+    monkeypatch.setenv("GITHUB_ISSUE_SYNC_REPO", "acme/repo")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    github_tasks.get_settings.cache_clear()
+
+    bug_id = github_tasks._record_bug_report("Bug for sync", {"x": 1}, priority="medium")
+    with get_conn() as conn:
+        conn.execute("UPDATE bug_reports SET kind='feature' WHERE id=?", (bug_id,))
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"number": 77, "html_url": "https://github.com/acme/repo/issues/77"}
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def post(self, *args, **kwargs):
+            return DummyResponse()
+
+    monkeypatch.setattr(github_tasks.httpx, "Client", DummyClient)
+    result = github_tasks.github_issue_sync_bug_report(bug_id=bug_id)
+    assert result["ok"] is True
+    assert result["issue_number"] == 77
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT github_issue_number, github_issue_url FROM bug_reports WHERE id=?",
+            (bug_id,),
+        ).fetchone()
+    assert row is not None
+    assert int(row["github_issue_number"]) == 77
+
+
+def test_github_issue_sync_bug_report_records_sync_error(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_ISSUE_SYNC_ENABLED", "1")
+    monkeypatch.setenv("GITHUB_ISSUE_SYNC_REPO", "acme/repo")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    github_tasks.get_settings.cache_clear()
+
+    bug_id = github_tasks._record_bug_report("Bug for sync failure", {"x": 1}, priority="medium")
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def post(self, *args, **kwargs):
+            raise RuntimeError("gh down")
+
+    monkeypatch.setattr(github_tasks.httpx, "Client", DummyClient)
+    result = github_tasks.github_issue_sync_bug_report(bug_id=bug_id)
+    assert result["ok"] is False
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT github_sync_error FROM bug_reports WHERE id=?",
+            (bug_id,),
+        ).fetchone()
+    assert row is not None
+    assert "gh down" in str(row["github_sync_error"])

@@ -39,20 +39,20 @@ ENV_GROUPS: list[EnvGroup] = [
         ],
     ),
     EnvGroup(
-        title="Message Broker",
-        description="RabbitMQ connection for Celery task queue.",
+        title="Task Runner",
+        description="In-process async task runner settings.",
         required=True,
         vars=[
             EnvVarDef(
-                "BROKER_URL",
-                "AMQP broker URL",
-                default="amqp://guest:guest@localhost:5672//",
+                "TASK_RUNNER_MAX_CONCURRENT",
+                "Maximum concurrent in-process background tasks",
+                default="20",
                 required_for_dev=True,
             ),
             EnvVarDef(
-                "RESULT_BACKEND",
-                "Celery result backend",
-                default="rpc://",
+                "TASK_RUNNER_SHUTDOWN_TIMEOUT_SECONDS",
+                "Shutdown drain timeout for in-flight tasks",
+                default="30",
                 required_for_dev=True,
             ),
         ],
@@ -77,17 +77,44 @@ ENV_GROUPS: list[EnvGroup] = [
         description="Google OAuth + Gemini model. Skip for local-only development.",
         required=False,
         vars=[
+            EnvVarDef(
+                "PRIMARY_PROVIDER",
+                "Primary model provider (gemini or sglang)",
+                default="gemini",
+            ),
             EnvVarDef("GOOGLE_OAUTH_CLIENT_ID", "OAuth client ID", secret=True),
             EnvVarDef("GOOGLE_OAUTH_CLIENT_SECRET", "OAuth client secret", secret=True),
-            EnvVarDef("GOOGLE_OAUTH_REFRESH_TOKEN", "OAuth refresh token", secret=True),
+            EnvVarDef("GEMINI_MODEL", "Gemini model name", default="gemini-2.5-flash"),
             EnvVarDef(
-                "GEMINI_PROVIDER",
-                "Primary Gemini provider (google-api or google-gemini-cli)",
-                default="google-gemini-cli",
+                "GEMINI_CODE_ASSIST_PLAN_TIER",
+                "Plan tier (free, pro, ultra, standard, enterprise)",
+                default="free",
             ),
-            EnvVarDef("GEMINI_MODEL", "Gemini model name", default="gemini-3-flash-preview"),
-            EnvVarDef("GEMINI_CLI_BINARY", "Gemini CLI binary path", default="gemini"),
-            EnvVarDef("GEMINI_CLI_HOME_DIR", "Gemini CLI home dir (optional)", default=""),
+            EnvVarDef(
+                "GEMINI_CODE_ASSIST_REQUESTS_PER_MINUTE",
+                "Override requests/minute (0 uses tier default)",
+                default="0",
+            ),
+            EnvVarDef(
+                "GEMINI_CODE_ASSIST_REQUESTS_PER_DAY",
+                "Override requests/day (0 uses tier default)",
+                default="0",
+            ),
+            EnvVarDef(
+                "GEMINI_CODE_ASSIST_TOKEN_PATH",
+                "Code Assist token cache path",
+                default="~/.config/gemini-cli-oauth/token.json",
+            ),
+            EnvVarDef(
+                "GEMINI_CLI_TIMEOUT_SECONDS",
+                "Code Assist request timeout in seconds",
+                default="120",
+            ),
+            EnvVarDef(
+                "GEMINI_QUOTA_COOLDOWN_DEFAULT_SECONDS",
+                "Fallback cooldown after quota errors when reset is unknown",
+                default="60",
+            ),
         ],
     ),
     EnvGroup(
@@ -214,6 +241,26 @@ ENV_GROUPS: list[EnvGroup] = [
                 "Enable PR summary webhook task (0/1)",
                 default="0",
             ),
+            EnvVarDef(
+                "GITHUB_ISSUE_SYNC_ENABLED",
+                "Enable bug/feature sync to GitHub issues (0/1)",
+                default="0",
+            ),
+            EnvVarDef(
+                "GITHUB_ISSUE_SYNC_REPO",
+                "GitHub repo for issue sync (owner/repo)",
+                default="",
+            ),
+            EnvVarDef(
+                "GITHUB_ISSUE_LABELS_BUG",
+                "CSV labels for synced bug issues",
+                default="jarvis,bug",
+            ),
+            EnvVarDef(
+                "GITHUB_ISSUE_LABELS_FEATURE",
+                "CSV labels for synced feature issues",
+                default="jarvis,feature-request",
+            ),
         ],
     ),
     EnvGroup(
@@ -222,6 +269,37 @@ ENV_GROUPS: list[EnvGroup] = [
         required=False,
         vars=[
             EnvVarDef("TRACE_SAMPLE_RATE", "Trace sample rate (0.0-1.0)", default="1.0"),
+            EnvVarDef("MAINTENANCE_ENABLED", "Enable local maintenance loop (0/1)", default="0"),
+            EnvVarDef(
+                "MAINTENANCE_HEARTBEAT_INTERVAL_SECONDS",
+                "Heartbeat schedule interval in seconds (0 disables heartbeat)",
+                default="300",
+            ),
+            EnvVarDef(
+                "MAINTENANCE_INTERVAL_SECONDS",
+                "Maintenance schedule interval in seconds (0 disables schedule)",
+                default="0",
+            ),
+            EnvVarDef(
+                "MAINTENANCE_COMMANDS",
+                "Maintenance commands separated by \\n (escaped) or real newlines",
+                default="make lint\\nmake typecheck",
+            ),
+            EnvVarDef(
+                "MAINTENANCE_TIMEOUT_SECONDS",
+                "Per-command timeout for maintenance checks",
+                default="1800",
+            ),
+            EnvVarDef(
+                "MAINTENANCE_CREATE_BUGS",
+                "Create bug records for maintenance failures (0/1)",
+                default="1",
+            ),
+            EnvVarDef(
+                "MAINTENANCE_WORKDIR",
+                "Optional working directory for maintenance commands",
+                default="",
+            ),
             EnvVarDef("COMPACTION_EVERY_N_EVENTS", "Event compaction interval", default="25"),
             EnvVarDef(
                 "COMPACTION_INTERVAL_SECONDS", "Compaction time interval", default="600"

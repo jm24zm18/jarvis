@@ -4,7 +4,8 @@ from pathlib import Path
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import create_approval, ensure_system_state, get_system_state
-from jarvis.tools.host import _DEFAULT_MAX_CAPTURE_BYTES as MAX_CAPTURE_BYTES, execute_host_command
+from jarvis.tools.host import _DEFAULT_MAX_CAPTURE_BYTES as MAX_CAPTURE_BYTES
+from jarvis.tools.host import execute_host_command
 
 
 def test_exec_host_success_writes_log(tmp_path: Path) -> None:

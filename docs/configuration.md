@@ -78,11 +78,13 @@ Source of truth: `src/jarvis/config.py`.
 | `GOOGLE_OAUTH_CLIENT_ID` | str | `` | Google OAuth client ID. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | str | `` | Google OAuth client secret. |
 | `GOOGLE_OAUTH_REFRESH_TOKEN` | str | `` | OAuth refresh token. |
-| `GEMINI_PROVIDER` | str | `google-gemini-cli` | Gemini provider selector. |
-| `GEMINI_MODEL` | str | `gemini-3-flash-preview` | Default Gemini model. |
-| `GEMINI_CLI_BINARY` | str | `gemini` | Gemini CLI executable. |
-| `GEMINI_CLI_HOME_DIR` | str | `` | Optional Gemini CLI HOME override. |
+| `PRIMARY_PROVIDER` | str | `gemini` | Primary chat provider (`gemini` or `sglang`). |
+| `GEMINI_MODEL` | str | `gemini-2.5-flash` | Default Gemini model. |
+| `GEMINI_CODE_ASSIST_PLAN_TIER` | str | `free` | Gemini Code Assist tier (`free`, `pro`, `ultra`, `standard`, `enterprise`). |
+| `GEMINI_CODE_ASSIST_REQUESTS_PER_MINUTE` | int | `0` | Local cap for Gemini requests per minute (`0` uses tier default). |
+| `GEMINI_CODE_ASSIST_REQUESTS_PER_DAY` | int | `0` | Local cap for Gemini requests per day (`0` uses tier default). |
 | `GEMINI_CLI_TIMEOUT_SECONDS` | int | `120` | Gemini CLI timeout. |
+| `GEMINI_QUOTA_COOLDOWN_DEFAULT_SECONDS` | int | `60` | Fallback cooldown after quota errors when reset time is not provided. |
 | `SGLANG_BASE_URL` | str | `http://localhost:30000/v1` | SGLang endpoint. |
 | `SGLANG_MODEL` | str | `openai/gpt-oss-120b` | SGLang model name. |
 | `SGLANG_TIMEOUT_SECONDS` | int | `600` | SGLang timeout. |
@@ -120,7 +122,7 @@ Source of truth: `src/jarvis/config.py`.
 | `PAGERDUTY_ROUTING_KEY` | str | `` | PagerDuty events routing key. |
 | `ALERT_SLACK_WEBHOOK_URL` | str | `` | Optional Slack mirror webhook. |
 
-### GitHub PR Automation
+### GitHub Automation
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
@@ -130,6 +132,22 @@ Source of truth: `src/jarvis/config.py`.
 | `GITHUB_REPO_ALLOWLIST` | str | `` | Optional CSV allowlist (supports globs, e.g. `my-org/*`). |
 | `GITHUB_BOT_LOGIN` | str | `jarvis` | Bot login used for `@mention` trigger matching and self-reply guard. |
 | `GITHUB_PR_SUMMARY_ENABLED` | int | `0` | Enable PR summary comments for `pull_request` webhook events. |
+| `GITHUB_ISSUE_SYNC_ENABLED` | int | `0` | Enable bug/feature request sync from Jarvis API into GitHub Issues. |
+| `GITHUB_ISSUE_SYNC_REPO` | str | `` | Destination repo in `owner/repo` format for issue sync. |
+| `GITHUB_ISSUE_LABELS_BUG` | str | `jarvis,bug` | CSV labels applied to synced bug issues. |
+| `GITHUB_ISSUE_LABELS_FEATURE` | str | `jarvis,feature-request` | CSV labels applied to synced feature request issues. |
+
+### Local Maintenance Loop
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `MAINTENANCE_ENABLED` | int | `0` | Enable local maintenance task scheduling. |
+| `MAINTENANCE_HEARTBEAT_INTERVAL_SECONDS` | int | `300` | Lightweight maintenance heartbeat interval (`0` disables). |
+| `MAINTENANCE_INTERVAL_SECONDS` | int | `0` | Beat interval for maintenance task (`0` disables schedule). |
+| `MAINTENANCE_COMMANDS` | str | `make lint\nmake typecheck` | Commands to run (newline-separated, `\n` supported). |
+| `MAINTENANCE_TIMEOUT_SECONDS` | int | `1800` | Per-command timeout in seconds. |
+| `MAINTENANCE_CREATE_BUGS` | int | `1` | Create bug reports on command failures. |
+| `MAINTENANCE_WORKDIR` | str | `` | Optional override working directory for maintenance commands. |
 
 ### API and Web UI Security
 
@@ -163,6 +181,7 @@ Source of truth: `src/jarvis/config.py`.
 - Required non-empty fields include DB/broker/provider/auth/admin/backup/PagerDuty values.
 - `WHATSAPP_VERIFY_TOKEN` cannot remain default dev token.
 - If `GITHUB_PR_SUMMARY_ENABLED=1`, `GITHUB_TOKEN` and `GITHUB_WEBHOOK_SECRET` are required.
+- If `GITHUB_ISSUE_SYNC_ENABLED=1`, `GITHUB_TOKEN` and `GITHUB_ISSUE_SYNC_REPO` are required.
 - `APP_DB` must be an absolute path.
 - If `BIND_HOST=0.0.0.0` in prod, runtime emits a security warning.
 

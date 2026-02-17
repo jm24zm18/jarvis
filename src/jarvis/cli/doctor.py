@@ -10,7 +10,6 @@ from jarvis.cli.checks import (
     CheckResult,
     check_agent_bundles,
     check_api_running,
-    check_celery_worker,
     check_config_loads,
     check_config_validates,
     check_database,
@@ -18,7 +17,7 @@ from jarvis.cli.checks import (
     check_http_service,
     check_migrations_applied,
     check_python_version,
-    check_rabbitmq,
+    check_task_runner,
     check_tool_exists,
 )
 
@@ -90,7 +89,6 @@ def run_doctor(*, json_output: bool = False, fix: bool = False) -> None:
             from jarvis.config import Settings
 
             settings = Settings()
-            _run(check_rabbitmq(settings.broker_url))
             _run(check_http_service("Ollama", settings.ollama_base_url, "/api/tags"))
             sglang_base = settings.sglang_base_url.rstrip("/v1").rstrip("/")
             _run(check_http_service("SGLang", sglang_base, "/health"))
@@ -133,9 +131,9 @@ def run_doctor(*, json_output: bool = False, fix: bool = False) -> None:
     api_result = check_api_running()
     _run(api_result)
     if api_result.passed:
-        _run(check_celery_worker())
+        _run(check_task_runner())
     else:
-        print(f"  {_yellow('⊘')} Celery check skipped (API not running)")
+        print(f"  {_yellow('⊘')} task runner check skipped (API not running)")
 
     # --- Summary ---
     fail_count = sum(1 for r in all_results if not r.passed)

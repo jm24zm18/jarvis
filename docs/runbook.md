@@ -5,9 +5,35 @@
 1. `make dev`
 2. `make migrate`
 3. `make api`
-4. `make worker`
-5. Check `GET /healthz` and `GET /readyz`
-6. If setup is incomplete, run `uv run jarvis doctor --fix`
+4. Check `GET /healthz` and `GET /readyz`
+5. If setup is incomplete, run `uv run jarvis doctor --fix`
+
+## Local Maintenance Loop
+
+1. Set `MAINTENANCE_ENABLED=1` and `MAINTENANCE_INTERVAL_SECONDS>0` in `.env`.
+   - `MAINTENANCE_HEARTBEAT_INTERVAL_SECONDS` provides default cron heartbeat.
+2. Configure commands via `MAINTENANCE_COMMANDS`.
+3. Periodic maintenance runs in-process while API is running.
+4. Trigger manually with `uv run jarvis maintenance run`.
+5. Review generated failures in `/api/v1/bugs` when enabled.
+6. CLI controls:
+   - `uv run jarvis maintenance status --json`
+   - `uv run jarvis maintenance run`
+   - `uv run jarvis maintenance enqueue`
+
+## GitHub Integration Ops
+
+1. PR automation:
+   - Enable `GITHUB_PR_SUMMARY_ENABLED=1`.
+   - Configure webhook to `POST /api/v1/webhooks/github`.
+   - Ensure API is running for task processing.
+2. Bug/feature sync to GitHub Issues:
+   - Enable `GITHUB_ISSUE_SYNC_ENABLED=1`.
+   - Set `GITHUB_ISSUE_SYNC_REPO=owner/repo`.
+   - Submit with `"sync_to_github": true` on create.
+3. Validate sync results:
+   - `GET /api/v1/bugs` should show `github_issue_number`, `github_issue_url`, `github_synced_at`.
+   - If sync fails, inspect `github_sync_error`.
 
 ## Web UI Operations
 
@@ -20,8 +46,8 @@
 
 1. Trigger `/restart` as admin.
 2. `system_state.restarting=1` is set.
-3. System drains active/reserved/scheduled Celery work until timeout.
-4. Remaining tasks are revoked after timeout.
+3. System drains in-flight in-process tasks until timeout.
+4. Restart command is executed.
 5. Restart flag is cleared and `/readyz` is validated.
 
 ## Lockdown

@@ -95,7 +95,9 @@ def _valid_finalize_args() -> dict[str, object]:
             },
             "planner": {
                 "identity_md": _identity_md(
-                    "planner", ["echo", "skill_list", "skill_read", "skill_write"], "Planner Agent"
+                    "planner",
+                    ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+                    "Planner Agent",
                 ),
                 "soul_md": "# Planner Soul\n",
             },
@@ -106,6 +108,70 @@ def _valid_finalize_args() -> dict[str, object]:
                     "Coder Agent",
                 ),
                 "soul_md": "# Coder Soul\n",
+            },
+            "tester": {
+                "identity_md": _identity_md(
+                    "tester",
+                    ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+                    "Tester Agent",
+                ),
+                "soul_md": "# Tester Soul\n",
+            },
+            "lintfixer": {
+                "identity_md": _identity_md(
+                    "lintfixer",
+                    ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+                    "Lintfixer Agent",
+                ),
+                "soul_md": "# Lintfixer Soul\n",
+            },
+            "api_guardian": {
+                "identity_md": _identity_md(
+                    "api_guardian",
+                    ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+                    "API Guardian Agent",
+                ),
+                "soul_md": "# API Guardian Soul\n",
+            },
+            "data_migrator": {
+                "identity_md": _identity_md(
+                    "data_migrator",
+                    ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+                    "Data Migrator Agent",
+                ),
+                "soul_md": "# Data Migrator Soul\n",
+            },
+            "web_builder": {
+                "identity_md": _identity_md(
+                    "web_builder",
+                    ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+                    "Web Builder Agent",
+                ),
+                "soul_md": "# Web Builder Soul\n",
+            },
+            "security_reviewer": {
+                "identity_md": _identity_md(
+                    "security_reviewer",
+                    ["echo", "exec_host", "web_search", "skill_list", "skill_read", "skill_write"],
+                    "Security Reviewer Agent",
+                ),
+                "soul_md": "# Security Reviewer Soul\n",
+            },
+            "docs_keeper": {
+                "identity_md": _identity_md(
+                    "docs_keeper",
+                    ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+                    "Docs Keeper Agent",
+                ),
+                "soul_md": "# Docs Keeper Soul\n",
+            },
+            "release_ops": {
+                "identity_md": _identity_md(
+                    "release_ops",
+                    ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+                    "Release Ops Agent",
+                ),
+                "soul_md": "# Release Ops Soul\n",
             },
         },
     }
@@ -184,7 +250,11 @@ def test_finalize_writes_bundles(tmp_path: Path) -> None:
     assert answers["assistant_name"] == "Friday"
     assert answers["user_name"] == "Justin"
 
-    for agent_id in ("main", "researcher", "planner", "coder"):
+    for agent_id in (
+        "main", "researcher", "planner", "coder",
+        "tester", "lintfixer", "api_guardian", "data_migrator",
+        "web_builder", "security_reviewer", "docs_keeper", "release_ops",
+    ):
         assert (agent_root / agent_id / "identity.md").is_file()
         assert (agent_root / agent_id / "soul.md").is_file()
         assert (agent_root / agent_id / "heartbeat.md").is_file()

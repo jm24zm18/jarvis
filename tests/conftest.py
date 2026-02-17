@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from jarvis.channels.registry import register_channel, _reset as _reset_channels
+from jarvis.channels.registry import _reset as _reset_channels
+from jarvis.channels.registry import register_channel
 from jarvis.channels.whatsapp.adapter import WhatsAppAdapter
 from jarvis.config import get_settings
 from jarvis.db.migrations.runner import run_migrations

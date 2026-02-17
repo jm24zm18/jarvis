@@ -291,7 +291,7 @@ export default function AdminBugsPage() {
                 <div>
                   <label className="mb-1 block text-[11px] font-medium text-[var(--text-muted)]">Assign Agent</label>
                   <div className="flex gap-1">
-                    {["main", "researcher", "planner", "coder"].map((a) => (
+                    {["main", "researcher", "planner", "coder", "tester", "lintfixer", "api_guardian", "data_migrator", "web_builder", "security_reviewer", "docs_keeper", "release_ops"].map((a) => (
                       <Button
                         key={a}
                         variant={selected.assignee_agent === a ? "primary" : "ghost"}

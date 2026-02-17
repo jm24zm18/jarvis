@@ -19,7 +19,7 @@ class KbUpsertInput(BaseModel):
 
 @router.get("")
 def search_memory(
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     q: str = "",
     thread_id: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
@@ -88,7 +88,7 @@ def search_memory(
 
 
 @router.get("/stats")
-def memory_stats(ctx: UserContext = Depends(require_auth)) -> dict[str, int]:
+def memory_stats(ctx: UserContext = Depends(require_auth)) -> dict[str, int]:  # noqa: B008
     with get_conn() as conn:
         if ctx.is_admin:
             total = conn.execute("SELECT COUNT(*) AS n FROM memory_items").fetchone()
@@ -119,7 +119,7 @@ def memory_stats(ctx: UserContext = Depends(require_auth)) -> dict[str, int]:
 
 @router.get("/kb")
 def search_kb(
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     q: str = "",
     limit: int = Query(default=20, ge=1, le=100),
 ) -> dict[str, object]:
@@ -136,7 +136,7 @@ def search_kb(
 @router.post("/kb")
 def upsert_kb(
     payload: KbUpsertInput,
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, str]:
     del ctx
     kb = KnowledgeBaseService()

@@ -4,12 +4,10 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from fastapi.responses import JSONResponse
-from kombu.exceptions import OperationalError
 
-from jarvis.celery_app import celery_app
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
@@ -23,17 +21,16 @@ from jarvis.db.queries import (
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
+from jarvis.tasks import get_task_runner
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
 _limiter = Limiter(key_func=get_remote_address)
 
 
-def _safe_send_task(name: str, kwargs: dict[str, str], queue: str) -> bool:
+def _safe_send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
     try:
-        celery_app.send_task(name, kwargs=kwargs, queue=queue)
-        return True
-    except OperationalError:
-        # Degraded mode: accept inbound traffic even when broker is unavailable.
+        return bool(get_task_runner().send_task(name, kwargs=kwargs, queue=queue))
+    except Exception:
         return False
 
 

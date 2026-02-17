@@ -33,16 +33,23 @@ class MemoryService:
             return ""
         return " OR ".join(tokens[:8])
 
-    def write(self, conn: sqlite3.Connection, thread_id: str, text: str) -> str:
+    def write(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        text: str,
+        metadata: dict[str, object] | None = None,
+    ) -> str:
         settings = get_settings()
         memory_id = new_id("mem")
+        metadata_json = json.dumps(metadata or {})
         conn.execute(
             (
                 "INSERT INTO memory_items("
                 "id, thread_id, text, metadata_json, created_at"
                 ") VALUES(?,?,?,?,?)"
             ),
-            (memory_id, thread_id, text, json.dumps({}), datetime.now(UTC).isoformat()),
+            (memory_id, thread_id, text, metadata_json, datetime.now(UTC).isoformat()),
         )
         conn.execute(
             "INSERT INTO memory_fts(memory_id, thread_id, text) VALUES(?,?,?)",
@@ -747,7 +754,7 @@ class MemoryService:
             if choices:
                 content = choices[0].get("message", {}).get("content", "")
                 if content.strip():
-                    return content.strip()
+                    return str(content.strip())
         except Exception:
             logger.debug("LLM summarization failed for %s; falling back to truncation", label)
         # Fallback: raw message truncation

@@ -19,6 +19,22 @@ async def test_tool_denied_by_default() -> None:
     with get_conn() as conn:
         with pytest.raises(PolicyError):
             await runtime.execute(conn, "echo", {"x": 1}, "main", "trc_1")
+        start_query = (
+            "SELECT COUNT(*) AS c FROM events WHERE trace_id='trc_1' "
+            "AND event_type='tool.call.start'"
+        )
+        starts = conn.execute(
+            start_query
+        ).fetchone()
+        end_query = (
+            "SELECT COUNT(*) AS c FROM events WHERE trace_id='trc_1' "
+            "AND event_type='tool.call.end'"
+        )
+        ends = conn.execute(
+            end_query
+        ).fetchone()
+        assert int(starts["c"]) == 1
+        assert int(ends["c"]) == 1
 
 
 @pytest.mark.asyncio
@@ -79,3 +95,34 @@ async def test_session_tool_denied_for_worker() -> None:
                 "researcher",
                 "trc_3",
             )
+        start_query = (
+            "SELECT COUNT(*) AS c FROM events WHERE trace_id='trc_3' "
+            "AND event_type='tool.call.start'"
+        )
+        starts = conn.execute(
+            start_query
+        ).fetchone()
+        end_query = (
+            "SELECT COUNT(*) AS c FROM events WHERE trace_id='trc_3' "
+            "AND event_type='tool.call.end'"
+        )
+        ends = conn.execute(
+            end_query
+        ).fetchone()
+        assert int(starts["c"]) == 1
+        assert int(ends["c"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_emits_terminal_event() -> None:
+    runtime = ToolRuntime(ToolRegistry())
+    with get_conn() as conn:
+        with pytest.raises(PolicyError, match="R3"):
+            await runtime.execute(conn, "missing_tool", {}, "main", "trc_4")
+        row = conn.execute(
+            "SELECT payload_redacted_json FROM events "
+            "WHERE trace_id='trc_4' AND event_type='tool.call.end' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert "unknown_tool" in str(row["payload_redacted_json"])

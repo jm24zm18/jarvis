@@ -9,9 +9,7 @@ import time
 from dataclasses import dataclass
 
 import click
-from kombu.exceptions import OperationalError
 
-from jarvis.celery_app import celery_app
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
     create_thread,
@@ -22,6 +20,7 @@ from jarvis.db.queries import (
     insert_message,
 )
 from jarvis.ids import new_id
+from jarvis.tasks import get_task_runner
 from jarvis.tasks.agent import agent_step
 
 
@@ -99,14 +98,13 @@ def send_and_wait(
 
     trace_id = new_id("trc")
     if enqueue:
-        try:
-            celery_app.send_task(
-                "jarvis.tasks.agent.agent_step",
-                kwargs={"trace_id": trace_id, "thread_id": thread_id, "actor_id": "main"},
-                queue="agent_priority",
-            )
-        except OperationalError as exc:
-            raise click.ClickException(f"failed to enqueue agent step: {exc}") from exc
+        ok = get_task_runner().send_task(
+            "jarvis.tasks.agent.agent_step",
+            kwargs={"trace_id": trace_id, "thread_id": thread_id, "actor_id": "main"},
+            queue="agent_priority",
+        )
+        if not ok:
+            raise click.ClickException("failed to enqueue agent step")
 
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
@@ -122,7 +120,7 @@ def send_and_wait(
             time.sleep(poll_interval_s)
         raise click.ClickException(
             f"timed out waiting for assistant reply after {timeout_s:.1f}s "
-            "(is worker running?)"
+            "(is API running?)"
         )
 
     assistant_message_id = agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")

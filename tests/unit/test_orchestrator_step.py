@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 from dataclasses import dataclass
 from typing import Any
@@ -12,7 +13,13 @@ from jarvis.db.queries import (
     insert_message,
 )
 from jarvis.memory.skills import SkillsService
-from jarvis.orchestrator.step import MAX_TOOL_ITERATIONS, _enforce_identity_policy, run_agent_step
+from jarvis.orchestrator.step import (
+    DEGRADED_RESPONSE,
+    MAX_TOOL_ITERATIONS,
+    _enforce_identity_policy,
+    _extract_embedded_tool_payload,
+    run_agent_step,
+)
 from jarvis.providers.base import ModelResponse
 
 
@@ -94,9 +101,52 @@ def test_run_agent_step_model_path_with_tool_loop(monkeypatch) -> None:
             "SELECT COUNT(*) AS c FROM events WHERE trace_id=? AND event_type='model.fallback'",
             ("trc_step_1",),
         ).fetchone()
+        thought_rows = conn.execute(
+            "SELECT payload_json FROM events WHERE trace_id=? AND event_type='agent.thought' "
+            "ORDER BY created_at ASC",
+            ("trc_step_1",),
+        ).fetchall()
     assert row is not None and row["content"] == "final answer"
     assert runtime.execute_calls == 1
     assert fallback_row is not None and int(fallback_row["c"]) == 1
+    assert len(thought_rows) >= 2
+
+
+def test_run_agent_step_prefers_provider_reasoning_for_thought_payload(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="final answer",
+                    tool_calls=[],
+                    reasoning_text="reasoning trail",
+                    reasoning_parts=[{"text": "reasoning trail"}],
+                ),
+                "primary",
+            )
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550126")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "hello")
+        _ = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_reasoning")
+        )
+        thought_row = conn.execute(
+            "SELECT payload_json FROM events WHERE trace_id=? AND event_type='agent.thought' "
+            "ORDER BY created_at ASC LIMIT 1",
+            ("trc_step_reasoning",),
+        ).fetchone()
+    assert thought_row is not None
+    payload = json.loads(str(thought_row["payload_json"]))
+    assert payload["text"] == "reasoning trail"
+    assert payload["thought_source"] == "provider_reasoning"
+    assert payload["reasoning_parts"] == [{"text": "reasoning trail"}]
 
 
 def test_run_agent_step_worker_ignores_command_short_path(monkeypatch) -> None:
@@ -119,8 +169,9 @@ def test_run_agent_step_worker_ignores_command_short_path(monkeypatch) -> None:
                 actor_id="researcher",
             )
         )
-        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        row = conn.execute("SELECT role, content FROM messages WHERE id=?", (message_id,)).fetchone()
     assert row is not None and row["content"] == "worker reply"
+    assert row["role"] == "agent"
     assert runtime.execute_calls == 0
 
 
@@ -222,6 +273,7 @@ def test_run_agent_step_includes_skills_and_environment_context(monkeypatch) -> 
         system_context: str,
         summary_short: str,
         summary_long: str,
+        structured_state: str,
         memory_chunks: list[str],
         tail: list[str],
         token_budget: int,
@@ -230,7 +282,7 @@ def test_run_agent_step_includes_skills_and_environment_context(monkeypatch) -> 
         available_tools: list[dict[str, str]] | None = None,
         skill_catalog: list[dict[str, object]] | None = None,
     ) -> tuple[str, str, dict[str, object]]:
-        del summary_short, summary_long, tail, token_budget, max_memory_items
+        del summary_short, summary_long, structured_state, tail, token_budget, max_memory_items
         captured["system_context"] = system_context
         captured["memory_chunks"] = memory_chunks
         captured["prompt_mode"] = prompt_mode
@@ -324,3 +376,90 @@ def test_run_agent_step_emits_prompt_build_event(monkeypatch) -> None:
     payload = row["payload_json"]
     assert isinstance(payload, str)
     assert "prompt_mode" in payload
+
+
+def test_extract_embedded_tool_payload_strips_tool_json_suffix() -> None:
+    text = (
+        'I will inspect docs and propose a plan. '
+        '{"tool_calls":[{"name":"echo","arguments":{"x":1}}]}'
+    )
+    cleaned, tool_calls = _extract_embedded_tool_payload(text)
+    assert cleaned == "I will inspect docs and propose a plan."
+    assert tool_calls == [{"name": "echo", "arguments": {"x": 1}}]
+
+
+def test_run_agent_step_parses_embedded_tool_calls_from_text(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text='Planning now {"tool_calls":[{"name":"echo","arguments":{"x":1}}]}',
+                    tool_calls=[],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="done", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550132")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "build feature X")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_9")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+    assert row is not None and row["content"] == "done"
+    assert runtime.execute_calls == 1
+
+
+def test_run_agent_step_rewrites_placeholder_to_degraded_response(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter([(ModelResponse(text="I am an AI.", tool_calls=[]), "primary")])
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550133")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "status")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_10")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        evt = conn.execute(
+            "SELECT COUNT(*) AS c FROM events WHERE trace_id=? AND event_type='agent.response.degraded'",
+            ("trc_step_10",),
+        ).fetchone()
+    assert row is not None
+    assert row["content"] == DEGRADED_RESPONSE
+    assert evt is not None and int(evt["c"]) == 1
+
+
+def test_run_agent_step_fallback_only_retry_recovers_response(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (ModelResponse(text="I can help with that.", tool_calls=[]), "fallback"),
+            (ModelResponse(text="Recovered answer after fallback retry.", tool_calls=[]), "fallback"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550134")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "retry this")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_11")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+    assert row is not None
+    assert row["content"] == "Recovered answer after fallback retry."
+    assert runtime.execute_calls == 0
+    assert router.calls == 2

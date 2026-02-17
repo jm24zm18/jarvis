@@ -2,7 +2,7 @@ import json
 
 from jarvis.db.connection import get_conn
 from jarvis.events.models import EventInput
-from jarvis.events.writer import emit_event
+from jarvis.events.writer import emit_event, redact_payload
 
 
 def test_emit_event_with_trace() -> None:
@@ -34,3 +34,19 @@ def test_emit_event_with_trace() -> None:
     assert row["trace_id"] == "trc_1"
     assert row["event_type"] == "unit.test"
     assert vec is not None
+
+
+def test_redact_payload_redacts_nested_sensitive_keys() -> None:
+    payload = {
+        "safe": "ok",
+        "credentials": {
+            "access_token": "secret-access",
+            "nested": {"password": "secret-password"},
+        },
+        "items": [{"api_key": "secret-key"}, {"value": 1}],
+    }
+    redacted = redact_payload(payload)
+    assert redacted["safe"] == "ok"
+    assert redacted["credentials"]["access_token"] == "[REDACTED]"
+    assert redacted["credentials"]["nested"]["password"] == "[REDACTED]"
+    assert redacted["items"][0]["api_key"] == "[REDACTED]"

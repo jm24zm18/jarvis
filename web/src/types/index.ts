@@ -26,7 +26,12 @@ export interface OnboardingStatus {
 export interface SystemStatus {
   time: string;
   system: { lockdown: number; restarting: number };
-  providers: { primary: boolean; fallback: boolean };
+  providers: {
+    primary: boolean;
+    fallback: boolean;
+    primary_name?: string;
+    fallback_name?: string;
+  };
   provider_errors?: {
     last_primary_failure?: {
       reason: string;
@@ -120,6 +125,16 @@ export interface PermissionGroup {
 export interface GoogleOAuthConfig {
   configured: boolean;
   has_client_credentials: boolean;
+  token_cache_exists: boolean;
+  has_refresh_token: boolean;
+  auto_refresh_enabled: boolean;
+  access_expires_at_ms: number;
+  seconds_until_access_expiry: number;
+  current_tier_id: string;
+  current_tier_name: string;
+  quota_blocked: boolean;
+  quota_block_seconds_remaining: number;
+  quota_block_reason: string;
 }
 
 export interface GoogleOAuthStartResult {
@@ -132,6 +147,32 @@ export interface GoogleOAuthStartResult {
 export interface GoogleOAuthStatus {
   status: string;
   detail: string;
+}
+
+export interface ProviderConfig {
+  primary_provider: "gemini" | "sglang" | string;
+  gemini_model: string;
+  sglang_model: string;
+  available_primary_providers: string[];
+}
+
+export interface ProviderModelsCatalog {
+  gemini_models: string[];
+  gemini_verified_models: string[];
+  gemini_verification: Record<string, string>;
+  sglang_models: string[];
+  gemini_source: string;
+  sglang_source: string;
+}
+
+export interface ProviderConfigUpdateResult {
+  ok: boolean;
+  updated: string[];
+  primary_provider: "gemini" | "sglang" | string;
+  gemini_model: string;
+  sglang_model: string;
+  api_reloaded: boolean;
+  worker_reload_enqueued: boolean;
 }
 
 export interface BugReport {

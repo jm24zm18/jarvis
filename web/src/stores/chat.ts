@@ -14,6 +14,7 @@ interface ChatStore {
   setThinking: (threadId: string, value: boolean) => void;
   setDelegation: (threadId: string, chain: string) => void;
   setActiveTrace: (threadId: string, traceId: string) => void;
+  setTraceEvents: (traceId: string, events: TraceEvent[]) => void;
   appendTraceEvent: (traceId: string, event: TraceEvent) => void;
   clearTrace: (threadId: string) => void;
 }
@@ -33,13 +34,30 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => ({
       activeTraceByThread: { ...state.activeTraceByThread, [threadId]: traceId },
     })),
-  appendTraceEvent: (traceId, event) =>
+  setTraceEvents: (traceId, events) =>
     set((state) => ({
       traceEvents: {
         ...state.traceEvents,
-        [traceId]: [...(state.traceEvents[traceId] ?? []), event],
+        [traceId]: events,
       },
     })),
+  appendTraceEvent: (traceId, event) =>
+    set((state) => {
+      const existing = state.traceEvents[traceId] ?? [];
+      const duplicate = existing.some(
+        (item) =>
+          item.event_type === event.event_type &&
+          item.created_at === event.created_at &&
+          JSON.stringify(item.payload) === JSON.stringify(event.payload),
+      );
+      if (duplicate) return {};
+      return {
+        traceEvents: {
+          ...state.traceEvents,
+          [traceId]: [...existing, event],
+        },
+      };
+    }),
   clearTrace: (threadId) =>
     set((state) => {
       const nextActive = { ...state.activeTraceByThread };

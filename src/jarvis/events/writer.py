@@ -3,7 +3,7 @@
 import json
 import sqlite3
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from jarvis.events.models import EventInput
 from jarvis.ids import new_id
@@ -23,14 +23,19 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if str(key).lower() in SENSITIVE_KEYS else _redact_value(nested)
+            for key, nested in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    return value
+
+
 def redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    redacted: dict[str, Any] = {}
-    for key, value in payload.items():
-        if key.lower() in SENSITIVE_KEYS:
-            redacted[key] = "[REDACTED]"
-        else:
-            redacted[key] = value
-    return redacted
+    return cast(dict[str, Any], _redact_value(payload))
 
 
 def emit_event(conn: sqlite3.Connection, event: EventInput) -> str:

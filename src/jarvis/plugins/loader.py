@@ -29,7 +29,7 @@ def discover_plugins(plugins_dir: Path | None = None) -> list[type[JarvisPlugin]
     try:
         import jarvis.plugins.builtin as builtin_pkg
 
-        for importer, modname, _ispkg in pkgutil.iter_modules(builtin_pkg.__path__):
+        for _importer, modname, _ispkg in pkgutil.iter_modules(builtin_pkg.__path__):
             try:
                 mod = importlib.import_module(f"jarvis.plugins.builtin.{modname}")
                 for attr_name in dir(mod):
@@ -74,7 +74,11 @@ def discover_plugins(plugins_dir: Path | None = None) -> list[type[JarvisPlugin]
         from importlib.metadata import entry_points
 
         eps = entry_points()
-        group = eps.get("jarvis_plugins", []) if isinstance(eps, dict) else eps.select(group="jarvis_plugins")
+        group = (
+            eps.get("jarvis_plugins", [])
+            if isinstance(eps, dict)
+            else eps.select(group="jarvis_plugins")
+        )
         for ep in group:
             try:
                 cls = ep.load()

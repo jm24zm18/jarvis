@@ -1,10 +1,7 @@
-"""Scheduler Celery tasks."""
+"""Scheduler task handlers."""
 
 import json
 
-from kombu.exceptions import OperationalError
-
-from jarvis.celery_app import celery_app
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.events.models import EventInput
@@ -15,9 +12,16 @@ from jarvis.scheduler.service import (
     dispatch_due,
     fetch_due_schedules_report,
 )
+from jarvis.tasks import get_task_runner
 
 
-@celery_app.task(name="jarvis.tasks.scheduler.scheduler_tick")
+def _send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
+    try:
+        return get_task_runner().send_task(name, kwargs=kwargs, queue=queue)
+    except Exception:
+        return False
+
+
 def scheduler_tick() -> dict[str, int | bool]:
     settings = get_settings()
     with get_conn() as conn:
@@ -27,17 +31,14 @@ def scheduler_tick() -> dict[str, int | bool]:
 
         def enqueue(item: DueDispatch) -> None:
             payload = json.loads(item.payload_json)
-            try:
-                celery_app.send_task(
-                    "jarvis.tasks.agent.agent_step",
-                    kwargs={
-                        "trace_id": payload.get("trace_id", new_id("trc")),
-                        "thread_id": item.thread_id,
-                    },
-                    queue="agent_priority",
-                )
-            except OperationalError:
-                pass
+            _send_task(
+                "jarvis.tasks.agent.agent_step",
+                kwargs={
+                    "trace_id": payload.get("trace_id", new_id("trc")),
+                    "thread_id": item.thread_id,
+                },
+                queue="agent_priority",
+            )
             emit_event(
                 conn,
                 EventInput(

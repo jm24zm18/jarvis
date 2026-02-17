@@ -5,9 +5,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import platform
 import re
 import secrets
 import threading
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,6 +21,8 @@ from jarvis.config import get_settings
 
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
+_CODE_ASSIST_BASE = "https://cloudcode-pa.googleapis.com"
+_LOAD_CODE_ASSIST_URL = f"{_CODE_ASSIST_BASE}/v1internal:loadCodeAssist"
 _SCOPES = (
     "https://www.googleapis.com/auth/cloud-platform",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -94,52 +98,64 @@ def _save_env_values(values: dict[str, str]) -> None:
     env_path.write_text("\n".join(updated).rstrip() + "\n")
 
 
-def _extract_client_id_from_gemini_oauth_creds() -> str | None:
-    creds_path = Path.home() / ".gemini" / "oauth_creds.json"
-    if not creds_path.exists():
-        return None
-    try:
-        payload = json.loads(creds_path.read_text())
-    except Exception:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    id_token = payload.get("id_token")
-    if not isinstance(id_token, str) or "." not in id_token:
-        return None
-    parts = id_token.split(".")
-    if len(parts) < 2:
-        return None
-    encoded = parts[1] + "=" * (-len(parts[1]) % 4)
-    try:
-        decoded = base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8")
-        claims = json.loads(decoded)
-    except Exception:
-        return None
-    if not isinstance(claims, dict):
-        return None
-    for key in ("azp", "aud"):
-        value = claims.get(key)
-        if isinstance(value, str) and value.endswith(".apps.googleusercontent.com"):
-            return value
-    return None
+def _save_token_cache(path: Path, values: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(values, indent=2), encoding="utf-8")
 
 
-def _extract_refresh_token_from_gemini_oauth_creds() -> str | None:
-    creds_path = Path.home() / ".gemini" / "oauth_creds.json"
-    if not creds_path.exists():
-        return None
-    try:
-        payload = json.loads(creds_path.read_text())
-    except Exception:
-        return None
+def _build_client_metadata() -> dict[str, str]:
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if system == "linux":
+        platform_name = "LINUX_ARM64" if ("aarch" in machine or "arm" in machine) else "LINUX_AMD64"
+    elif system == "darwin":
+        platform_name = "DARWIN_ARM64" if "arm" in machine else "DARWIN_AMD64"
+    elif system == "windows":
+        platform_name = "WINDOWS_AMD64"
+    else:
+        platform_name = "PLATFORM_UNSPECIFIED"
+    return {
+        "ideType": "GEMINI_CLI",
+        "pluginType": "GEMINI",
+        "platform": platform_name,
+        "pluginVersion": "jarvis-code-assist-1",
+        "ideVersion": platform.python_version(),
+        "ideName": "python",
+        "updateChannel": "custom",
+    }
+
+
+async def _load_code_assist_bootstrap(
+    *,
+    access_token: str,
+    timeout_seconds: int,
+    existing_project: str | None = None,
+) -> dict[str, object]:
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "User-Agent": (
+            f"GeminiCLI/jarvis-code-assist-1 "
+            f"({platform.system().lower()}; {platform.machine().lower()})"
+        ),
+        "x-goog-api-client": f"gl-python/{platform.python_version()}",
+    }
+    body: dict[str, object] = {"metadata": _build_client_metadata()}
+    if existing_project:
+        body["cloudaicompanionProject"] = existing_project
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        response = await client.post(
+            _LOAD_CODE_ASSIST_URL,
+            headers=headers,
+            content=json.dumps(body),
+        )
+    if response.status_code >= 400:
+        detail = response.text.strip()[:400] or response.reason_phrase
+        raise RuntimeError(f"loadCodeAssist failed: {detail}")
+    payload = response.json()
     if not isinstance(payload, dict):
-        return None
-    token = payload.get("refresh_token")
-    if not isinstance(token, str):
-        return None
-    token = token.strip()
-    return token or None
+        raise RuntimeError("loadCodeAssist returned non-object response")
+    return payload
 
 
 def _extract_gemini_cli_credentials() -> tuple[str, str] | None:
@@ -180,9 +196,6 @@ def _extract_gemini_cli_credentials() -> tuple[str, str] | None:
         client_secret = _find_regex(content, r"(GOCSPX-[A-Za-z0-9_-]+)")
         if client_id and client_secret:
             return client_id, client_secret
-    fallback_client_id = _extract_client_id_from_gemini_oauth_creds()
-    if fallback_client_id:
-        return fallback_client_id, ""
     return None
 
 
@@ -241,14 +254,35 @@ def create_google_flow(
     resolved_client_secret = requested_client_secret or (
         "" if env_client_secret.lower() in _PLACEHOLDER_VALUES else env_client_secret
     )
-    source = "env"
+    source = "request" if requested_client_id else "env"
     if not resolved_client_id or not resolved_client_secret:
         extracted = _extract_gemini_cli_credentials()
         if extracted is not None:
-            resolved_client_id, resolved_client_secret = extracted
-            source = "gemini-cli"
-    if not resolved_client_id or not resolved_client_secret:
+            extracted_client_id, extracted_client_secret = extracted
+            if not resolved_client_id and extracted_client_id:
+                resolved_client_id = extracted_client_id
+                source = "gemini-cli"
+            if (
+                not resolved_client_secret
+                and extracted_client_secret
+                and resolved_client_id == extracted_client_id
+            ):
+                resolved_client_secret = extracted_client_secret
+    elif not requested_client_secret:
+        # Keep env-sourced client_id, but prefer a live Gemini CLI secret when it
+        # matches the same OAuth client. This avoids stale secrets in .env.
+        extracted = _extract_gemini_cli_credentials()
+        if extracted is not None:
+            extracted_client_id, extracted_client_secret = extracted
+            if extracted_client_secret and resolved_client_id == extracted_client_id:
+                resolved_client_secret = extracted_client_secret
+    if not resolved_client_id:
         raise RuntimeError("missing Google OAuth client credentials")
+    if not resolved_client_secret:
+        raise RuntimeError(
+            "missing Google OAuth client secret for selected client_id; "
+            "set GOOGLE_OAUTH_CLIENT_SECRET (or provide client_secret) and retry"
+        )
 
     state = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(48)
@@ -284,6 +318,7 @@ def create_google_flow(
 
 
 async def complete_google_flow(*, state: str, code: str) -> None:
+    settings = get_settings()
     with _lock:
         _clean_expired_flows()
         flow = _flows.get(state)
@@ -303,10 +338,6 @@ async def complete_google_flow(*, state: str, code: str) -> None:
         payload["client_secret"] = flow.client_secret
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.post(_TOKEN_URL, data=payload)
-        if response.status_code >= 400 and flow.client_secret and "invalid_client" in response.text:
-            retry_payload = dict(payload)
-            retry_payload.pop("client_secret", None)
-            response = await client.post(_TOKEN_URL, data=retry_payload)
     if response.status_code >= 400:
         detail = response.text.strip()[:400] or response.reason_phrase
         with _lock:
@@ -317,6 +348,14 @@ async def complete_google_flow(*, state: str, code: str) -> None:
         raise RuntimeError(f"token exchange failed: {detail}")
 
     body = response.json()
+    access_token = body.get("access_token")
+    if not isinstance(access_token, str) or not access_token.strip():
+        with _lock:
+            current = _flows.get(state)
+            if current is not None:
+                current.status = "error"
+                current.detail = "No access token returned."
+        raise RuntimeError("access token not returned")
     refresh_token = body.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token.strip():
         with _lock:
@@ -326,18 +365,46 @@ async def complete_google_flow(*, state: str, code: str) -> None:
                 current.detail = "No refresh token returned. Retry and grant consent."
         raise RuntimeError("refresh token not returned")
 
-    _save_env_values(
-        {
-            "GOOGLE_OAUTH_CLIENT_ID": flow.client_id,
-            "GOOGLE_OAUTH_CLIENT_SECRET": flow.client_secret,
-            "GOOGLE_OAUTH_REFRESH_TOKEN": refresh_token.strip(),
-        }
+    bootstrap = await _load_code_assist_bootstrap(
+        access_token=access_token.strip(),
+        timeout_seconds=max(10, int(settings.gemini_cli_timeout_seconds)),
     )
+    cloudaicompanion_project = bootstrap.get("cloudaicompanionProject")
+    if not isinstance(cloudaicompanion_project, str) or not cloudaicompanion_project.strip():
+        with _lock:
+            current = _flows.get(state)
+            if current is not None:
+                current.status = "error"
+                current.detail = "loadCodeAssist did not return cloudaicompanionProject."
+        raise RuntimeError("loadCodeAssist did not return cloudaicompanionProject")
+
+    expires_in = int(body.get("expires_in", 3600))
+    expires_at_ms = int(time.time() * 1000) + (expires_in * 1000) - (5 * 60 * 1000)
+    current_tier = bootstrap.get("currentTier")
+    token_cache: dict[str, object] = {
+        "access_token": access_token.strip(),
+        "refresh_token": refresh_token.strip(),
+        "expires_at_ms": expires_at_ms,
+        "cloudaicompanion_project": cloudaicompanion_project.strip(),
+    }
+    if isinstance(current_tier, dict):
+        token_cache["current_tier_id"] = current_tier.get("id")
+        token_cache["current_tier_name"] = current_tier.get("name")
+    token_path = Path(settings.gemini_code_assist_token_path).expanduser()
+    _save_token_cache(token_path, token_cache)
+
+    env_values = {"GOOGLE_OAUTH_CLIENT_ID": flow.client_id}
+    if flow.client_secret:
+        env_values["GOOGLE_OAUTH_CLIENT_SECRET"] = flow.client_secret
+    _save_env_values(env_values)
     with _lock:
         current = _flows.get(state)
         if current is not None:
             current.status = "success"
-            current.detail = "Google OAuth credentials saved to .env. Restart API/worker."
+            current.detail = (
+                "Google OAuth complete. Credentials saved and Code Assist token cache written. "
+                "Restart API/worker."
+            )
 
 
 def mark_google_flow_error(*, state: str, detail: str) -> None:
@@ -355,31 +422,3 @@ def get_google_flow_status(state: str) -> dict[str, str]:
         if flow is None:
             return {"status": "missing", "detail": "No active flow for this state"}
         return {"status": flow.status, "detail": flow.detail}
-
-
-def import_google_creds_from_local_gemini() -> dict[str, str]:
-    refresh_token = _extract_refresh_token_from_gemini_oauth_creds()
-    if not refresh_token:
-        raise RuntimeError("no refresh_token found in ~/.gemini/oauth_creds.json")
-
-    client_id = _extract_client_id_from_gemini_oauth_creds() or ""
-    client_secret = ""
-    extracted = _extract_gemini_cli_credentials()
-    if extracted is not None:
-        client_id = extracted[0] or client_id
-        client_secret = extracted[1]
-    if not client_id:
-        raise RuntimeError("unable to determine Google OAuth client_id from local Gemini CLI")
-
-    values = {
-        "GOOGLE_OAUTH_CLIENT_ID": client_id,
-        "GOOGLE_OAUTH_REFRESH_TOKEN": refresh_token,
-    }
-    if client_secret:
-        values["GOOGLE_OAUTH_CLIENT_SECRET"] = client_secret
-    _save_env_values(values)
-    return {
-        "ok": "true",
-        "client_id": client_id,
-        "has_client_secret": "true" if bool(client_secret) else "false",
-    }
