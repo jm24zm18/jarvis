@@ -1,15 +1,14 @@
 ---
-agent_id: planner
+agent_id: release_candidate
 allowed_tools:
   - echo
   - exec_host
   - skill_list
   - skill_read
-  - skill_write
-risk_tier: medium
-max_actions_per_step: 6
+risk_tier: high
+max_actions_per_step: 4
 allowed_paths:
   - /home/justin/jarvis
   - /tmp
-can_request_privileged_change: false
+can_request_privileged_change: true
 ---

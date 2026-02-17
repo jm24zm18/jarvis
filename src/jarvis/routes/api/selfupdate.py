@@ -69,7 +69,13 @@ def approve_patch(
     trace_id: str,
     ctx: UserContext = Depends(require_admin),  # TODO: admin-only now  # noqa: B008
 ) -> dict[str, str]:
-    del trace_id
+    settings = get_settings()
     with get_conn() as conn:
-        approval_id = create_approval(conn, action="selfupdate.apply", actor_id=ctx.user_id)
-    return {"approval_id": approval_id, "action": "selfupdate.apply"}
+        approval_id = create_approval(
+            conn,
+            action="selfupdate.apply",
+            actor_id=ctx.user_id,
+            target_ref=trace_id,
+            ttl_minutes=max(1, int(settings.approval_ttl_minutes)),
+        )
+    return {"approval_id": approval_id, "action": "selfupdate.apply", "target_ref": trace_id}

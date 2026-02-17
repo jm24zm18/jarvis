@@ -29,6 +29,9 @@ _RESET_FTS_TABLES = (
     "knowledge_docs_fts",
 )
 _RESET_DATA_TABLES = (
+    "story_runs",
+    "memory_governance_audit",
+    "agent_governance",
     "state_item_embeddings",
     "state_extraction_watermarks",
     "state_items",

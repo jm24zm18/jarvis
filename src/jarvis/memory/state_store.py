@@ -10,6 +10,7 @@ from math import sqrt
 
 from jarvis.config import get_settings
 from jarvis.ids import new_id
+from jarvis.memory.policy import apply_memory_policy
 from jarvis.memory.state_items import (
     DEFAULT_STATUS,
     TYPE_PRIORITY,
@@ -107,6 +108,15 @@ class StateStore:
 
     def upsert_item(self, conn: sqlite3.Connection, thread_id: str, item: StateItem) -> StateItem:
         now = self._now_iso()
+        governed_text, _decision, _reason = apply_memory_policy(
+            conn,
+            text=item.text,
+            thread_id=thread_id,
+            actor_id="state_store",
+            target_kind="state_item",
+            target_id=item.uid,
+        )
+        item.text = governed_text
         candidate_last_seen = self._max_ref_timestamp(conn, item.refs)
         row = conn.execute(
             (

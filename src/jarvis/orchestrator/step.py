@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from jarvis.agents.loader import load_agent_bundle_cached, load_agent_registry
+from jarvis.agents.types import AgentBundle
 from jarvis.commands.service import maybe_execute_command
 from jarvis.config import get_settings
 from jarvis.db.queries import get_system_state, insert_message
@@ -270,6 +271,16 @@ def _load_agent_context(actor_id: str) -> str:
         return "\n\n".join(fallback_parts).strip()
 
 
+def _load_agent_bundle(actor_id: str) -> AgentBundle | None:
+    root = Path("agents") / actor_id
+    if not root.is_dir():
+        return None
+    try:
+        return load_agent_bundle_cached(root)
+    except RuntimeError:
+        return None
+
+
 def _build_environment_context(conn: sqlite3.Connection) -> str:
     now = datetime.now(UTC).isoformat()
     disk_free_gb = shutil.disk_usage("/").free // (1024**3)
@@ -298,6 +309,9 @@ def _build_environment_context(conn: sqlite3.Connection) -> str:
         "security_reviewer": "security audits",
         "docs_keeper": "documentation",
         "release_ops": "release operations",
+        "dependency_steward": "dependency management",
+        "release_candidate": "release readiness",
+        "user_simulator": "user-story simulation",
     }
     roster_line = "none"
     try:
@@ -544,7 +558,10 @@ async def run_agent_step(
                     "pinned": bool(item.get("pinned", False)),
                 }
             )
+    bundle = _load_agent_bundle(actor_id)
     agent_context = _load_agent_context(actor_id) or f"You are Jarvis {actor_id} agent."
+    max_actions_per_step = bundle.max_actions_per_step if bundle is not None else 6
+    action_calls_used = 0
     agent_context = f"{agent_context}\n\n{IDENTITY_POLICY}"
     agent_context = f"{agent_context}\n\n[environment]\n{_build_environment_context(conn)}"
 
@@ -795,6 +812,30 @@ async def run_agent_step(
 
         convo.append({"role": "assistant", "content": stripped_text})
         for tool_call in parsed_tool_calls:
+            if action_calls_used >= max_actions_per_step:
+                deny_payload = {
+                    "tool": str(tool_call.get("name", "")),
+                    "allowed": False,
+                    "reason": "governance.max_actions_per_step",
+                    "max_actions_per_step": max_actions_per_step,
+                }
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id,
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="policy.decision",
+                        component="policy",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(deny_payload),
+                        payload_redacted_json=json.dumps(redact_payload(deny_payload)),
+                    ),
+                )
+                break
+            action_calls_used += 1
             tool_name = str(tool_call.get("name", ""))
             raw_args = tool_call.get("arguments", {})
             arguments = raw_args if isinstance(raw_args, dict) else {}

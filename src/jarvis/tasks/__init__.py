@@ -15,12 +15,15 @@ def _register_tasks(runner: TaskRunner) -> None:
         agent,
         backup,
         channel,
+        dependency_steward,
         github,
         maintenance,
         memory,
         onboarding,
+        release_candidate,
         scheduler,
         selfupdate,
+        story_runner,
         system,
     )
 
@@ -46,6 +49,14 @@ def _register_tasks(runner: TaskRunner) -> None:
     runner.register("jarvis.tasks.memory.compact_thread", memory.compact_thread)
     runner.register("jarvis.tasks.memory.periodic_compaction", memory.periodic_compaction)
     runner.register("jarvis.tasks.onboarding.onboarding_step", onboarding.onboarding_step)
+    runner.register(
+        "jarvis.tasks.dependency_steward.run_dependency_steward",
+        dependency_steward.run_dependency_steward,
+    )
+    runner.register(
+        "jarvis.tasks.release_candidate.build_release_candidate",
+        release_candidate.build_release_candidate,
+    )
     runner.register("jarvis.tasks.scheduler.scheduler_tick", scheduler.scheduler_tick)
     runner.register("jarvis.tasks.selfupdate.self_update_propose", selfupdate.self_update_propose)
     runner.register("jarvis.tasks.selfupdate.self_update_validate", selfupdate.self_update_validate)
@@ -53,6 +64,7 @@ def _register_tasks(runner: TaskRunner) -> None:
     runner.register("jarvis.tasks.selfupdate.self_update_open_pr", selfupdate.self_update_open_pr)
     runner.register("jarvis.tasks.selfupdate.self_update_apply", selfupdate.self_update_apply)
     runner.register("jarvis.tasks.selfupdate.self_update_rollback", selfupdate.self_update_rollback)
+    runner.register("jarvis.tasks.story_runner.run_story_pack", story_runner.run_story_pack)
     runner.register("jarvis.tasks.system.rotate_unlock_code", system.rotate_unlock_code)
     runner.register("jarvis.tasks.system.system_restart", system.system_restart)
     runner.register("jarvis.tasks.system.reload_settings_cache", system.reload_settings_cache)
@@ -93,6 +105,10 @@ def get_periodic_scheduler() -> PeriodicScheduler:
                 "jarvis.tasks.maintenance.maintenance_heartbeat",
                 float(settings.maintenance_heartbeat_interval_seconds),
             )
+        if int(settings.dependency_steward_enabled) == 1:
+            scheduler.add("jarvis.tasks.dependency_steward.run_dependency_steward", 604800)
+        if int(settings.release_candidate_agent_enabled) == 1:
+            scheduler.add("jarvis.tasks.release_candidate.build_release_candidate", 86400)
         _periodic_scheduler = scheduler
     return _periodic_scheduler
 

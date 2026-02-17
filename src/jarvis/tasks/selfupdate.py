@@ -512,15 +512,30 @@ def self_update_apply(trace_id: str) -> dict[str, str]:
             }
     state = read_state(trace_id, patch_base)
     phase = state["state"]
+    if int(settings.user_simulator_enabled) == 1 and settings.user_simulator_required_pack.strip():
+        from jarvis.tasks.story_runner import latest_story_pack_status
+
+        pack = settings.user_simulator_required_pack.strip()
+        if latest_story_pack_status(pack) != "passed":
+            return {
+                "trace_id": trace_id,
+                "status": "rejected",
+                "reason": f"required story pack not passing: {pack}",
+            }
     if settings.app_env == "prod":
         if phase in {"tested", "pr_opened"}:
             with get_conn() as conn:
-                approved = consume_approval(conn, "selfupdate.apply")
+                approved = consume_approval(
+                    conn,
+                    "selfupdate.apply",
+                    target_ref=trace_id,
+                    trace_id=trace_id,
+                )
             if not approved:
                 return {
                     "trace_id": trace_id,
                     "status": "rejected",
-                    "reason": "missing admin approval: selfupdate.apply",
+                    "reason": "missing admin approval: selfupdate.apply for trace_id",
                 }
             write_state(trace_id, patch_base, "approved", "admin approval consumed")
             _emit(trace_id, "self_update.approve", {"status": "approved"})

@@ -34,6 +34,8 @@ def list_agents(ctx: UserContext = Depends(require_auth)) -> dict[str, object]: 
             if bundle.identity_markdown
             else "",
             "tool_count": len(tools_by_agent.get(bundle.agent_id, bundle.allowed_tools)),
+            "risk_tier": bundle.risk_tier,
+            "max_actions_per_step": bundle.max_actions_per_step,
         }
         for bundle in bundles.values()
     ]
@@ -63,6 +65,10 @@ def get_agent(agent_id: str, ctx: UserContext = Depends(require_auth)) -> dict[s
         "identity_md": bundle.identity_markdown,
         "soul_md": bundle.soul_markdown,
         "heartbeat_md": bundle.heartbeat_markdown,
+        "risk_tier": bundle.risk_tier,
+        "max_actions_per_step": bundle.max_actions_per_step,
+        "allowed_paths": list(bundle.allowed_paths),
+        "can_request_privileged_change": bundle.can_request_privileged_change,
         "permissions": [
             {"tool_name": str(row["tool_name"]), "effect": str(row["effect"])} for row in rows
         ],

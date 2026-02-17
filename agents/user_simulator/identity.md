@@ -1,13 +1,11 @@
 ---
-agent_id: planner
+agent_id: user_simulator
 allowed_tools:
   - echo
-  - exec_host
   - skill_list
   - skill_read
-  - skill_write
-risk_tier: medium
-max_actions_per_step: 6
+risk_tier: low
+max_actions_per_step: 4
 allowed_paths:
   - /home/justin/jarvis
   - /tmp

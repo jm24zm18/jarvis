@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 
@@ -360,35 +360,94 @@ def set_thread_agents(conn: sqlite3.Connection, thread_id: str, agents: list[str
 
 
 def create_approval(
-    conn: sqlite3.Connection, action: str, actor_id: str, status: str = "approved"
+    conn: sqlite3.Connection,
+    action: str,
+    actor_id: str,
+    status: str = "approved",
+    target_ref: str = "",
+    ttl_minutes: int | None = None,
 ) -> str:
     approval_id = new_id("apr")
+    expires_at = None
+    if ttl_minutes is not None:
+        ttl = max(1, int(ttl_minutes))
+        expires_at = (datetime.now(UTC) + timedelta(minutes=ttl)).isoformat()
     conn.execute(
         (
-            "INSERT INTO approvals(id, action, actor_id, status, created_at) "
-            "VALUES(?,?,?,?,?)"
+            "INSERT INTO approvals("
+            "id, action, actor_id, status, target_ref, expires_at, consumed_by_trace_id, created_at"
+            ") VALUES(?,?,?,?,?,?,?,?)"
         ),
-        (approval_id, action, actor_id, status, now_iso()),
+        (approval_id, action, actor_id, status, target_ref, expires_at, "", now_iso()),
     )
     return approval_id
 
 
-def consume_approval(conn: sqlite3.Connection, action: str) -> bool:
-    row = conn.execute(
-        (
-            "SELECT id FROM approvals "
-            "WHERE action=? AND status='approved' "
-            "ORDER BY created_at ASC LIMIT 1"
-        ),
-        (action,),
-    ).fetchone()
+def consume_approval(
+    conn: sqlite3.Connection,
+    action: str,
+    *,
+    target_ref: str = "",
+    trace_id: str = "",
+) -> bool:
+    now = now_iso()
+    if target_ref:
+        row = conn.execute(
+            (
+                "SELECT id FROM approvals "
+                "WHERE action=? AND status='approved' AND target_ref=? "
+                "AND (expires_at IS NULL OR expires_at > ?) "
+                "ORDER BY created_at ASC LIMIT 1"
+            ),
+            (action, target_ref, now),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            (
+                "SELECT id FROM approvals "
+                "WHERE action=? AND status='approved' "
+                "AND (target_ref='' OR target_ref IS NULL) "
+                "AND (expires_at IS NULL OR expires_at > ?) "
+                "ORDER BY created_at ASC LIMIT 1"
+            ),
+            (action, now),
+        ).fetchone()
     if row is None:
         return False
     conn.execute(
-        "UPDATE approvals SET status='consumed' WHERE id=?",
-        (str(row["id"]),),
+        "UPDATE approvals SET status='consumed', consumed_by_trace_id=? WHERE id=?",
+        (trace_id, str(row["id"])),
     )
     return True
+
+
+def get_agent_governance(
+    conn: sqlite3.Connection, principal_id: str
+) -> dict[str, object] | None:
+    row = conn.execute(
+        (
+            "SELECT principal_id, risk_tier, max_actions_per_step, allowed_paths_json, "
+            "can_request_privileged_change, updated_at "
+            "FROM agent_governance WHERE principal_id=? LIMIT 1"
+        ),
+        (principal_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    paths_raw = row["allowed_paths_json"]
+    try:
+        parsed_paths = json.loads(str(paths_raw)) if paths_raw is not None else []
+    except json.JSONDecodeError:
+        parsed_paths = []
+    allowed_paths = [str(v) for v in parsed_paths if isinstance(v, str)]
+    return {
+        "principal_id": str(row["principal_id"]),
+        "risk_tier": str(row["risk_tier"]),
+        "max_actions_per_step": int(row["max_actions_per_step"]),
+        "allowed_paths": allowed_paths,
+        "can_request_privileged_change": int(row["can_request_privileged_change"]) == 1,
+        "updated_at": str(row["updated_at"]),
+    }
 
 
 def get_whatsapp_outbound(

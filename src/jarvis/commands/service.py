@@ -326,6 +326,7 @@ async def maybe_execute_command(
         if not _is_admin(admin_ids, actor_external_id):
             return "admin required"
         action = args[0].strip().lower()
+        target_ref = args[1].strip() if len(args) >= 2 else ""
         allowed_actions = {
             "host.exec.sudo",
             "host.exec.systemctl",
@@ -335,7 +336,15 @@ async def maybe_execute_command(
         if action not in allowed_actions:
             return "invalid action"
         actor = actor_external_id or "admin"
-        _ = create_approval(conn, action=action, actor_id=actor)
+        _ = create_approval(
+            conn,
+            action=action,
+            actor_id=actor,
+            target_ref=target_ref if action == "selfupdate.apply" else "",
+            ttl_minutes=30,
+        )
+        if target_ref:
+            return f"approval created: {action} target={target_ref}"
         return f"approval created: {action}"
 
     return "unknown command"

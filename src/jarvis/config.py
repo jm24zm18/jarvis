@@ -100,6 +100,20 @@ class Settings(BaseSettings):
     state_extraction_timeout_seconds: int = Field(
         alias="STATE_EXTRACTION_TIMEOUT_SECONDS", default=15
     )
+    governance_enforce: int = Field(alias="GOVERNANCE_ENFORCE", default=1)
+    approval_ttl_minutes: int = Field(alias="APPROVAL_TTL_MINUTES", default=30)
+    dependency_steward_enabled: int = Field(alias="DEPENDENCY_STEWARD_ENABLED", default=0)
+    dependency_steward_max_upgrades: int = Field(
+        alias="DEPENDENCY_STEWARD_MAX_UPGRADES", default=10
+    )
+    release_candidate_agent_enabled: int = Field(
+        alias="RELEASE_CANDIDATE_AGENT_ENABLED", default=0
+    )
+    user_simulator_enabled: int = Field(alias="USER_SIMULATOR_ENABLED", default=0)
+    user_simulator_required_pack: str = Field(alias="USER_SIMULATOR_REQUIRED_PACK", default="p0")
+    memory_secret_scan_enabled: int = Field(alias="MEMORY_SECRET_SCAN_ENABLED", default=1)
+    memory_pii_redact_mode: str = Field(alias="MEMORY_PII_REDACT_MODE", default="mask")
+    memory_retention_days: int = Field(alias="MEMORY_RETENTION_DAYS", default=180)
 
     searxng_base_url: str = Field(alias="SEARXNG_BASE_URL", default="http://localhost:8080")
     searxng_api_key: str = Field(alias="SEARXNG_API_KEY", default="")

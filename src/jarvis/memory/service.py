@@ -12,6 +12,7 @@ import httpx
 
 from jarvis.config import get_settings
 from jarvis.ids import new_id
+from jarvis.memory.policy import apply_memory_policy
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,16 @@ class MemoryService:
         metadata: dict[str, object] | None = None,
     ) -> str:
         settings = get_settings()
+        actor_id = "system"
+        if metadata and isinstance(metadata.get("actor_id"), str):
+            actor_id = str(metadata["actor_id"])
+        governed_text, decision, reason = apply_memory_policy(
+            conn,
+            text=text,
+            thread_id=thread_id,
+            actor_id=actor_id,
+            target_kind="memory_item",
+        )
         memory_id = new_id("mem")
         metadata_json = json.dumps(metadata or {})
         conn.execute(
@@ -83,13 +94,13 @@ class MemoryService:
                 "id, thread_id, text, metadata_json, created_at"
                 ") VALUES(?,?,?,?,?)"
             ),
-            (memory_id, thread_id, text, metadata_json, datetime.now(UTC).isoformat()),
+            (memory_id, thread_id, governed_text, metadata_json, datetime.now(UTC).isoformat()),
         )
         conn.execute(
             "INSERT INTO memory_fts(memory_id, thread_id, text) VALUES(?,?,?)",
-            (memory_id, thread_id, text),
+            (memory_id, thread_id, governed_text),
         )
-        vector = self._embed_text(text)
+        vector = self._embed_text(governed_text)
         vec_json = json.dumps(vector)
         conn.execute(
             (
@@ -112,7 +123,12 @@ class MemoryService:
         self._emit_memory_event(
             conn,
             "memory.write",
-            {"memory_id": memory_id, "chars": len(text)},
+            {
+                "memory_id": memory_id,
+                "chars": len(governed_text),
+                "policy_decision": decision,
+                "policy_reason": reason,
+            },
             thread_id=thread_id,
         )
         return memory_id

@@ -7,11 +7,13 @@ from jarvis.routes.api import (
     auth,
     bugs,
     events,
+    governance,
     memory,
     messages,
     permissions,
     schedules,
     selfupdate,
+    stories,
     system,
     threads,
     webhooks,
@@ -30,3 +32,5 @@ router.include_router(selfupdate.router)
 router.include_router(permissions.router)
 router.include_router(bugs.router)
 router.include_router(webhooks.router)
+router.include_router(governance.router)
+router.include_router(stories.router)
