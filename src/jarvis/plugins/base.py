@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Any
 
-from jarvis.tools.registry import ToolCallable, ToolRegistry
+from jarvis.tools.registry import ToolRegistry
 
 
 @dataclass(slots=True)

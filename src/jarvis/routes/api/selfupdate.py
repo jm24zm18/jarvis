@@ -18,7 +18,7 @@ def _patch_dir() -> Path:
 
 
 @router.get("/patches")
-def list_patches(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:
+def list_patches(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
     del ctx
     base = _patch_dir()
     if not base.exists():
@@ -44,7 +44,7 @@ def list_patches(ctx: UserContext = Depends(require_admin)) -> dict[str, object]
 
 @router.get("/patches/{trace_id}")
 def patch_detail(
-    trace_id: str, ctx: UserContext = Depends(require_admin)
+    trace_id: str, ctx: UserContext = Depends(require_admin)  # noqa: B008
 ) -> dict[str, str]:
     del ctx
     base = _patch_dir()
@@ -64,7 +64,7 @@ def patch_detail(
 @router.post("/patches/{trace_id}/approve")
 def approve_patch(
     trace_id: str,
-    ctx: UserContext = Depends(require_admin),  # TODO: admin-only now
+    ctx: UserContext = Depends(require_admin),  # TODO: admin-only now  # noqa: B008
 ) -> dict[str, str]:
     del trace_id
     with get_conn() as conn:

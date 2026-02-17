@@ -1,63 +1,26 @@
 """Provider router with fallback behavior."""
 
+import asyncio
 import logging
-import time
+import random
+import re
 
-import httpx
-
-from jarvis.config import get_settings
 from jarvis.errors import ProviderError
 from jarvis.providers.base import ModelProvider, ModelResponse
 
 logger = logging.getLogger(__name__)
+_PRIMARY_RETRY_ATTEMPTS = 2
+_BASE_RETRY_DELAY_SECONDS = 0.3
+_MAX_RETRY_DELAY_SECONDS = 1.5
 
 
 class ProviderRouter:
-    _local_llm_overloaded_cache: tuple[float, bool] = (0.0, False)
-
     def __init__(self, primary: ModelProvider, fallback: ModelProvider) -> None:
         self.primary = primary
         self.fallback = fallback
 
     async def _local_llm_overloaded(self) -> bool:
-        settings = get_settings()
-        threshold = settings.queue_threshold_local_llm
-        if threshold <= 0:
-            return False
-        now = time.monotonic()
-        cached_until, cached_value = self._local_llm_overloaded_cache
-        if now < cached_until:
-            return cached_value
-
-        base = settings.rabbitmq_mgmt_url.strip().rstrip("/")
-        if not base:
-            self._local_llm_overloaded_cache = (now + 5.0, False)
-            return False
-        auth: tuple[str, str] | None = None
-        if settings.rabbitmq_mgmt_user and settings.rabbitmq_mgmt_password:
-            auth = (settings.rabbitmq_mgmt_user, settings.rabbitmq_mgmt_password)
-        overloaded = False
-        try:
-            async with httpx.AsyncClient(timeout=3.0, auth=auth) as client:
-                response = await client.get(f"{base}/api/queues")
-                response.raise_for_status()
-                payload = response.json()
-            if isinstance(payload, list):
-                for item in payload:
-                    if not isinstance(item, dict):
-                        continue
-                    if item.get("name") != "local_llm":
-                        continue
-                    ready = item.get("messages_ready", 0)
-                    unacked = item.get("messages_unacknowledged", 0)
-                    total = int(ready) + int(unacked)
-                    overloaded = total > threshold
-                    break
-        except Exception as exc:
-            logger.warning("RabbitMQ management API queue check failed: %s", exc)
-            overloaded = False
-        self._local_llm_overloaded_cache = (now + 5.0, overloaded)
-        return overloaded
+        return False
 
     async def generate(
         self,
@@ -67,26 +30,69 @@ class ProviderRouter:
         max_tokens: int = 4096,
         priority: str = "normal",
     ) -> tuple[ModelResponse, str, str | None]:
-        try:
-            response = await self.primary.generate(messages, tools, temperature, max_tokens)
-            return response, "primary", None
-        except Exception as exc:
-            primary_error = f"{type(exc).__name__}: {exc}"
-            logger.warning("Primary provider failed: %s", primary_error)
-            if priority == "low" and await self._local_llm_overloaded():
-                raise ProviderError(primary_error, retryable=True) from exc
+        last_exc: Exception | None = None
+        primary_error = ""
+        for attempt in range(_PRIMARY_RETRY_ATTEMPTS + 1):
             try:
-                response = await self.fallback.generate(messages, tools, temperature, max_tokens)
-            except Exception as fallback_exc:
-                raise ProviderError(
-                    f"all providers failed: primary={primary_error}, "
-                    f"fallback={type(fallback_exc).__name__}: {fallback_exc}",
-                    retryable=True,
-                ) from fallback_exc
-            return response, "fallback", primary_error
+                response = await self.primary.generate(messages, tools, temperature, max_tokens)
+                return response, "primary", None
+            except Exception as exc:
+                last_exc = exc
+                primary_error = f"{type(exc).__name__}: {exc}"
+                logger.warning("Primary provider failed: %s", primary_error)
+                if (
+                    attempt >= _PRIMARY_RETRY_ATTEMPTS
+                    or not _is_retryable_primary_error(primary_error)
+                ):
+                    break
+                delay_s = _compute_retry_delay_seconds(primary_error, attempt)
+                await asyncio.sleep(delay_s)
+
+        if priority == "low" and await self._local_llm_overloaded():
+            raise ProviderError(primary_error, retryable=True) from last_exc
+        try:
+            response = await self.fallback.generate(messages, tools, temperature, max_tokens)
+        except Exception as fallback_exc:
+            raise ProviderError(
+                f"all providers failed: primary={primary_error}, "
+                f"fallback={type(fallback_exc).__name__}: {fallback_exc}",
+                retryable=True,
+            ) from fallback_exc
+        return response, "fallback", primary_error
 
     async def health(self) -> dict[str, bool]:
         return {
             "primary": await self.primary.health_check(),
             "fallback": await self.fallback.health_check(),
         }
+
+
+def _is_retryable_primary_error(primary_error: str) -> bool:
+    text = primary_error.lower()
+    retryable_markers = (
+        "quota exceeded",
+        "quota exhausted",
+        "rate limit",
+        "resource_exhausted",
+        "timed out",
+        "timeout",
+        "temporarily exhausted",
+        "429",
+    )
+    return any(marker in text for marker in retryable_markers)
+
+
+def _compute_retry_delay_seconds(primary_error: str, attempt: int) -> float:
+    text = primary_error.lower()
+    hint = _parse_retry_after_seconds(text)
+    if hint > 0:
+        return float(min(_MAX_RETRY_DELAY_SECONDS, max(_BASE_RETRY_DELAY_SECONDS, hint)))
+    base = min(_MAX_RETRY_DELAY_SECONDS, _BASE_RETRY_DELAY_SECONDS * (2 ** attempt))
+    jitter = random.uniform(0.05, 0.25)
+    return float(min(_MAX_RETRY_DELAY_SECONDS, base + jitter))
+
+
+def _parse_retry_after_seconds(text: str) -> int:
+    if match := re.search(r"retry(?:[-\s]*after| in)\s+(\d+(?:\.\d+)?)", text):
+        return max(1, int(float(match.group(1))))
+    return 0

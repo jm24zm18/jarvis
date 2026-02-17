@@ -4,9 +4,11 @@ import json
 import os
 
 from fastapi.testclient import TestClient
-from kombu.exceptions import OperationalError
 
 from jarvis.config import get_settings
+from jarvis.db.connection import get_conn
+from jarvis.db.queries import insert_message, now_iso
+from jarvis.ids import new_id
 from jarvis.main import app
 
 
@@ -38,16 +40,62 @@ def test_web_auth_login_me_logout_flow() -> None:
     assert me_after.status_code == 401
 
 
+def test_provider_config_get_and_update(monkeypatch) -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    os.environ["PRIMARY_PROVIDER"] = "gemini"
+    os.environ["GEMINI_MODEL"] = "gemini-2.5-flash"
+    os.environ["SGLANG_MODEL"] = "openai/gpt-oss-120b"
+    get_settings.cache_clear()
+    saved: dict[str, str] = {}
+
+    def fake_save_env_values(values: dict[str, str]) -> None:
+        saved.update(values)
+        for key, value in values.items():
+            os.environ[key] = value
+
+    monkeypatch.setattr("jarvis.routes.api.auth._save_env_values", fake_save_env_values)
+    monkeypatch.setattr("jarvis.routes.api.auth.enqueue_settings_reload", lambda: True)
+
+    client = TestClient(app)
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    before = client.get("/api/v1/auth/providers/config", headers=headers)
+    assert before.status_code == 200
+    assert before.json()["primary_provider"] == "gemini"
+
+    update = client.post(
+        "/api/v1/auth/providers/config",
+        headers=headers,
+        json={
+            "primary_provider": "sglang",
+            "gemini_model": "gemini-2.5-pro",
+            "sglang_model": "openai/gpt-oss-20b",
+        },
+    )
+    assert update.status_code == 200
+    payload = update.json()
+    assert payload["ok"] is True
+    assert payload["primary_provider"] == "sglang"
+    assert payload["gemini_model"] == "gemini-2.5-pro"
+    assert payload["sglang_model"] == "openai/gpt-oss-20b"
+    assert saved["PRIMARY_PROVIDER"] == "sglang"
+    assert saved["GEMINI_MODEL"] == "gemini-2.5-pro"
+    assert saved["SGLANG_MODEL"] == "openai/gpt-oss-20b"
+    get_settings.cache_clear()
+
+
 def test_web_thread_and_message_flow(monkeypatch) -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
 
     calls: list[tuple[str, str]] = []
 
-    def fake_send_task(name: str, kwargs: dict[str, str], queue: str) -> None:
+    def fake_send_task(name: str, kwargs: dict[str, str], queue: str) -> bool:
         calls.append((name, queue))
+        return True
 
-    monkeypatch.setattr("jarvis.routes.api.messages.celery_app.send_task", fake_send_task)
+    monkeypatch.setattr("jarvis.routes.api.messages._send_task", fake_send_task)
     monkeypatch.setattr("jarvis.routes.api.messages.is_onboarding_active", lambda *_a, **_k: False)
 
     client = TestClient(app)
@@ -88,10 +136,11 @@ def test_web_message_routes_to_onboarding_when_requested(monkeypatch) -> None:
 
     calls: list[tuple[str, str]] = []
 
-    def fake_send_task(name: str, kwargs: dict[str, str], queue: str) -> None:
+    def fake_send_task(name: str, kwargs: dict[str, str], queue: str) -> bool:
         calls.append((name, queue))
+        return True
 
-    monkeypatch.setattr("jarvis.routes.api.messages.celery_app.send_task", fake_send_task)
+    monkeypatch.setattr("jarvis.routes.api.messages._send_task", fake_send_task)
     monkeypatch.setattr("jarvis.routes.api.messages.is_onboarding_active", lambda *_a, **_k: True)
 
     client = TestClient(app)
@@ -128,12 +177,13 @@ def test_web_message_onboarding_enqueue_failure_still_persists_user_message(monk
 
     calls: list[tuple[str, str]] = []
 
-    def fake_send_task(name: str, kwargs: dict[str, str], queue: str) -> None:
+    def fake_send_task(name: str, kwargs: dict[str, str], queue: str) -> bool:
         calls.append((name, queue))
         if name == "jarvis.tasks.onboarding.onboarding_step":
-            raise OperationalError("queue unavailable")
+            return False
+        return True
 
-    monkeypatch.setattr("jarvis.routes.api.messages.celery_app.send_task", fake_send_task)
+    monkeypatch.setattr("jarvis.routes.api.messages._send_task", fake_send_task)
     monkeypatch.setattr("jarvis.routes.api.messages.is_onboarding_active", lambda *_a, **_k: True)
 
     client = TestClient(app)
@@ -163,6 +213,124 @@ def test_web_message_onboarding_enqueue_failure_still_persists_user_message(monk
     task_names = [item[0] for item in calls]
     assert "jarvis.tasks.memory.index_event" in task_names
     assert "jarvis.tasks.onboarding.onboarding_step" in task_names
+
+
+def test_web_messages_hide_non_main_assistant_history() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+
+    client = TestClient(app)
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    thread = client.post("/api/v1/threads", headers=headers)
+    assert thread.status_code == 200
+    thread_id = thread.json()["id"]
+
+    with get_conn() as conn:
+        main_msg_id = insert_message(conn, thread_id, "assistant", "main response")
+        planner_msg_id = insert_message(conn, thread_id, "assistant", "planner internal response")
+        conn.execute(
+            (
+                "INSERT INTO events("
+                "id, trace_id, span_id, parent_span_id, thread_id, event_type, component, "
+                "actor_type, actor_id, payload_json, payload_redacted_json, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                new_id("evt"),
+                new_id("trc"),
+                new_id("spn"),
+                None,
+                thread_id,
+                "agent.step.end",
+                "orchestrator",
+                "agent",
+                "main",
+                json.dumps({"message_id": main_msg_id}),
+                json.dumps({"message_id": main_msg_id}),
+                now_iso(),
+            ),
+        )
+        conn.execute(
+            (
+                "INSERT INTO events("
+                "id, trace_id, span_id, parent_span_id, thread_id, event_type, component, "
+                "actor_type, actor_id, payload_json, payload_redacted_json, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                new_id("evt"),
+                new_id("trc"),
+                new_id("spn"),
+                None,
+                thread_id,
+                "agent.step.end",
+                "orchestrator",
+                "agent",
+                "planner",
+                json.dumps({"message_id": planner_msg_id}),
+                json.dumps({"message_id": planner_msg_id}),
+                now_iso(),
+            ),
+        )
+
+    listing = client.get(f"/api/v1/threads/{thread_id}/messages", headers=headers)
+    assert listing.status_code == 200
+    items = listing.json()["items"]
+    contents = [str(item["content"]) for item in items]
+    assert "main response" in contents
+    assert "planner internal response" not in contents
+
+
+def test_trace_endpoint_supports_redacted_and_raw_views() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+
+    client = TestClient(app)
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    thread = client.post("/api/v1/threads", headers=headers)
+    assert thread.status_code == 200
+    thread_id = thread.json()["id"]
+    trace_id = new_id("trc")
+
+    with get_conn() as conn:
+        conn.execute(
+            (
+                "INSERT INTO events("
+                "id, trace_id, span_id, parent_span_id, thread_id, event_type, component, "
+                "actor_type, actor_id, payload_json, payload_redacted_json, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                new_id("evt"),
+                trace_id,
+                new_id("spn"),
+                None,
+                thread_id,
+                "agent.thought",
+                "orchestrator",
+                "agent",
+                "main",
+                json.dumps({"text": "private chain", "password": "secret"}),
+                json.dumps({"text": "private chain", "password": "[REDACTED]"}),
+                now_iso(),
+            ),
+        )
+
+    redacted = client.get(f"/api/v1/traces/{trace_id}?view=redacted", headers=headers)
+    assert redacted.status_code == 200
+    redacted_items = redacted.json()["items"]
+    assert redacted_items
+    assert redacted_items[0]["payload"]["password"] == "[REDACTED]"
+
+    raw = client.get(f"/api/v1/traces/{trace_id}?view=raw", headers=headers)
+    assert raw.status_code == 200
+    raw_items = raw.json()["items"]
+    assert raw_items
+    assert raw_items[0]["payload"]["password"] == "secret"
 
 
 def test_get_thread_onboarding_status() -> None:
@@ -246,10 +414,11 @@ def test_github_webhook_enqueues_summary_task(monkeypatch) -> None:
     get_settings.cache_clear()
     calls: list[tuple[str, dict[str, object], str]] = []
 
-    def fake_send_task(name: str, kwargs: dict[str, object], queue: str) -> None:
+    def fake_send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
         calls.append((name, kwargs, queue))
+        return True
 
-    monkeypatch.setattr("jarvis.routes.api.webhooks.celery_app.send_task", fake_send_task)
+    monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
 
     client = TestClient(app)
     payload = {
@@ -282,10 +451,10 @@ def test_github_webhook_degraded_on_enqueue_error(monkeypatch) -> None:
     os.environ["GITHUB_WEBHOOK_SECRET"] = "secret"
     get_settings.cache_clear()
 
-    def fake_send_task(name: str, kwargs: dict[str, object], queue: str) -> None:
-        raise OperationalError("broker down")
+    def fake_send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
+        return False
 
-    monkeypatch.setattr("jarvis.routes.api.webhooks.celery_app.send_task", fake_send_task)
+    monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
 
     client = TestClient(app)
     payload = {
@@ -315,10 +484,11 @@ def test_github_issue_comment_chat_trigger_enqueues_task(monkeypatch) -> None:
     get_settings.cache_clear()
     calls: list[tuple[str, dict[str, object], str]] = []
 
-    def fake_send_task(name: str, kwargs: dict[str, object], queue: str) -> None:
+    def fake_send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
         calls.append((name, kwargs, queue))
+        return True
 
-    monkeypatch.setattr("jarvis.routes.api.webhooks.celery_app.send_task", fake_send_task)
+    monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
     client = TestClient(app)
     payload = {
         "action": "created",
@@ -357,10 +527,11 @@ def test_github_issue_comment_mention_uses_chat_mode(monkeypatch) -> None:
     get_settings.cache_clear()
     calls: list[tuple[str, dict[str, object], str]] = []
 
-    def fake_send_task(name: str, kwargs: dict[str, object], queue: str) -> None:
+    def fake_send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
         calls.append((name, kwargs, queue))
+        return True
 
-    monkeypatch.setattr("jarvis.routes.api.webhooks.celery_app.send_task", fake_send_task)
+    monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
     client = TestClient(app)
     payload = {
         "action": "created",
@@ -394,10 +565,11 @@ def test_github_issue_comment_help_enqueues_help_mode(monkeypatch) -> None:
     get_settings.cache_clear()
     calls: list[tuple[str, dict[str, object], str]] = []
 
-    def fake_send_task(name: str, kwargs: dict[str, object], queue: str) -> None:
+    def fake_send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
         calls.append((name, kwargs, queue))
+        return True
 
-    monkeypatch.setattr("jarvis.routes.api.webhooks.celery_app.send_task", fake_send_task)
+    monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
     client = TestClient(app)
     payload = {
         "action": "created",

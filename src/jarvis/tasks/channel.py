@@ -8,9 +8,7 @@ import time
 
 import httpx
 
-from jarvis.celery_app import celery_app
 from jarvis.channels.registry import get_channel
-from jarvis.errors import ChannelError
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import get_channel_outbound, get_system_state
 from jarvis.events.models import EventInput
@@ -45,7 +43,6 @@ def _emit(
         )
 
 
-@celery_app.task(name="jarvis.tasks.channel.send_channel_message")
 def send_channel_message(
     thread_id: str, message_id: str, channel_type: str
 ) -> dict[str, str]:
@@ -136,7 +133,6 @@ def send_channel_message(
     return {"thread_id": thread_id, "message_id": message_id, "status": "failed"}
 
 
-@celery_app.task(name="jarvis.tasks.channel.send_whatsapp_message")
 def send_whatsapp_message(thread_id: str, message_id: str) -> dict[str, str]:
     """Legacy WhatsApp-specific task — delegates to generic send_channel_message."""
     return send_channel_message(thread_id, message_id, "whatsapp")

@@ -1,6 +1,6 @@
 """Provider contracts."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -8,6 +8,8 @@ from typing import Any, Protocol
 class ModelResponse:
     text: str
     tool_calls: list[dict[str, Any]]
+    reasoning_text: str = ""
+    reasoning_parts: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ModelProvider(Protocol):

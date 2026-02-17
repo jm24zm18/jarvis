@@ -16,6 +16,9 @@ Provide shared operational knowledge for Jarvis agents working in this repositor
 - Runtime prompt assembly is implemented in `src/jarvis/orchestrator/step.py` and `src/jarvis/orchestrator/prompt_builder.py`.
 - Tool registration for agent execution is in `src/jarvis/tasks/agent.py`.
 - GitHub PR automation is implemented in `src/jarvis/routes/api/webhooks.py` and `src/jarvis/tasks/github.py`.
+- Bug/feature request GitHub issue sync is implemented in `src/jarvis/routes/api/bugs.py` and `src/jarvis/tasks/github.py`.
+- Local maintenance loop is implemented in `src/jarvis/tasks/maintenance.py` and scheduled from `src/jarvis/celery_app.py`.
+- Local maintenance CLI controls are in `src/jarvis/cli/main.py` under `jarvis maintenance`.
 - PR chat trigger commands:
   - `/jarvis review <question>`
   - `/jarvis summarize <question>`
@@ -31,6 +34,7 @@ Provide shared operational knowledge for Jarvis agents working in this repositor
 4. Run targeted tests first, then broader test suites.
 5. After structural changes, refresh this skill with updated paths and behavior.
 6. For GitHub automation changes, update `docs/github-pr-automation.md` and env docs together.
+7. For local automation changes, keep `Makefile` (`beat`, `maintenance-now`) and runbook/config docs in sync.
 
 ## Examples
 ```bash

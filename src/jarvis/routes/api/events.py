@@ -10,9 +10,17 @@ from jarvis.db.connection import get_conn
 router = APIRouter(tags=["api-events"])
 
 
+def _parse_json_payload(raw_value: str) -> dict[str, object]:
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return {"raw": raw_value}
+    return parsed if isinstance(parsed, dict) else {"raw": raw_value}
+
+
 @router.get("/events")
 def search_events(
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     event_type: str | None = None,
     component: str | None = None,
     thread_id: str | None = None,
@@ -57,10 +65,7 @@ def search_events(
     items = []
     for row in rows:
         payload = str(row["payload_redacted_json"])
-        try:
-            parsed = json.loads(payload)
-        except json.JSONDecodeError:
-            parsed = {"raw": payload}
+        parsed = _parse_json_payload(payload)
         items.append(
             {
                 "id": str(row["id"]),
@@ -80,7 +85,7 @@ def search_events(
 
 
 @router.get("/events/{event_id}")
-def get_event(event_id: str, ctx: UserContext = Depends(require_auth)) -> dict[str, object]:
+def get_event(event_id: str, ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     with get_conn() as conn:
         row = conn.execute(
             (
@@ -115,22 +120,30 @@ def get_event(event_id: str, ctx: UserContext = Depends(require_auth)) -> dict[s
 
 
 @router.get("/traces/{trace_id}")
-def get_trace(trace_id: str, ctx: UserContext = Depends(require_auth)) -> dict[str, object]:
+def get_trace(
+    trace_id: str,
+    view: str = Query(default="redacted", pattern="^(redacted|raw)$"),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+) -> dict[str, object]:  # noqa: B008
+    raw_view = view == "raw"
     with get_conn() as conn:
         if ctx.is_admin:
+            payload_column = "payload_json" if raw_view else "payload_redacted_json"
             rows = conn.execute(
                 (
                     "SELECT id, span_id, parent_span_id, thread_id, event_type, component, "
-                    "actor_type, actor_id, payload_redacted_json, created_at "
+                    f"actor_type, actor_id, {payload_column} AS payload, created_at "
                     "FROM events WHERE trace_id=? ORDER BY created_at ASC"
                 ),
                 (trace_id,),
             ).fetchall()
         else:
+            payload_column = "e.payload_json" if raw_view else "e.payload_redacted_json"
             rows = conn.execute(
                 (
                     "SELECT e.id, e.span_id, e.parent_span_id, e.thread_id, e.event_type, "
-                    "e.component, e.actor_type, e.actor_id, e.payload_redacted_json, e.created_at "
+                    f"e.component, e.actor_type, e.actor_id, {payload_column} AS payload, "
+                    "e.created_at "
                     "FROM events e LEFT JOIN threads t ON t.id=e.thread_id "
                     "WHERE e.trace_id=? AND (e.thread_id IS NULL OR t.user_id=?) "
                     "ORDER BY e.created_at ASC"
@@ -147,9 +160,9 @@ def get_trace(trace_id: str, ctx: UserContext = Depends(require_auth)) -> dict[s
             "component": str(row["component"]),
             "actor_type": str(row["actor_type"]),
             "actor_id": str(row["actor_id"]),
-            "payload_redacted_json": str(row["payload_redacted_json"]),
+            "payload": _parse_json_payload(str(row["payload"])),
             "created_at": str(row["created_at"]),
         }
         for row in rows
     ]
-    return {"trace_id": trace_id, "items": items}
+    return {"trace_id": trace_id, "view": view, "items": items}

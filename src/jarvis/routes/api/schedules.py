@@ -11,7 +11,7 @@ router = APIRouter(prefix="/schedules", tags=["api-schedules"])
 
 
 @router.get("")
-def list_schedules(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:
+def list_schedules(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     with get_conn() as conn:
         if ctx.is_admin:
             rows = conn.execute(
@@ -46,7 +46,7 @@ def list_schedules(ctx: UserContext = Depends(require_auth)) -> dict[str, object
 
 @router.post("")
 def create_schedule(
-    payload: dict[str, object], ctx: UserContext = Depends(require_auth)
+    payload: dict[str, object], ctx: UserContext = Depends(require_auth)  # noqa: B008
 ) -> dict[str, str]:
     cron_expr = str(payload.get("cron_expr", "")).strip()
     payload_json = str(payload.get("payload_json", "{}"))
@@ -87,7 +87,7 @@ def create_schedule(
 def update_schedule(
     schedule_id: str,
     payload: dict[str, object],
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, bool]:
     with get_conn() as conn:
         row = conn.execute(
@@ -128,7 +128,7 @@ def update_schedule(
 
 @router.get("/{schedule_id}/dispatches")
 def list_dispatches(
-    schedule_id: str, ctx: UserContext = Depends(require_auth)
+    schedule_id: str, ctx: UserContext = Depends(require_auth)  # noqa: B008
 ) -> dict[str, object]:
     with get_conn() as conn:
         schedule_row = conn.execute(

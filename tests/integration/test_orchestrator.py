@@ -9,11 +9,26 @@ from jarvis.db.queries import (
     insert_message,
 )
 from jarvis.orchestrator.step import run_agent_step
-from jarvis.providers.gemini import GeminiProvider
+from jarvis.providers.base import ModelResponse
 from jarvis.providers.router import ProviderRouter
 from jarvis.providers.sglang import SGLangProvider
 from jarvis.tools.registry import ToolRegistry
 from jarvis.tools.runtime import ToolRuntime
+
+
+class StubProvider:
+    async def generate(  # type: ignore[no-untyped-def]
+        self,
+        messages,
+        tools=None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> ModelResponse:
+        del messages, tools, temperature, max_tokens
+        return ModelResponse(text="ok", tool_calls=[])
+
+    async def health_check(self) -> bool:
+        return True
 
 
 def test_orchestrator_executes_command_short_path() -> None:
@@ -24,7 +39,7 @@ def test_orchestrator_executes_command_short_path() -> None:
         thread_id = ensure_open_thread(conn, user_id, channel_id)
         insert_message(conn, thread_id, "user", "/status")
 
-        router = ProviderRouter(GeminiProvider("g"), SGLangProvider("s"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("s"))
         runtime = ToolRuntime(ToolRegistry())
         _ = asyncio.run(run_agent_step(conn, router, runtime, thread_id, "trc_99"))
 

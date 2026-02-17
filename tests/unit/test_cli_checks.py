@@ -14,7 +14,6 @@ from jarvis.cli.checks import (
     check_http_service,
     check_migrations_applied,
     check_python_version,
-    check_rabbitmq,
     check_tool_exists,
 )
 
@@ -75,25 +74,6 @@ class TestCheckEnvFile:
         assert result.fix_fn is not None
         assert result.fix_fn() is True
         assert (tmp_path / ".env").is_file()
-
-
-class TestCheckRabbitmq:
-    def test_reachable(self) -> None:
-        mock_conn = MagicMock()
-        with patch("jarvis.cli.checks.kombu") as mock_kombu:
-            mock_kombu.Connection.return_value = mock_conn
-            result = check_rabbitmq("amqp://localhost")
-        assert result.passed is True
-        mock_conn.ensure_connection.assert_called_once_with(max_retries=1)
-        mock_conn.close.assert_called_once()
-
-    def test_unreachable(self) -> None:
-        with patch("jarvis.cli.checks.kombu") as mock_kombu:
-            mock_kombu.Connection.return_value.ensure_connection.side_effect = (
-                ConnectionError("refused")
-            )
-            result = check_rabbitmq("amqp://localhost")
-        assert result.passed is False
 
 
 class TestCheckHttpService:

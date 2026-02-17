@@ -9,14 +9,12 @@ from collections.abc import Iterable
 
 import httpx
 
-from jarvis.celery_app import celery_app
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import now_iso
 from jarvis.ids import new_id
-from jarvis.providers.factory import build_primary_provider
+from jarvis.providers.factory import build_fallback_provider, build_primary_provider
 from jarvis.providers.router import ProviderRouter
-from jarvis.providers.sglang import SGLangProvider
 
 SUMMARY_MARKER = "<!-- jarvis:pr-summary -->"
 CHAT_MARKER = "<!-- jarvis:pr-chat -->"
@@ -288,7 +286,7 @@ async def _generate_chat_reply_for_mode(prompt: str, chat_mode: str) -> str:
     settings = get_settings()
     router = ProviderRouter(
         build_primary_provider(settings),
-        SGLangProvider(settings.sglang_model),
+        build_fallback_provider(settings),
     )
     messages = [
         {
@@ -350,6 +348,22 @@ def _post_issue_comment(
     return {"comment_id": int(payload.get("id", 0) or 0)}
 
 
+def _split_labels(labels_csv: str) -> list[str]:
+    return [item.strip() for item in labels_csv.split(",") if item.strip()]
+
+
+def _parse_repo_full_name(value: str) -> tuple[str, str] | None:
+    text = value.strip()
+    if not text or "/" not in text:
+        return None
+    owner, repo = text.split("/", 1)
+    owner = owner.strip()
+    repo = repo.strip()
+    if not owner or not repo:
+        return None
+    return owner, repo
+
+
 def _record_bug_report(title: str, details: dict[str, object], priority: str = "high") -> str:
     bug_id = new_id("bug")
     now = now_iso()
@@ -377,7 +391,92 @@ def _record_bug_report(title: str, details: dict[str, object], priority: str = "
     return bug_id
 
 
-@celery_app.task(name="jarvis.tasks.github.github_pr_summary")
+def github_issue_sync_bug_report(*, bug_id: str) -> dict[str, object]:
+    settings = get_settings()
+    if int(settings.github_issue_sync_enabled) != 1:
+        return {"ok": True, "skipped": "github_issue_sync_disabled", "bug_id": bug_id}
+
+    repo_pair = _parse_repo_full_name(settings.github_issue_sync_repo)
+    if repo_pair is None:
+        return {"ok": False, "error": "invalid GITHUB_ISSUE_SYNC_REPO", "bug_id": bug_id}
+    owner, repo = repo_pair
+
+    token = settings.github_token.strip()
+    if not token:
+        return {"ok": False, "error": "missing GITHUB_TOKEN", "bug_id": bug_id}
+
+    with get_conn() as conn:
+        row = conn.execute(
+            (
+                "SELECT id, kind, title, description, priority, status, "
+                "github_issue_number, github_issue_url FROM bug_reports WHERE id=? LIMIT 1"
+            ),
+            (bug_id,),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "error": "bug_not_found", "bug_id": bug_id}
+        existing_issue = row["github_issue_number"]
+        if existing_issue is not None:
+            return {
+                "ok": True,
+                "bug_id": bug_id,
+                "skipped": "already_synced",
+                "issue_number": int(existing_issue),
+            }
+
+    kind = str(row["kind"])
+    labels = (
+        _split_labels(settings.github_issue_labels_feature)
+        if kind == "feature"
+        else _split_labels(settings.github_issue_labels_bug)
+    )
+    title = str(row["title"]).strip()
+    description = str(row["description"]).strip()
+    priority = str(row["priority"]).strip()
+    status = str(row["status"]).strip()
+    body = (
+        f"Synced from Jarvis `{kind}` record `{bug_id}`.\n\n"
+        f"Priority: `{priority}`\n"
+        f"Status: `{status}`\n\n"
+        "### Description\n"
+        f"{description or '_No description provided._'}"
+    )
+
+    base_url = settings.github_api_base_url.rstrip("/")
+    try:
+        with httpx.Client(timeout=10.0, headers=_github_headers(token)) as client:
+            resp = client.post(
+                f"{base_url}/repos/{owner}/{repo}/issues",
+                json={"title": title, "body": body, "labels": labels},
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            issue_number = int(payload.get("number", 0) or 0)
+            issue_url = str(payload.get("html_url", "")).strip()
+    except Exception as exc:
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE bug_reports SET github_sync_error=?, updated_at=? WHERE id=?",
+                (repr(exc), now_iso(), bug_id),
+            )
+        return {"ok": False, "bug_id": bug_id, "error": str(exc)}
+
+    with get_conn() as conn:
+        conn.execute(
+            (
+                "UPDATE bug_reports SET github_issue_number=?, github_issue_url=?, "
+                "github_synced_at=?, github_sync_error=NULL, updated_at=? WHERE id=?"
+            ),
+            (issue_number, issue_url, now_iso(), now_iso(), bug_id),
+        )
+    return {
+        "ok": True,
+        "bug_id": bug_id,
+        "issue_number": issue_number,
+        "issue_url": issue_url,
+    }
+
+
 def github_pr_summary(
     *,
     owner: str,
@@ -466,7 +565,6 @@ def github_pr_summary(
     }
 
 
-@celery_app.task(name="jarvis.tasks.github.github_pr_chat")
 def github_pr_chat(
     *,
     owner: str,

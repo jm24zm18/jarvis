@@ -5,16 +5,22 @@ import hmac
 import json
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from kombu.exceptions import OperationalError
 
 from jarvis.auth.dependencies import UserContext, require_auth
-from jarvis.celery_app import celery_app
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import insert_message, now_iso
 from jarvis.ids import new_id
+from jarvis.tasks import get_task_runner
 
 router = APIRouter(tags=["api-webhooks"])
+
+
+def _send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
+    try:
+        return get_task_runner().send_task(name, kwargs=kwargs, queue=queue)
+    except Exception:
+        return False
 
 
 @router.post("/webhooks/trigger/{hook_id}")
@@ -67,13 +73,12 @@ async def trigger_webhook(
 
         insert_message(conn, thread_id, "user", message_text)
 
-    try:
-        celery_app.send_task(
-            "jarvis.tasks.agent.agent_step",
-            kwargs={"trace_id": trace_id, "thread_id": thread_id, "actor_id": agent_id},
-            queue="agent_priority",
-        )
-    except OperationalError:
+    ok = _send_task(
+        "jarvis.tasks.agent.agent_step",
+        kwargs={"trace_id": trace_id, "thread_id": thread_id, "actor_id": agent_id},
+        queue="agent_priority",
+    )
+    if not ok:
         return {"accepted": True, "degraded": True, "thread_id": thread_id}
 
     return {"accepted": True, "degraded": False, "thread_id": thread_id}
@@ -163,19 +168,18 @@ async def github_webhook(
         base_ref = str(base.get("ref", "")).strip() if isinstance(base, dict) else ""
         if not number:
             raise HTTPException(status_code=400, detail="missing pull number")
-        try:
-            celery_app.send_task(
-                "jarvis.tasks.github.github_pr_summary",
-                kwargs={
-                    "owner": owner_login,
-                    "repo": repo_name,
-                    "pull_number": number,
-                    "action": action,
-                    "base_ref": base_ref,
-                },
-                queue="tools_io",
-            )
-        except OperationalError:
+        ok = _send_task(
+            "jarvis.tasks.github.github_pr_summary",
+            kwargs={
+                "owner": owner_login,
+                "repo": repo_name,
+                "pull_number": number,
+                "action": action,
+                "base_ref": base_ref,
+            },
+            queue="tools_io",
+        )
+        if not ok:
             return {
                 "accepted": True,
                 "degraded": True,
@@ -221,20 +225,19 @@ async def github_webhook(
         return {"accepted": True, "ignored": True, "reason": "no_chat_trigger"}
     chat_mode, user_prompt = trigger
 
-    try:
-        celery_app.send_task(
-            "jarvis.tasks.github.github_pr_chat",
-            kwargs={
-                "owner": owner_login,
-                "repo": repo_name,
-                "pull_number": pull_number,
-                "comment_body": user_prompt,
-                "chat_mode": chat_mode,
-                "commenter_login": commenter_login,
-            },
-            queue="tools_io",
-        )
-    except OperationalError:
+    ok = _send_task(
+        "jarvis.tasks.github.github_pr_chat",
+        kwargs={
+            "owner": owner_login,
+            "repo": repo_name,
+            "pull_number": pull_number,
+            "comment_body": user_prompt,
+            "chat_mode": chat_mode,
+            "commenter_login": commenter_login,
+        },
+        queue="tools_io",
+    )
+    if not ok:
         return {
             "accepted": True,
             "degraded": True,
@@ -253,7 +256,7 @@ async def github_webhook(
 @router.post("/webhooks/triggers")
 def create_trigger(
     payload: dict[str, object],
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, str]:
     """Create a new webhook trigger (admin only)."""
     if not ctx.is_admin:
@@ -278,7 +281,7 @@ def create_trigger(
 
 
 @router.get("/webhooks/triggers")
-def list_triggers(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:
+def list_triggers(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     """List all webhook triggers (admin only)."""
     if not ctx.is_admin:
         raise HTTPException(status_code=403, detail="admin required")

@@ -30,20 +30,14 @@ Expected: Python 3.12 and successful migration run.
 make dev
 ```
 
-This starts RabbitMQ, Ollama, SearXNG, and SGLang from `docker-compose.yml`.
+This starts Ollama, SearXNG, and SGLang from `docker-compose.yml`.
 
-## 3. Start API + Worker
+## 3. Start API
 
 In terminal A:
 
 ```bash
 make api
-```
-
-In terminal B:
-
-```bash
-make worker
 ```
 
 Verify:
@@ -69,6 +63,22 @@ make web-dev
 ```
 
 Open `http://localhost:5173`.
+
+## 6. Optional GitHub Integration
+
+For PR summaries/chat and bug/feature issue sync:
+
+```bash
+# in .env
+GITHUB_PR_SUMMARY_ENABLED=1
+GITHUB_WEBHOOK_SECRET=<secret>
+GITHUB_TOKEN=<token>
+GITHUB_ISSUE_SYNC_ENABLED=1
+GITHUB_ISSUE_SYNC_REPO=<owner>/<repo>
+```
+
+Then restart API and configure repository webhook to:
+`POST /api/v1/webhooks/github`
 
 ## Agent Notes
 

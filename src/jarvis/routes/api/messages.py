@@ -3,10 +3,8 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from kombu.exceptions import OperationalError
 
 from jarvis.auth.dependencies import UserContext, require_auth
-from jarvis.celery_app import celery_app
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import insert_message, now_iso, verify_thread_owner
@@ -18,17 +16,24 @@ from jarvis.onboarding.service import (
     is_onboarding_active,
     start_onboarding_prompt,
 )
-from jarvis.providers.factory import build_primary_provider
+from jarvis.providers.factory import build_fallback_provider, build_primary_provider
 from jarvis.providers.router import ProviderRouter
-from jarvis.providers.sglang import SGLangProvider
+from jarvis.tasks import get_task_runner
 
 router = APIRouter(tags=["api-messages"])
+
+
+def _send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
+    try:
+        return get_task_runner().send_task(name, kwargs=kwargs, queue=queue)
+    except Exception:
+        return False
 
 
 @router.get("/threads/{thread_id}/messages")
 def list_messages(
     thread_id: str,
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     before: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, object]:
@@ -53,7 +58,12 @@ def list_messages(
                     "  e.thread_id = m.thread_id "
                     "  AND e.event_type = 'agent.step.end' "
                     "  AND json_extract(e.payload_json, '$.message_id') = m.id "
-                    "WHERE m.thread_id=? AND m.role != 'agent' AND m.created_at < ? "
+                    "WHERE m.thread_id=? "
+                    "  AND ("
+                    "    m.role='user' "
+                    "    OR (m.role='assistant' AND (e.actor_id IS NULL OR e.actor_id='main'))"
+                    "  ) "
+                    "  AND m.created_at < ? "
                     "ORDER BY m.created_at DESC LIMIT ?"
                 ),
                 (thread_id, before, limit),
@@ -68,7 +78,11 @@ def list_messages(
                     "  e.thread_id = m.thread_id "
                     "  AND e.event_type = 'agent.step.end' "
                     "  AND json_extract(e.payload_json, '$.message_id') = m.id "
-                    "WHERE m.thread_id=? AND m.role != 'agent' "
+                    "WHERE m.thread_id=? "
+                    "  AND ("
+                    "    m.role='user' "
+                    "    OR (m.role='assistant' AND (e.actor_id IS NULL OR e.actor_id='main'))"
+                    "  ) "
                     "ORDER BY m.created_at DESC LIMIT ?"
                 ),
                 (thread_id, limit),
@@ -77,9 +91,6 @@ def list_messages(
     items = []
     for row in reversed(rows):
         content = str(row["content"])
-        # Skip placeholder responses from delegation
-        if content.strip() == "I can help with that.":
-            continue
         items.append({
             "id": str(row["id"]),
             "role": str(row["role"]),
@@ -105,7 +116,7 @@ def list_messages(
 
 @router.post("/threads/{thread_id}/messages")
 async def send_message(
-    thread_id: str, payload: dict[str, str], ctx: UserContext = Depends(require_auth)
+    thread_id: str, payload: dict[str, str], ctx: UserContext = Depends(require_auth)  # noqa: B008
 ) -> dict[str, object]:
     content = str(payload.get("content", "")).strip()
     if not content:
@@ -142,31 +153,29 @@ async def send_message(
             user_id=thread_user_id,
         )
 
-    try:
-        celery_app.send_task(
-            "jarvis.tasks.memory.index_event",
-            kwargs={"trace_id": trace_id, "thread_id": thread_id, "text": content},
-            queue="tools_io",
+    index_ok = _send_task(
+        "jarvis.tasks.memory.index_event",
+        kwargs={"trace_id": trace_id, "thread_id": thread_id, "text": content},
+        queue="tools_io",
+    )
+    if onboarding:
+        step_ok = _send_task(
+            "jarvis.tasks.onboarding.onboarding_step",
+            kwargs={
+                "trace_id": trace_id,
+                "thread_id": thread_id,
+                "user_id": thread_user_id,
+                "user_message": content,
+            },
+            queue="agent_priority",
         )
-        if onboarding:
-            celery_app.send_task(
-                "jarvis.tasks.onboarding.onboarding_step",
-                kwargs={
-                    "trace_id": trace_id,
-                    "thread_id": thread_id,
-                    "user_id": thread_user_id,
-                    "user_message": content,
-                },
-                queue="agent_priority",
-            )
-        else:
-            celery_app.send_task(
-                "jarvis.tasks.agent.agent_step",
-                kwargs={"trace_id": trace_id, "thread_id": thread_id},
-                queue="agent_priority",
-            )
-    except OperationalError:
-        degraded = True
+    else:
+        step_ok = _send_task(
+            "jarvis.tasks.agent.agent_step",
+            kwargs={"trace_id": trace_id, "thread_id": thread_id},
+            queue="agent_priority",
+        )
+    degraded = not (index_ok and step_ok)
 
     return {
         "ok": True,
@@ -179,7 +188,7 @@ async def send_message(
 
 @router.get("/threads/{thread_id}/onboarding")
 def get_thread_onboarding_status(
-    thread_id: str, ctx: UserContext = Depends(require_auth)
+    thread_id: str, ctx: UserContext = Depends(require_auth)  # noqa: B008
 ) -> dict[str, object]:
     with get_conn() as conn:
         thread_row = conn.execute(
@@ -195,7 +204,7 @@ def get_thread_onboarding_status(
 
 @router.post("/threads/{thread_id}/onboarding/start")
 async def start_thread_onboarding(
-    thread_id: str, ctx: UserContext = Depends(require_auth)
+    thread_id: str, ctx: UserContext = Depends(require_auth)  # noqa: B008
 ) -> dict[str, object]:
     with get_conn() as conn:
         thread_row = conn.execute(
@@ -209,7 +218,7 @@ async def start_thread_onboarding(
         settings = get_settings()
         router = ProviderRouter(
             build_primary_provider(settings),
-            SGLangProvider(settings.sglang_model),
+            build_fallback_provider(settings),
         )
         prompt = await start_onboarding_prompt(
             conn=conn,
@@ -235,6 +244,21 @@ async def start_thread_onboarding(
             return {"ok": True, "prompted": False, "message_id": str(last_row["id"])}
 
         assistant_message_id = insert_message(conn, thread_id, "assistant", prompt)
+        _ = _send_task(
+            "jarvis.tasks.memory.index_event",
+            kwargs={
+                "trace_id": new_id("trc"),
+                "thread_id": thread_id,
+                "text": prompt,
+                "metadata": {
+                    "role": "assistant",
+                    "actor_id": "main",
+                    "message_id": assistant_message_id,
+                    "source": "onboarding.start",
+                },
+            },
+            queue="tools_io",
+        )
         conn.execute(
             (
                 "INSERT INTO web_notifications("

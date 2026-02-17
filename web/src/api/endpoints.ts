@@ -16,6 +16,9 @@ import type {
   ThreadItem,
   OnboardingStatus,
   GoogleOAuthConfig,
+  ProviderConfig,
+  ProviderModelsCatalog,
+  ProviderConfigUpdateResult,
   GoogleOAuthStartResult,
   GoogleOAuthStatus,
 } from "../types";
@@ -91,6 +94,18 @@ export const setLockdown = (lockdown: boolean, reason = "manual") =>
     },
   );
 
+export const resetDatabase = () =>
+  apiFetch<{ ok: boolean }>("/api/v1/system/reset-db", {
+    method: "POST",
+    body: "{}",
+  });
+
+export const reloadAgents = () =>
+  apiFetch<{ ok: boolean }>("/api/v1/system/reload-agents", {
+    method: "POST",
+    body: "{}",
+  });
+
 export const listAgents = () => apiFetch<{ items: AgentSummary[] }>("/api/v1/agents");
 export const getAgent = (agentId: string) => apiFetch<AgentDetail>(`/api/v1/agents/${agentId}`);
 
@@ -109,8 +124,10 @@ export const listEvents = (params: {
   return apiFetch<{ items: EventItem[] }>(`/api/v1/events${suffix}`);
 };
 
-export const getTrace = (traceId: string) =>
-  apiFetch<{ trace_id: string; items: EventItem[] }>(`/api/v1/traces/${traceId}`);
+export const getTrace = (traceId: string, view: "redacted" | "raw" = "redacted") =>
+  apiFetch<{ trace_id: string; view: "redacted" | "raw"; items: EventItem[] }>(
+    `/api/v1/traces/${traceId}?view=${view}`,
+  );
 
 export const listMemory = (q = "", threadId = "") => {
   const qs = new URLSearchParams();
@@ -184,20 +201,21 @@ export const startGoogleOAuth = (payload: {
 export const getGoogleOAuthStatus = (state: string) =>
   apiFetch<GoogleOAuthStatus>(`/api/v1/auth/google/status?state=${encodeURIComponent(state)}`);
 
-export const importGoogleOAuthFromLocal = () =>
-  apiFetch<{
-    ok: string;
-    client_id: string;
-    has_client_secret: string;
-    api_reloaded: string;
-    worker_reload_enqueued: string;
-  }>(
-    "/api/v1/auth/google/import-local",
-    {
-      method: "POST",
-      body: "{}",
-    },
-  );
+export const getProviderConfig = () =>
+  apiFetch<ProviderConfig>("/api/v1/auth/providers/config");
+
+export const getProviderModelsCatalog = () =>
+  apiFetch<ProviderModelsCatalog>("/api/v1/auth/providers/models");
+
+export const updateProviderConfig = (payload: {
+  primary_provider?: "gemini" | "sglang" | string;
+  gemini_model?: string;
+  sglang_model?: string;
+}) =>
+  apiFetch<ProviderConfigUpdateResult>("/api/v1/auth/providers/config", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 
 export const listBugs = (params: {
   status?: string;

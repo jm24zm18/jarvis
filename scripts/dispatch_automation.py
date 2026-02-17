@@ -27,8 +27,8 @@ from jarvis.db.connection import get_conn  # noqa: E402
 from jarvis.db.queries import (  # noqa: E402
     create_thread,
     ensure_channel,
+    ensure_root_user,
     ensure_system_state,
-    ensure_user,
     insert_message,
 )
 from jarvis.ids import new_id  # noqa: E402
@@ -192,7 +192,7 @@ class Dispatcher:
         """Create a thread, insert the prompt, and dispatch agent_step."""
         with get_conn() as conn:
             ensure_system_state(conn)
-            user_id = ensure_user(conn, "cli:orchestrator@local")
+            user_id = ensure_root_user(conn)
             channel_id = ensure_channel(conn, user_id, "cli")
             thread_id = create_thread(conn, user_id, channel_id)
             user_msg_id = insert_message(conn, thread_id, "user", prompt)
@@ -330,7 +330,7 @@ def run_status() -> None:
             "FROM threads t "
             "JOIN channels c ON c.id=t.channel_id "
             "JOIN users u ON u.id=t.user_id "
-            "WHERE u.external_id='cli:orchestrator@local' "
+            "WHERE u.external_id='system:root' "
             "ORDER BY t.created_at DESC LIMIT 20"
         ).fetchall()
 

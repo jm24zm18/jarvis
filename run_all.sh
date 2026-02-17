@@ -65,21 +65,18 @@ if ! has_env_key "WEB_AUTH_SETUP_PASSWORD"; then
   echo "Added WEB_AUTH_SETUP_PASSWORD=change-me-now to .env"
 fi
 
-echo "[0/6] Cleaning up stale local API/worker/web processes..."
+echo "[0/6] Cleaning up stale local API/web processes..."
 stop_from_pidfile "$LOG_DIR/api.pid"
-stop_from_pidfile "$LOG_DIR/worker.pid"
 stop_from_pidfile "$LOG_DIR/web.pid"
 pkill -f "uvicorn jarvis.main:app" 2>/dev/null || true
 pkill -f "jarvis.main:app --host 127.0.0.1 --port 8000" 2>/dev/null || true
-pkill -f "celery -A jarvis.celery_app worker" 2>/dev/null || true
-pkill -f "jarvis.celery_app worker" 2>/dev/null || true
 pkill -f "/bin/gemini -m" 2>/dev/null || true
 pkill -f "/web/node_modules/.bin/vite" 2>/dev/null || true
 pkill -f "npm run dev -- --port 5173 --strictPort" 2>/dev/null || true
 pkill -f "vite --port 5173 --strictPort" 2>/dev/null || true
 
 echo "[1/6] Starting Docker dependencies..."
-services=("rabbitmq")
+services=()
 
 if ss -ltn 2>/dev/null | grep -q ':8080 '; then
   echo "Port 8080 already in use; skipping docker searxng."
@@ -99,7 +96,11 @@ else
   services+=("sglang")
 fi
 
-docker compose up -d "${services[@]}"
+if (( ${#services[@]} > 0 )); then
+  docker compose up -d "${services[@]}"
+else
+  echo "All dependency ports already in use; skipping docker compose startup."
+fi
 
 echo "[2/7] Syncing Python dependencies..."
 uv sync
@@ -123,16 +124,21 @@ fi
 echo "[4/7] Running DB migrations..."
 run_migrations_with_retry 5
 
+echo "[4.5/7] Seeding root admin user..."
+uv run python -c "
+from jarvis.db.connection import get_conn
+from jarvis.db.queries import ensure_root_user
+with get_conn() as conn:
+    uid = ensure_root_user(conn)
+    print(f'Root user ready: {uid}')
+"
+
 echo "[5/7] Installing web dependencies..."
 make web-install
 
-echo "[6/7] Starting API, worker, and web UI..."
+echo "[6/7] Starting API and web UI..."
 nohup uv run uvicorn jarvis.main:app --host 127.0.0.1 --port 8000 --app-dir src > "$LOG_DIR/api.log" 2>&1 &
 echo $! > "$LOG_DIR/api.pid"
-
-# SQLite is sensitive to concurrent writers; keep local dev worker single-process.
-nohup uv run celery -A jarvis.celery_app worker --pool=solo --concurrency=1 -Q agent_priority,agent_default,tools_io,local_llm --loglevel=info > "$LOG_DIR/worker.log" 2>&1 &
-echo $! > "$LOG_DIR/worker.pid"
 
 nohup bash -lc "cd '$ROOT_DIR/web' && exec npm run dev -- --port 5173 --strictPort" > "$LOG_DIR/web.log" 2>&1 &
 echo $! > "$LOG_DIR/web.pid"
@@ -164,8 +170,8 @@ fi
 echo "[7/7] Done."
 echo "UI:  http://localhost:5173"
 echo "API: http://localhost:8000/healthz"
-echo "Logs: $LOG_DIR/{api,worker,web}.log"
-echo "PIDs: $LOG_DIR/{api,worker,web}.pid"
+echo "Logs: $LOG_DIR/{api,web}.log"
+echo "PIDs: $LOG_DIR/{api,web}.pid"
 echo
 echo "To stop:"
-echo "kill \"\$(cat $LOG_DIR/api.pid)\" \"\$(cat $LOG_DIR/worker.pid)\" \"\$(cat $LOG_DIR/web.pid)\""
+echo "kill \"\$(cat $LOG_DIR/api.pid)\" \"\$(cat $LOG_DIR/web.pid)\""

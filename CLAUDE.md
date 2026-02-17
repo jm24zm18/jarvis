@@ -17,9 +17,8 @@ uv sync
 make migrate
 
 # services
-make dev        # docker services: rabbitmq, ollama, searxng, sglang
+make dev        # docker services: ollama, searxng, sglang
 make api        # fastapi server (default 127.0.0.1:8000)
-make worker     # celery worker
 make web-dev    # vite dev server (default 5173)
 
 # checks
@@ -47,7 +46,7 @@ uv run jarvis skill install <path>
 
 ## Architecture Facts
 
-- Runtime processes: API (`src/jarvis/main.py`) + worker (`src/jarvis/celery_app.py`) with RabbitMQ broker.
+- Runtime process: API (`src/jarvis/main.py`) with in-process asyncio task runner.
 - Database: SQLite with ordered SQL migrations under `src/jarvis/db/migrations` (currently `001..023`).
 - Core request path: webhook -> DB dedup/persist -> `channel.inbound` event -> `agent_step` task -> orchestrator/provider/tools -> outbound.
 - Tool execution is deny-by-default and gated by policy + agent permissions.
@@ -66,7 +65,7 @@ uv run jarvis skill install <path>
 
 ```text
 src/jarvis/
-  main.py, celery_app.py, config.py
+  main.py, config.py, tasks/runner.py
   agents/, auth/, channels/, cli/, commands/
   db/ (connection.py, queries.py, migrations/001..023)
   events/, memory/, models/, onboarding/

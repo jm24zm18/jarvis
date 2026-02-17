@@ -21,6 +21,20 @@ class FailProvider:
         return False
 
 
+class RetryableFailThenOkProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def generate(self, messages, tools=None, temperature=0.7, max_tokens=4096):
+        self.calls += 1
+        if self.calls < 3:
+            raise RuntimeError("gemini Code Assist stream timed out")
+        return ModelResponse(text="ok-after-retry", tool_calls=[])
+
+    async def health_check(self) -> bool:
+        return True
+
+
 @pytest.mark.asyncio
 async def test_primary_success() -> None:
     router = ProviderRouter(OkProvider(), OkProvider())
@@ -57,3 +71,14 @@ async def test_low_priority_skips_fallback_when_local_llm_overloaded(
     monkeypatch.setattr(router, "_local_llm_overloaded", _overloaded)
     with pytest.raises(ProviderError):
         await router.generate([{"role": "user", "content": "x"}], priority="low")
+
+
+@pytest.mark.asyncio
+async def test_retryable_primary_error_retries_before_success() -> None:
+    primary = RetryableFailThenOkProvider()
+    router = ProviderRouter(primary, OkProvider())
+    response, lane, primary_error = await router.generate([{"role": "user", "content": "x"}])
+    assert response.text == "ok-after-retry"
+    assert lane == "primary"
+    assert primary_error is None
+    assert primary.calls == 3

@@ -19,6 +19,12 @@ function eventColor(eventType: string): string {
 
 function summarizeEvent(event: TraceEvent): string {
   const payload = event.payload;
+  if (event.event_type === "agent.thought") {
+    const iteration = Number(payload.iteration ?? 0);
+    const source = String(payload.thought_source ?? "provider_reasoning");
+    const suffix = source === "assistant_text_fallback" ? ", fallback" : "";
+    return `Thought captured (iteration ${iteration + 1}${suffix})`;
+  }
   if (event.event_type === "model.run.start") {
     const iteration = Number(payload.iteration ?? 0);
     return `Thinking (iteration ${iteration + 1})`;
@@ -40,6 +46,26 @@ function summarizeEvent(event: TraceEvent): string {
     return `Delegating to ${String(payload.to_agent ?? "worker")}`;
   }
   return event.event_type;
+}
+
+function previewText(event: TraceEvent): string {
+  const payload = event.payload;
+  if (event.event_type === "agent.thought") {
+    const text = String(payload.text ?? "").trim();
+    if (!text) return "No thought text captured.";
+    return text.length > 280 ? `${text.slice(0, 279)}...` : text;
+  }
+  if (event.event_type === "tool.call.start") {
+    const args = payload.arguments;
+    if (typeof args === "object" && args !== null) {
+      return `Arguments: ${JSON.stringify(args)}`;
+    }
+  }
+  if (event.event_type === "tool.call.end") {
+    if (payload.error) return `Error: ${String(payload.error)}`;
+    if (payload.result !== undefined) return `Result: ${JSON.stringify(payload.result)}`;
+  }
+  return "";
 }
 
 export default function ThinkingPanel({ events, onClose }: Props) {
@@ -82,6 +108,11 @@ export default function ThinkingPanel({ events, onClose }: Props) {
                 <div className="text-xs font-medium text-[var(--text-primary)]">
                   {summarizeEvent(event)}
                 </div>
+                {previewText(event) ? (
+                  <div className="mt-1 whitespace-pre-wrap break-words text-[11px] text-[var(--text-primary)]">
+                    {previewText(event)}
+                  </div>
+                ) : null}
                 <div className="mt-0.5 text-[11px] text-[var(--text-muted)]">
                   {new Date(event.created_at).toLocaleTimeString()}
                 </div>

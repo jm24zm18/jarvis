@@ -41,8 +41,49 @@ def to_tools(tools: list[dict[str, object]] | None) -> list[dict[str, object]] |
     return [{"function_declarations": declarations}]
 
 
-def parse_response(payload: dict[str, Any]) -> ModelResponse:
-    candidates = payload.get("candidates")
+def parse_candidate_parts(
+    parts: Any,
+) -> tuple[list[str], list[dict[str, Any]], list[str], list[dict[str, Any]]]:
+    text_parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+    thought_text_parts: list[str] = []
+    thought_parts: list[dict[str, Any]] = []
+    if not isinstance(parts, list):
+        return text_parts, tool_calls, thought_text_parts, thought_parts
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        if bool(part.get("thought")):
+            thought_text = part.get("text")
+            if isinstance(thought_text, str) and thought_text:
+                thought_text_parts.append(thought_text)
+            thought_part_payload: dict[str, Any] = {}
+            if isinstance(thought_text, str) and thought_text:
+                thought_part_payload["text"] = thought_text
+            thought_signature = part.get("thoughtSignature")
+            if isinstance(thought_signature, str) and thought_signature:
+                thought_part_payload["thought_signature"] = thought_signature
+            if thought_part_payload:
+                thought_parts.append(thought_part_payload)
+            continue
+        text = part.get("text")
+        if isinstance(text, str) and text:
+            text_parts.append(text)
+        function_call = part.get("functionCall")
+        if isinstance(function_call, dict):
+            name = function_call.get("name")
+            args = function_call.get("args", {})
+            if isinstance(name, str) and name:
+                tool_calls.append(
+                    {
+                        "name": name,
+                        "arguments": args if isinstance(args, dict) else {},
+                    }
+                )
+    return text_parts, tool_calls, thought_text_parts, thought_parts
+
+
+def parse_candidates(candidates: Any) -> ModelResponse:
     if not isinstance(candidates, list) or not candidates:
         raise RuntimeError("gemini response missing candidates")
     first = candidates[0]
@@ -52,27 +93,17 @@ def parse_response(payload: dict[str, Any]) -> ModelResponse:
     if not isinstance(content, dict):
         raise RuntimeError("gemini response content missing")
     parts = content.get("parts", [])
-    text_parts: list[str] = []
-    tool_calls: list[dict[str, Any]] = []
-    if isinstance(parts, list):
-        for part in parts:
-            if not isinstance(part, dict):
-                continue
-            text = part.get("text")
-            if isinstance(text, str) and text:
-                text_parts.append(text)
-            function_call = part.get("functionCall")
-            if isinstance(function_call, dict):
-                name = function_call.get("name")
-                args = function_call.get("args", {})
-                if isinstance(name, str) and name:
-                    tool_calls.append(
-                        {
-                            "name": name,
-                            "arguments": args if isinstance(args, dict) else {},
-                        }
-                    )
-    return ModelResponse(text="\n".join(text_parts), tool_calls=tool_calls)
+    text_parts, tool_calls, thought_text_parts, thought_parts = parse_candidate_parts(parts)
+    return ModelResponse(
+        text="\n".join(text_parts),
+        tool_calls=tool_calls,
+        reasoning_text="\n".join(thought_text_parts),
+        reasoning_parts=thought_parts,
+    )
+
+
+def parse_response(payload: dict[str, Any]) -> ModelResponse:
+    return parse_candidates(payload.get("candidates"))
 
 
 def build_request_body(
@@ -93,7 +124,11 @@ def build_request_body(
         non_system_messages.append({"role": role, "content": content})
     body: dict[str, object] = {
         "contents": to_contents(non_system_messages),
-        "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+            "thinkingConfig": {"includeThoughts": True},
+        },
     }
     if system_parts:
         body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}

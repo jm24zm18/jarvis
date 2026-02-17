@@ -1,4 +1,4 @@
-"""Agent Celery tasks."""
+"""Agent task handlers."""
 
 import asyncio
 import json
@@ -6,31 +6,27 @@ import logging
 import sqlite3
 from typing import Any
 
-from kombu.exceptions import OperationalError
-
-from jarvis.celery_app import celery_app
 from jarvis.logging import bind_context, clear_context
+from jarvis.tasks import get_task_runner
 
 logger = logging.getLogger(__name__)
-from jarvis.config import get_settings
-from jarvis.db.connection import get_conn
-from jarvis.db.queries import now_iso
-from jarvis.memory.skills import SkillsService
-from jarvis.orchestrator.step import run_agent_step
-from jarvis.providers.factory import build_primary_provider
-from jarvis.providers.router import ProviderRouter
-from jarvis.providers.sglang import SGLangProvider
-from jarvis.tools.host import execute_host_command
-from jarvis.tools.persona import update_persona
-from jarvis.tools.registry import ToolRegistry
-from jarvis.tools.runtime import ToolRuntime
-from jarvis.tools.session import session_history, session_list, session_send
-from jarvis.plugins.base import PluginContext
-from jarvis.plugins.loader import get_loaded_plugins
-from jarvis.tools.web_search import web_search
+from jarvis.config import get_settings  # noqa: E402
+from jarvis.db.connection import get_conn  # noqa: E402
+from jarvis.db.queries import now_iso  # noqa: E402
+from jarvis.memory.skills import SkillsService  # noqa: E402
+from jarvis.orchestrator.step import run_agent_step  # noqa: E402
+from jarvis.plugins.base import PluginContext  # noqa: E402
+from jarvis.plugins.loader import get_loaded_plugins  # noqa: E402
+from jarvis.providers.factory import build_fallback_provider, build_primary_provider  # noqa: E402
+from jarvis.providers.router import ProviderRouter  # noqa: E402
+from jarvis.tools.host import execute_host_command  # noqa: E402
+from jarvis.tools.persona import update_persona  # noqa: E402
+from jarvis.tools.registry import ToolRegistry  # noqa: E402
+from jarvis.tools.runtime import ToolRuntime  # noqa: E402
+from jarvis.tools.session import session_history, session_list, session_send  # noqa: E402
+from jarvis.tools.web_search import web_search  # noqa: E402
 
 
-@celery_app.task(name="jarvis.tasks.agent.agent_step")
 def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
     clear_context()
     bind_context(trace_id=trace_id, thread_id=thread_id, actor_id=actor_id)
@@ -38,7 +34,7 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
 
     router = ProviderRouter(
         build_primary_provider(settings),
-        SGLangProvider(settings.sglang_model),
+        build_fallback_provider(settings),
     )
 
     with get_conn() as conn:
@@ -78,18 +74,21 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                 notify_fn=notify_trace,
             )
         )
-        conn.execute(
-            (
-                "INSERT INTO web_notifications(thread_id, event_type, payload_json, created_at) "
-                "VALUES(?,?,?,?)"
-            ),
-            (
-                thread_id,
-                "message.new",
-                json.dumps({"message_id": message_id, "agent_id": actor_id}),
-                now_iso(),
-            ),
-        )
+        if actor_id == "main":
+            conn.execute(
+                (
+                    "INSERT INTO web_notifications("
+                    "thread_id, event_type, payload_json, created_at"
+                    ") "
+                    "VALUES(?,?,?,?)"
+                ),
+                (
+                    thread_id,
+                    "message.new",
+                    json.dumps({"message_id": message_id, "agent_id": actor_id}),
+                    now_iso(),
+                ),
+            )
         conn.execute(
             (
                 "INSERT INTO web_notifications(thread_id, event_type, payload_json, created_at) "
@@ -112,18 +111,17 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
             ).fetchone()
             channel_type = str(channel_row["channel_type"]) if channel_row is not None else ""
             if channel_type and channel_type != "web":
-                try:
-                    celery_app.send_task(
-                        "jarvis.tasks.channel.send_channel_message",
-                        kwargs={
-                            "thread_id": thread_id,
-                            "message_id": message_id,
-                            "channel_type": channel_type,
-                        },
-                        queue="tools_io",
-                    )
-                except OperationalError as exc:
-                    logger.error("Failed to dispatch %s send task: %s", channel_type, exc)
+                ok = get_task_runner().send_task(
+                    "jarvis.tasks.channel.send_channel_message",
+                    kwargs={
+                        "thread_id": thread_id,
+                        "message_id": message_id,
+                        "channel_type": channel_type,
+                    },
+                    queue="tools_io",
+                )
+                if not ok:
+                    logger.error("Failed to dispatch %s send task", channel_type)
         else:
             # Worker auto-reply: send result back to main agent
             row = conn.execute(
@@ -139,14 +137,13 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                     trace_id=trace_id,
                     from_agent_id=actor_id,
                 )
-                try:
-                    celery_app.send_task(
-                        "jarvis.tasks.agent.agent_step",
-                        kwargs={"trace_id": trace_id, "thread_id": thread_id, "actor_id": "main"},
-                        queue="agent_priority",
-                    )
-                except OperationalError as exc:
-                    logger.error("Failed to dispatch main agent reply task: %s", exc)
+                ok = get_task_runner().send_task(
+                    "jarvis.tasks.agent.agent_step",
+                    kwargs={"trace_id": trace_id, "thread_id": thread_id, "actor_id": "main"},
+                    queue="agent_priority",
+                )
+                if not ok:
+                    logger.error("Failed to dispatch main agent reply task")
     return message_id
 
 
@@ -238,14 +235,13 @@ def _build_registry(
             ),
         )
         queue = "agent_priority" if priority == "high" else "agent_default"
-        try:
-            celery_app.send_task(
-                "jarvis.tasks.agent.agent_step",
-                kwargs={"trace_id": trace_id, "thread_id": session_id, "actor_id": to_agent_id},
-                queue=queue,
-            )
-        except OperationalError as exc:
-            logger.error("Failed to dispatch sub-agent task for %s: %s", to_agent_id, exc)
+        ok = get_task_runner().send_task(
+            "jarvis.tasks.agent.agent_step",
+            kwargs={"trace_id": trace_id, "thread_id": session_id, "actor_id": to_agent_id},
+            queue=queue,
+        )
+        if not ok:
+            logger.error("Failed to dispatch sub-agent task for %s", to_agent_id)
         return {"event_id": event_id}
 
     async def tool_exec_host(args: dict[str, object]) -> dict[str, object]:

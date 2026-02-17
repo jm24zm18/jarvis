@@ -3,7 +3,7 @@
 ## Entry Points
 
 - API bootstrap: `src/jarvis/main.py`
-- Worker bootstrap: `src/jarvis/celery_app.py`
+- Task runtime: `src/jarvis/tasks/runner.py`
 - CLI entry: `src/jarvis/cli/main.py`
 
 ## Package Walkthrough
@@ -70,8 +70,8 @@
 
 ### `tasks/`
 
-- Purpose: Celery task entrypoints for agent/scheduler/channels/system.
-- Key files: `src/jarvis/tasks/agent.py`, `src/jarvis/tasks/channel.py`, `src/jarvis/tasks/scheduler.py`, `src/jarvis/tasks/github.py`.
+- Purpose: in-process task handlers and registration for agent/scheduler/channels/system.
+- Key files: `src/jarvis/tasks/runner.py`, `src/jarvis/tasks/periodic.py`, `src/jarvis/tasks/agent.py`, `src/jarvis/tasks/channel.py`, `src/jarvis/tasks/scheduler.py`, `src/jarvis/tasks/github.py`, `src/jarvis/tasks/maintenance.py`.
 
 ### `tools/`
 
@@ -87,7 +87,7 @@
 
 1. `POST /webhooks/whatsapp` -> channel adapter/router.
 2. Event + message persistence in DB.
-3. `agent_step` queued to worker.
+3. `agent_step` dispatched via in-process task runner.
 4. Orchestrator resolves agent + memory + prompt budget.
 5. Provider router executes model call.
 6. Tool runtime executes permitted tool calls.

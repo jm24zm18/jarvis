@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from jarvis.celery_app import celery_app
 from jarvis.config import get_settings
 from jarvis.db.connection import connect, get_conn
 from jarvis.events.models import EventInput
@@ -222,7 +221,6 @@ def _upload_remote(gz_path: Path) -> tuple[bool, str]:
     return True, destination
 
 
-@celery_app.task(name="jarvis.tasks.backup.create_backup")
 def create_backup() -> dict[str, object]:
     settings = get_settings()
     trace_id = new_id("trc")

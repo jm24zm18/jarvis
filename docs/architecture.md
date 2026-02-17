@@ -3,8 +3,7 @@
 ## Runtime Topology
 
 - API process: FastAPI app in `src/jarvis/main.py`.
-- Worker process: Celery worker in `src/jarvis/celery_app.py`.
-- Broker: RabbitMQ (`docker-compose.yml`).
+- Task execution: in-process asyncio runner in `src/jarvis/tasks/runner.py`.
 - State store: SQLite (`APP_DB`, default local file).
 - Optional frontend: React/Vite web app under `web/`, served by Vite in dev and by FastAPI static mount when `web/dist` exists.
 
@@ -13,11 +12,11 @@
 1. Incoming webhook (WhatsApp or generic webhook) hits API route.
 2. Request is validated, deduped, and persisted (`src/jarvis/db/queries.py`).
 3. `channel.inbound` event is emitted.
-4. Worker receives `agent_step` task.
+4. In-process task runner dispatches `agent_step`.
 5. Orchestrator builds prompt from agent bundle + thread context + memory.
 6. Provider router executes primary/fallback model call.
 7. Tool calls run through policy-gated runtime (`deny-by-default`).
-8. Assistant response is persisted and outbound channel task is scheduled.
+8. Assistant response is persisted and outbound channel task is scheduled in-process.
 
 ## Scheduler Flow
 
@@ -64,7 +63,7 @@
 - `src/jarvis/routes/*`: HTTP and WebSocket route handlers.
 - `src/jarvis/scheduler/*`: schedule evaluation and task enqueue.
 - `src/jarvis/selfupdate/*`: propose/validate/test/apply/rollback pipeline.
-- `src/jarvis/tasks/*`: Celery task entrypoints.
+- `src/jarvis/tasks/*`: task handlers + in-process runner registration.
 - `src/jarvis/tools/*`: tool registry/runtime/implementations.
 - `src/jarvis/ids.py`: ID generation conventions.
 - `src/jarvis/logging.py`: logging configuration.

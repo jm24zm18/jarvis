@@ -9,8 +9,48 @@ logger = logging.getLogger(__name__)
 
 REQUIRED_FILES = ("identity.md", "soul.md", "heartbeat.md")
 
+# Cache for discovered agent IDs
+_agent_ids_cache: tuple[frozenset[str], float] | None = None
+
+
+def get_all_agent_ids(agent_root: Path = Path("agents")) -> frozenset[str]:
+    """Discover all agent IDs from the agents/ directory on disk.
+
+    Returns a frozenset of agent directory names that contain
+    the required bundle files.
+    """
+    global _agent_ids_cache
+    if not agent_root.exists():
+        return frozenset({"main"})
+
+    # Simple mtime-based cache invalidation
+    root_mtime = agent_root.stat().st_mtime
+    if _agent_ids_cache is not None:
+        cached_ids, cached_mtime = _agent_ids_cache
+        if root_mtime <= cached_mtime:
+            return cached_ids
+
+    ids: set[str] = set()
+    for candidate in sorted(agent_root.iterdir()):
+        if not candidate.is_dir():
+            continue
+        if all((candidate / f).exists() for f in REQUIRED_FILES):
+            ids.add(candidate.name)
+    if not ids:
+        ids.add("main")
+    result = frozenset(ids)
+    _agent_ids_cache = (result, root_mtime)
+    return result
+
 # Cache: agent_id -> (bundle, max_mtime)
 _bundle_cache: dict[str, tuple[AgentBundle, float]] = {}
+
+
+def reset_loader_caches() -> None:
+    """Clear in-process caches so agent discovery and bundles are reloaded from disk."""
+    global _agent_ids_cache
+    _agent_ids_cache = None
+    _bundle_cache.clear()
 
 
 def _parse_allowed_tools(identity_markdown: str) -> list[str]:

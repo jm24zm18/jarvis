@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-KNOWN_AGENT_IDS = {"main", "researcher", "planner", "coder"}
+from jarvis.agents.loader import get_all_agent_ids
 
 
-def update_persona(agent_id: str, soul_md: str, agent_root: Path = Path("agents")) -> dict[str, object]:
+def update_persona(
+    agent_id: str, soul_md: str, agent_root: Path = Path("agents")
+) -> dict[str, object]:
     normalized_agent_id = agent_id.strip()
-    if normalized_agent_id not in KNOWN_AGENT_IDS:
+    if normalized_agent_id not in get_all_agent_ids(agent_root):
         return {"ok": False, "error": f"unknown agent_id '{normalized_agent_id}'"}
 
     content = soul_md.strip()

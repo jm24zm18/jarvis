@@ -1,10 +1,12 @@
 """Thread CRUD API routes."""
 
 import json
+from collections.abc import Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from jarvis.agents.loader import get_all_agent_ids
 from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import create_thread, ensure_channel, set_thread_agents, set_thread_verbose
@@ -14,7 +16,7 @@ router = APIRouter(tags=["api-threads"])
 
 @router.get("/threads")
 def list_threads(
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     all_threads: bool = Query(default=False, alias="all"),
     status: str | None = None,
     limit: int = Query(default=30, ge=1, le=200),
@@ -60,7 +62,7 @@ def list_threads(
 
 
 @router.post("/threads")
-def create_web_thread(ctx: UserContext = Depends(require_auth)) -> dict[str, str]:
+def create_web_thread(ctx: UserContext = Depends(require_auth)) -> dict[str, str]:  # noqa: B008
     with get_conn() as conn:
         channel_id = ensure_channel(conn, ctx.user_id, "web")
         thread_id = create_thread(conn, ctx.user_id, channel_id)
@@ -68,7 +70,7 @@ def create_web_thread(ctx: UserContext = Depends(require_auth)) -> dict[str, str
 
 
 @router.get("/threads/{thread_id}")
-def get_thread(thread_id: str, ctx: UserContext = Depends(require_auth)) -> dict[str, object]:
+def get_thread(thread_id: str, ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     with get_conn() as conn:
         row = conn.execute(
             (
@@ -87,7 +89,7 @@ def get_thread(thread_id: str, ctx: UserContext = Depends(require_auth)) -> dict
             (thread_id,),
         ).fetchone()
 
-    active_agents: list[str] = ["main", "researcher", "planner", "coder"]
+    active_agents: list[str] = sorted(get_all_agent_ids())
     verbose = False
     if settings_row is not None:
         verbose = int(settings_row["verbose"]) == 1
@@ -112,7 +114,7 @@ def get_thread(thread_id: str, ctx: UserContext = Depends(require_auth)) -> dict
 
 @router.patch("/threads/{thread_id}")
 def patch_thread(
-    thread_id: str, payload: dict[str, object], ctx: UserContext = Depends(require_auth)
+    thread_id: str, payload: dict[str, object], ctx: UserContext = Depends(require_auth)  # noqa: B008
 ) -> dict[str, bool]:
     with get_conn() as conn:
         row = conn.execute("SELECT id, user_id FROM threads WHERE id=?", (thread_id,)).fetchone()
@@ -135,7 +137,7 @@ def patch_thread(
     return {"ok": True}
 
 
-def _stream_thread_jsonl(thread_id: str, include_events: bool = False):
+def _stream_thread_jsonl(thread_id: str, include_events: bool = False) -> Iterator[str]:
     """Generator that yields JSONL lines for a thread's data."""
     with get_conn() as conn:
         # Messages
@@ -205,7 +207,7 @@ def _stream_thread_jsonl(thread_id: str, include_events: bool = False):
 @router.get("/threads/{thread_id}/export")
 def export_thread(
     thread_id: str,
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     include_events: bool = Query(default=False),
 ) -> StreamingResponse:
     """Export thread data as streaming JSONL."""
@@ -227,7 +229,7 @@ def export_thread(
 
 @router.get("/threads/export/bulk")
 def export_bulk(
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     status: str | None = None,
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> StreamingResponse:
@@ -235,7 +237,7 @@ def export_bulk(
     if not ctx.is_admin:
         raise HTTPException(status_code=403, detail="admin required")
 
-    def _generate():
+    def _generate() -> Iterator[str]:
         with get_conn() as conn:
             filters = []
             params: list[object] = []

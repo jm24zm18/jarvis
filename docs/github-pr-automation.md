@@ -1,12 +1,13 @@
 # GitHub PR Automation
 
-This repo supports Stage 1 and Stage 2 GitHub PR automation:
+This repo supports GitHub automation in three stages:
 
 - Verify inbound GitHub webhook signatures.
 - Receive `pull_request` events.
 - Queue a worker task that posts or updates a single PR summary comment.
 - Receive PR comment events and reply when triggered by `/jarvis ...` or `@jarvis`.
-- Auto-create a bug report in `/api/v1/bugs` storage if automation fails.
+- Sync bug/feature requests from Jarvis into GitHub Issues when requested.
+- Auto-create a bug report in `/api/v1/bugs` storage if PR automation fails.
 
 ## What This Does
 
@@ -32,6 +33,10 @@ GITHUB_TOKEN=<github-app-installation-token-or-pat>
 GITHUB_REPO_ALLOWLIST=my-org/my-repo,my-org/another-repo
 GITHUB_API_BASE_URL=https://api.github.com
 GITHUB_BOT_LOGIN=jarvis
+GITHUB_ISSUE_SYNC_ENABLED=1
+GITHUB_ISSUE_SYNC_REPO=my-org/my-repo
+GITHUB_ISSUE_LABELS_BUG=jarvis,bug
+GITHUB_ISSUE_LABELS_FEATURE=jarvis,feature-request
 ```
 
 2. Restart API + worker:
@@ -63,6 +68,31 @@ make worker
   - `dev` -> `master` promotion via PR only
 - Existing branch policy checks still apply (`.github/workflows/branch-policy.yml`).
 - This automation does not bypass approvals or branch protections.
+
+## Bug and Feature Sync to GitHub Issues
+
+When enabled, users (or agents) can create local records and request GitHub sync in the same API call:
+
+- `POST /api/v1/bugs`
+- `POST /api/v1/feature-requests`
+
+Example payload:
+
+```json
+{
+  "title": "Webhook retries fail on 403",
+  "description": "Observed in dev after token rotation.",
+  "priority": "high",
+  "sync_to_github": true
+}
+```
+
+Expected behavior:
+
+- Jarvis stores the local row first (`kind=bug` or `kind=feature`).
+- A worker task creates a GitHub Issue in `GITHUB_ISSUE_SYNC_REPO`.
+- On success, local row is updated with `github_issue_number`, `github_issue_url`, `github_synced_at`.
+- On failure, local row stores `github_sync_error`.
 
 ## Stage 2 Commands
 
