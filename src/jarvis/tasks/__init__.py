@@ -50,6 +50,7 @@ def _register_tasks(runner: TaskRunner) -> None:
     runner.register("jarvis.tasks.selfupdate.self_update_propose", selfupdate.self_update_propose)
     runner.register("jarvis.tasks.selfupdate.self_update_validate", selfupdate.self_update_validate)
     runner.register("jarvis.tasks.selfupdate.self_update_test", selfupdate.self_update_test)
+    runner.register("jarvis.tasks.selfupdate.self_update_open_pr", selfupdate.self_update_open_pr)
     runner.register("jarvis.tasks.selfupdate.self_update_apply", selfupdate.self_update_apply)
     runner.register("jarvis.tasks.selfupdate.self_update_rollback", selfupdate.self_update_rollback)
     runner.register("jarvis.tasks.system.rotate_unlock_code", system.rotate_unlock_code)

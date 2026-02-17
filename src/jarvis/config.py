@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     selfupdate_smoke_profile: str = Field(alias="SELFUPDATE_SMOKE_PROFILE", default="dev")
     selfupdate_readyz_url: str = Field(alias="SELFUPDATE_READYZ_URL", default="")
     selfupdate_readyz_attempts: int = Field(alias="SELFUPDATE_READYZ_ATTEMPTS", default=3)
+    selfupdate_critical_paths: str = Field(
+        alias="SELFUPDATE_CRITICAL_PATHS",
+        default=(
+            "src/jarvis/policy/**,src/jarvis/tools/runtime.py,src/jarvis/auth/**,"
+            "src/jarvis/routes/api/**,src/jarvis/db/migrations/**"
+        ),
+    )
+    selfupdate_pr_autoraise: int = Field(alias="SELFUPDATE_PR_AUTORAISE", default=0)
     scheduler_max_catchup: int = Field(alias="SCHEDULER_MAX_CATCHUP", default=10)
     task_runner_max_concurrent: int = Field(alias="TASK_RUNNER_MAX_CONCURRENT", default=20)
     task_runner_shutdown_timeout_seconds: int = Field(

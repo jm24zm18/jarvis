@@ -6,6 +6,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import cast
 
@@ -40,6 +41,39 @@ def write_patch(trace_id: str, patch_text: str, base_dir: Path) -> Path:
 
 def read_patch(trace_id: str, base_dir: Path) -> str:
     return (trace_dir(base_dir, trace_id) / "proposal.diff").read_text()
+
+
+def write_artifact(trace_id: str, base_dir: Path, artifact: dict[str, object]) -> Path:
+    directory = trace_dir(base_dir, trace_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "artifact.json"
+    path.write_text(json.dumps(artifact, indent=2, sort_keys=True))
+    return path
+
+
+def read_artifact(trace_id: str, base_dir: Path) -> dict[str, object]:
+    path = trace_dir(base_dir, trace_id) / "artifact.json"
+    if not path.exists():
+        return {}
+    decoded = json.loads(path.read_text())
+    return cast(dict[str, object], decoded if isinstance(decoded, dict) else {})
+
+
+def update_artifact_section(
+    trace_id: str,
+    base_dir: Path,
+    section: str,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    artifact = read_artifact(trace_id, base_dir)
+    current = artifact.get(section)
+    merged: dict[str, object] = {}
+    if isinstance(current, dict):
+        merged.update(current)
+    merged.update(payload)
+    artifact[section] = merged
+    write_artifact(trace_id, base_dir, artifact)
+    return artifact
 
 
 def write_state(trace_id: str, base_dir: Path, state: str, detail: str = "") -> Path:
@@ -81,6 +115,42 @@ def write_context(
 def read_context(trace_id: str, base_dir: Path) -> dict[str, str]:
     context = json.loads((trace_dir(base_dir, trace_id) / "context.json").read_text())
     return cast(dict[str, str], context)
+
+
+def changed_files_from_patch(patch_text: str) -> list[str]:
+    changed: list[str] = []
+    for line in patch_text.splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        for candidate in (parts[2], parts[3]):
+            normalized = candidate
+            if normalized.startswith("a/") or normalized.startswith("b/"):
+                normalized = normalized[2:]
+            if normalized and normalized != "/dev/null":
+                changed.append(normalized)
+    unique: list[str] = []
+    seen: set[str] = set()
+    for path in changed:
+        if path in seen:
+            continue
+        seen.add(path)
+        unique.append(path)
+    return unique
+
+
+def touches_critical_paths(changed_files: list[str], critical_patterns: list[str]) -> bool:
+    for file_path in changed_files:
+        for pattern in critical_patterns:
+            if fnmatch(file_path, pattern):
+                return True
+    return False
+
+
+def includes_test_changes(changed_files: list[str]) -> bool:
+    return any(path.startswith("tests/") for path in changed_files)
 
 
 def validate_patch_content(patch_text: str) -> ValidationResult:
@@ -148,11 +218,13 @@ def git_apply(repo_path: str, patch_path: Path) -> ValidationResult:
     return ValidationResult(ok=True, reason="git apply passed")
 
 
-def git_commit_applied(repo_path: str, trace_id: str) -> ValidationResult:
+def git_commit_applied(
+    repo_path: str, trace_id: str, branch: str | None = None
+) -> ValidationResult:
     stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-    branch = f"auto/{stamp}"
+    selected_branch = branch or f"auto/{stamp}"
     checkout = subprocess.run(
-        ["git", "-C", repo_path, "checkout", "-b", branch],
+        ["git", "-C", repo_path, "checkout", "-B", selected_branch],
         capture_output=True,
         text=True,
         timeout=30,
@@ -181,7 +253,7 @@ def git_commit_applied(repo_path: str, trace_id: str) -> ValidationResult:
     )
     if commit.returncode != 0:
         return ValidationResult(ok=False, reason=commit.stderr.strip() or "git commit failed")
-    return ValidationResult(ok=True, reason=f"committed on {branch}")
+    return ValidationResult(ok=True, reason=f"committed on {selected_branch}")
 
 
 def smoke_commands(profile: str, has_src: bool, has_tests: bool) -> list[list[str]]:

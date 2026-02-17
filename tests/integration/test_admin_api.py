@@ -89,6 +89,7 @@ def test_admin_endpoints_basic_coverage(tmp_path: Path) -> None:
     headers = {"Authorization": f"Bearer {token}"}
 
     assert client.get("/api/v1/system/status", headers=headers).status_code == 200
+    assert client.get("/api/v1/system/repo-index", headers=headers).status_code == 200
     assert (
         client.post("/api/v1/system/lockdown", json={"lockdown": True}, headers=headers).status_code
         == 200

@@ -24,6 +24,39 @@ class MemoryService:
     BACKFILL_BATCH_SIZE = 200
     DEFAULT_CHUNK_SIZE = 8192
 
+    def _emit_memory_event(
+        self,
+        conn: sqlite3.Connection,
+        event_type: str,
+        payload: dict[str, object],
+        thread_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> None:
+        event_trace = trace_id or new_id("trc")
+        serialized = json.dumps(payload, sort_keys=True)
+        conn.execute(
+            (
+                "INSERT INTO events("
+                "id, trace_id, span_id, parent_span_id, thread_id, event_type, component, "
+                "actor_type, actor_id, payload_json, payload_redacted_json, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                new_id("evt"),
+                event_trace,
+                new_id("spn"),
+                None,
+                thread_id,
+                event_type,
+                "memory",
+                "system",
+                "memory",
+                serialized,
+                serialized,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+
     def ensure_vector_indexes(self, conn: sqlite3.Connection) -> bool:
         return self._ensure_vec_runtime(conn)
 
@@ -76,6 +109,12 @@ class MemoryService:
             (memory_id, vec_json, datetime.now(UTC).isoformat()),
         )
         self._upsert_memory_vec_index(conn, memory_id, vector)
+        self._emit_memory_event(
+            conn,
+            "memory.write",
+            {"memory_id": memory_id, "chars": len(text)},
+            thread_id=thread_id,
+        )
         return memory_id
 
     def write_chunked(
@@ -199,6 +238,12 @@ class MemoryService:
 
         # If no results from any source, return empty
         if not vector_ranking and not bm25_ranking and not recency_ranking:
+            self._emit_memory_event(
+                conn,
+                "memory.retrieve",
+                {"result_count": 0, "query_present": bool(query and query.strip())},
+                thread_id=thread_id,
+            )
             return []
 
         # --- Reciprocal Rank Fusion ---
@@ -236,6 +281,16 @@ class MemoryService:
             )
             if len(results) >= limit:
                 break
+        self._emit_memory_event(
+            conn,
+            "memory.retrieve",
+            {
+                "result_count": len(results),
+                "query_present": bool(query and query.strip()),
+                "limit": limit,
+            },
+            thread_id=thread_id,
+        )
         return results
 
     @staticmethod
@@ -828,6 +883,12 @@ class MemoryService:
                 "updated_at=excluded.updated_at"
             ),
             (thread_id, short_summary, long_summary, datetime.now(UTC).isoformat()),
+        )
+        self._emit_memory_event(
+            conn,
+            "memory.compact",
+            {"short_chars": len(short_summary), "long_chars": len(long_summary)},
+            thread_id=thread_id,
         )
         return {"thread_id": thread_id, "short_chars": str(len(short_summary))}
 

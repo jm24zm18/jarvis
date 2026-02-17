@@ -1,6 +1,7 @@
 """System status + lockdown API routes."""
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends
 
@@ -15,6 +16,7 @@ from jarvis.providers.factory import (
     resolve_primary_provider_name,
 )
 from jarvis.providers.router import ProviderRouter
+from jarvis.repo_index import read_repo_index, write_repo_index
 from jarvis.scheduler.service import estimate_schedule_backlog
 from jarvis.tasks import get_task_runner
 
@@ -30,6 +32,7 @@ _RESET_DATA_TABLES = (
     "state_item_embeddings",
     "state_extraction_watermarks",
     "state_items",
+    "failure_capsules",
     "webhook_triggers",
     "skill_install_log",
     "bug_reports",
@@ -164,3 +167,14 @@ def reload_agents(
     del ctx
     reset_loader_caches()
     return {"ok": True}
+
+
+@router.get("/repo-index")
+def repo_index(
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    del ctx
+    root = Path.cwd()
+    out_path, _hash_path = write_repo_index(root)
+    payload = read_repo_index(root) or {}
+    return {"ok": True, "path": str(out_path), "index": payload}

@@ -27,6 +27,7 @@ from jarvis.db.migrations.runner import run_migrations
 from jarvis.db.queries import ensure_root_user, ensure_system_state
 from jarvis.logging import configure_logging
 from jarvis.memory.service import MemoryService
+from jarvis.repo_index import write_repo_index
 from jarvis.routes.api import router as api_router
 from jarvis.routes.health import router as health_router
 from jarvis.routes.ws import router as ws_router
@@ -42,6 +43,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     validate_settings_for_env(settings)
     configure_logging(settings.log_level)
     run_migrations()
+    write_repo_index(Path.cwd())
     register_channel(WhatsAppAdapter())
     if ensure_main_agent_seed(Path("agents")):
         logger.info("Seeded default main agent bundle files at startup")

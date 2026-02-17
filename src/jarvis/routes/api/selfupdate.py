@@ -8,7 +8,7 @@ from jarvis.auth.dependencies import UserContext, require_admin
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import create_approval
-from jarvis.selfupdate.pipeline import read_patch, read_state
+from jarvis.selfupdate.pipeline import read_artifact, read_patch, read_state
 
 router = APIRouter(prefix="/selfupdate", tags=["api-selfupdate"])
 
@@ -45,12 +45,13 @@ def list_patches(ctx: UserContext = Depends(require_admin)) -> dict[str, object]
 @router.get("/patches/{trace_id}")
 def patch_detail(
     trace_id: str, ctx: UserContext = Depends(require_admin)  # noqa: B008
-) -> dict[str, str]:
+) -> dict[str, object]:
     del ctx
     base = _patch_dir()
     try:
         state = read_state(trace_id, base)
         patch_text = read_patch(trace_id, base)
+        artifact = read_artifact(trace_id, base)
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"patch not found: {exc}") from exc
     return {
@@ -58,6 +59,8 @@ def patch_detail(
         "state": state.get("state", "unknown"),
         "detail": state.get("detail", ""),
         "diff": patch_text,
+        "artifact": artifact,
+        "pr": artifact.get("pr", {}) if isinstance(artifact, dict) else {},
     }
 
 

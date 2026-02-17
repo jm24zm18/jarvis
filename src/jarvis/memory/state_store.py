@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from math import sqrt
 
 from jarvis.config import get_settings
+from jarvis.ids import new_id
 from jarvis.memory.state_items import (
     DEFAULT_STATUS,
     TYPE_PRIORITY,
@@ -23,6 +24,37 @@ class StateStore:
     STATE_VEC_INDEX_TABLE = "state_vec_index"
     STATE_VEC_INDEX_MAP_TABLE = "state_vec_index_map"
     BACKFILL_BATCH_SIZE = 200
+
+    @staticmethod
+    def _emit_state_event(
+        conn: sqlite3.Connection,
+        thread_id: str,
+        event_type: str,
+        payload: dict[str, object],
+    ) -> None:
+        encoded = json.dumps(payload, sort_keys=True)
+        conn.execute(
+            (
+                "INSERT INTO events("
+                "id, trace_id, span_id, parent_span_id, thread_id, event_type, component, "
+                "actor_type, actor_id, payload_json, payload_redacted_json, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                new_id("evt"),
+                new_id("trc"),
+                new_id("spn"),
+                None,
+                thread_id,
+                event_type,
+                "memory.state",
+                "system",
+                "state_store",
+                encoded,
+                encoded,
+                StateStore._now_iso(),
+            ),
+        )
 
     @staticmethod
     def _now_iso() -> str:
@@ -115,6 +147,12 @@ class StateStore:
             )
             item.created_at = created_at
             item.last_seen_at = item.last_seen_at or candidate_last_seen
+            self._emit_state_event(
+                conn,
+                thread_id,
+                "memory.reconcile",
+                {"uid": item.uid, "action": "insert", "type_tag": item.type_tag},
+            )
             return item
 
         old_topic_tags = json.loads(str(row["topic_tags_json"]) or "[]")
@@ -172,6 +210,12 @@ class StateStore:
                 item.uid,
                 thread_id,
             ),
+        )
+        self._emit_state_event(
+            conn,
+            thread_id,
+            "memory.reconcile",
+            {"uid": item.uid, "action": "update", "type_tag": item.type_tag},
         )
         return StateItem(
             uid=item.uid,
