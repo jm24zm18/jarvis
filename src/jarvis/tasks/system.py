@@ -3,18 +3,15 @@
 import json
 import secrets
 import subprocess
-import time
 from pathlib import Path
 
-from kombu.exceptions import OperationalError
-
-from jarvis.celery_app import celery_app
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import ensure_system_state
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
+from jarvis.tasks import get_task_runner
 
 
 def _emit(trace_id: str, event_type: str, payload: dict[str, object]) -> None:
@@ -36,7 +33,6 @@ def _emit(trace_id: str, event_type: str, payload: dict[str, object]) -> None:
         )
 
 
-@celery_app.task(name="jarvis.tasks.system.rotate_unlock_code")
 def rotate_unlock_code(trace_id: str | None = None) -> dict[str, str]:
     settings = get_settings()
     code = f"{secrets.randbelow(1_000_000):06d}"
@@ -48,7 +44,6 @@ def rotate_unlock_code(trace_id: str | None = None) -> dict[str, str]:
     return {"status": "rotated"}
 
 
-@celery_app.task(name="jarvis.tasks.system.system_restart")
 def system_restart(trace_id: str) -> dict[str, str]:
     settings = get_settings()
     db_flush_payload: dict[str, str]
@@ -65,17 +60,21 @@ def system_restart(trace_id: str) -> dict[str, str]:
             db_flush_payload = {"status": "failed", "error": str(exc)}
     _emit(trace_id, "system.restart.db_flush", db_flush_payload)
     _emit(trace_id, "system.restart.start", {"status": "draining"})
-    drained, revoked = _drain_queues(
-        timeout_s=settings.restart_drain_timeout_seconds,
-        poll_s=settings.restart_drain_poll_seconds,
-    )
+    timeout_s = float(settings.task_runner_shutdown_timeout_seconds)
+    drained = True
+    try:
+        import asyncio
+
+        asyncio.run(get_task_runner().shutdown(timeout_s=timeout_s))
+    except Exception:
+        drained = False
     _emit(
         trace_id,
         "system.restart.drain",
-        {"drained": drained, "revoked": str(revoked)},
+        {"drained": drained, "timeout_s": timeout_s},
     )
     restart_cmd = settings.restart_command.strip() or (
-        "systemctl restart jarvis-api jarvis-worker jarvis-scheduler"
+        "systemctl restart jarvis-api"
     )
     try:
         proc = subprocess.run(
@@ -122,18 +121,13 @@ def system_restart(trace_id: str) -> dict[str, str]:
 
 
 def enqueue_restart(trace_id: str) -> bool:
-    try:
-        celery_app.send_task(
-            "jarvis.tasks.system.system_restart",
-            kwargs={"trace_id": trace_id},
-            queue="agent_default",
-        )
-        return True
-    except OperationalError:
-        return False
+    return get_task_runner().send_task(
+        "jarvis.tasks.system.system_restart",
+        kwargs={"trace_id": trace_id},
+        queue="agent_default",
+    )
 
 
-@celery_app.task(name="jarvis.tasks.system.reload_settings_cache")
 def reload_settings_cache() -> dict[str, str]:
     get_settings.cache_clear()
     _ = get_settings()
@@ -141,74 +135,13 @@ def reload_settings_cache() -> dict[str, str]:
 
 
 def enqueue_settings_reload() -> bool:
-    try:
-        celery_app.send_task(
-            "jarvis.tasks.system.reload_settings_cache",
-            kwargs={},
-            queue="agent_default",
-        )
-        return True
-    except OperationalError:
-        return False
+    return get_task_runner().send_task(
+        "jarvis.tasks.system.reload_settings_cache",
+        kwargs={},
+        queue="agent_default",
+    )
 
 
-def _collect_task_ids(inspect_payload: object) -> set[str]:
-    task_ids: set[str] = set()
-    if not isinstance(inspect_payload, dict):
-        return task_ids
-    for worker_data in inspect_payload.values():
-        if not isinstance(worker_data, list):
-            continue
-        for item in worker_data:
-            if not isinstance(item, dict):
-                continue
-            task_id = item.get("id")
-            if isinstance(task_id, str) and task_id:
-                task_ids.add(task_id)
-                continue
-            request = item.get("request")
-            if isinstance(request, dict):
-                request_id = request.get("id")
-                if isinstance(request_id, str) and request_id:
-                    task_ids.add(request_id)
-    return task_ids
-
-
-def _drain_queues(timeout_s: int, poll_s: int) -> tuple[bool, int]:
-    deadline = time.monotonic() + max(1, timeout_s)
-    revoked = 0
-    while time.monotonic() < deadline:
-        try:
-            inspector = celery_app.control.inspect(timeout=1)
-            active = _collect_task_ids(inspector.active())
-            reserved = _collect_task_ids(inspector.reserved())
-            scheduled = _collect_task_ids(inspector.scheduled())
-        except Exception:
-            return False, revoked
-        pending = active | reserved | scheduled
-        if not pending:
-            return True, revoked
-        time.sleep(max(1, poll_s))
-
-    try:
-        inspector = celery_app.control.inspect(timeout=1)
-        pending = (
-            _collect_task_ids(inspector.active())
-            | _collect_task_ids(inspector.reserved())
-            | _collect_task_ids(inspector.scheduled())
-        )
-    except Exception:
-        return False, revoked
-    for task_id in pending:
-        try:
-            celery_app.control.revoke(task_id, terminate=False)
-            revoked += 1
-        except Exception:
-            continue
-    return False, revoked
-
-
-@celery_app.task(name="jarvis.tasks.system.db_optimize")
 def db_optimize() -> dict[str, str]:
     """Run PRAGMA optimize daily to maintain query planner statistics."""
     trace_id = new_id("trc")
@@ -218,7 +151,6 @@ def db_optimize() -> dict[str, str]:
     return {"action": "optimize", "status": "ok"}
 
 
-@celery_app.task(name="jarvis.tasks.system.db_integrity_check")
 def db_integrity_check() -> dict[str, str]:
     """Run PRAGMA integrity_check weekly to detect corruption."""
     trace_id = new_id("trc")
@@ -234,7 +166,6 @@ def db_integrity_check() -> dict[str, str]:
     return {"action": "integrity_check", "status": status, "result": result}
 
 
-@celery_app.task(name="jarvis.tasks.system.db_vacuum")
 def db_vacuum() -> dict[str, str]:
     """Run VACUUM monthly to reclaim disk space and defragment."""
     trace_id = new_id("trc")

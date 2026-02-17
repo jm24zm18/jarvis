@@ -1,7 +1,12 @@
 """Tests for plugin SDK."""
 
 from jarvis.plugins.base import JarvisPlugin, PluginContext
-from jarvis.plugins.loader import discover_plugins, get_loaded_plugins, load_plugins, shutdown_plugins
+from jarvis.plugins.loader import (
+    discover_plugins,
+    get_loaded_plugins,
+    load_plugins,
+    shutdown_plugins,
+)
 from jarvis.tools.registry import ToolRegistry
 
 
@@ -58,7 +63,7 @@ def test_discover_builtin_plugins() -> None:
 
 
 def test_load_and_shutdown_plugins() -> None:
-    plugins = load_plugins()
+    load_plugins()
     assert len(get_loaded_plugins()) > 0
     shutdown_plugins()
     assert len(get_loaded_plugins()) == 0

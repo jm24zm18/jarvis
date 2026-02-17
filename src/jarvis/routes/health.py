@@ -2,18 +2,15 @@
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from kombu.exceptions import OperationalError
 
-from jarvis.celery_app import celery_app
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import get_system_state, record_readyz_result
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event
 from jarvis.ids import new_id
-from jarvis.providers.factory import build_primary_provider
+from jarvis.providers.factory import build_fallback_provider, build_primary_provider
 from jarvis.providers.router import ProviderRouter
-from jarvis.providers.sglang import SGLangProvider
 
 router = APIRouter(tags=["health"])
 
@@ -63,21 +60,12 @@ async def readyz() -> JSONResponse:
     except Exception:
         db_ok = False
 
-    broker_ok = True
-    try:
-        with celery_app.connection_for_read() as conn:
-            conn.ensure_connection(max_retries=1)
-    except OperationalError:
-        broker_ok = False
-    except Exception:
-        broker_ok = False
-
     router_client = ProviderRouter(
         build_primary_provider(settings),
-        SGLangProvider(settings.sglang_model),
+        build_fallback_provider(settings),
     )
     provider_status = await router_client.health()
-    ok = db_ok and broker_ok and (provider_status["primary"] or provider_status["fallback"])
+    ok = db_ok and (provider_status["primary"] or provider_status["fallback"])
     with get_conn() as conn:
         previous = get_system_state(conn)
         locked = record_readyz_result(
@@ -102,5 +90,5 @@ async def readyz() -> JSONResponse:
     status_code = 200 if ok else 503
     return JSONResponse(
         status_code=status_code,
-        content={"ok": ok, "db": db_ok, "broker": broker_ok, "providers": provider_status},
+        content={"ok": ok, "db": db_ok, "providers": provider_status},
     )

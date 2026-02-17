@@ -39,7 +39,7 @@ def require_auth(authorization: str | None = Header(default=None)) -> UserContex
     return UserContext(user_id=user_id, role=role)
 
 
-def require_admin(ctx: UserContext = Depends(require_auth)) -> UserContext:
+def require_admin(ctx: UserContext = Depends(require_auth)) -> UserContext:  # noqa: B008
     if not ctx.is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin required")
     return ctx

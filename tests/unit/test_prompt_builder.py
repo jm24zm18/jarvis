@@ -10,6 +10,7 @@ def test_prompt_builder_includes_sections_within_budget() -> None:
         system_context="system",
         summary_short="short",
         summary_long="long",
+        structured_state="state",
         memory_chunks=["m1", "m2"],
         tail=["user: hi", "assistant: hello"],
         token_budget=200,
@@ -17,7 +18,7 @@ def test_prompt_builder_includes_sections_within_budget() -> None:
     )
     assert "[system]" in prompt
     assert "[summary.short]" in prompt
-    assert "[summary.long]" in prompt
+    assert "[structured_state]" in prompt
     assert "[context]" in prompt
     assert "[tail]" in prompt
 
@@ -27,6 +28,7 @@ def test_prompt_builder_clips_when_budget_tiny() -> None:
         system_context="x" * 1000,
         summary_short="y" * 1000,
         summary_long="z" * 1000,
+        structured_state="s" * 1000,
         memory_chunks=["m" * 1000],
         tail=["u" * 1000],
         token_budget=8,
@@ -41,6 +43,7 @@ def test_build_prompt_parts_splits_system_and_user() -> None:
         system_context="system-context",
         summary_short="short",
         summary_long="long",
+        structured_state="state-line",
         memory_chunks=["m1"],
         tail=["user: hi"],
         token_budget=200,
@@ -49,6 +52,7 @@ def test_build_prompt_parts_splits_system_and_user() -> None:
     assert "system-context" in system_part
     assert "## Tooling" in system_part
     assert "[summary.short]" in user_part
+    assert "[structured_state]" in user_part
     assert "[tail]" in user_part
 
 
@@ -57,6 +61,7 @@ def test_build_prompt_with_report_includes_section_metrics() -> None:
         system_context="system-context",
         summary_short="short",
         summary_long="long",
+        structured_state="state-one",
         memory_chunks=["ctx1", "ctx2"],
         tail=["user: hi", "assistant: hello"],
         token_budget=120,
@@ -69,4 +74,36 @@ def test_build_prompt_with_report_includes_section_metrics() -> None:
     sections = report["sections"]
     assert isinstance(sections, dict)
     assert "summary.short" in sections
+    assert "structured_state" in sections
     assert "tail" in sections
+
+
+def test_prompt_builder_mentions_placeholder_feature_behavior() -> None:
+    system_part, _user_part = build_prompt_parts(
+        system_context="system-context",
+        summary_short="short",
+        summary_long="long",
+        structured_state="state",
+        memory_chunks=["m1"],
+        tail=["user: Build feature X in this repo"],
+        token_budget=200,
+        max_memory_items=1,
+        prompt_mode="full",
+    )
+    assert "placeholder asks" in system_part
+    assert "feature X" in system_part
+
+
+def test_prompt_builder_falls_back_to_summary_long_when_state_empty() -> None:
+    _system, user_part, report = build_prompt_with_report(
+        system_context="system-context",
+        summary_short="short",
+        summary_long="long fallback",
+        structured_state="",
+        memory_chunks=["ctx"],
+        tail=["user: hi"],
+        token_budget=100,
+    )
+    assert "[summary.long]" in user_part
+    assert "[structured_state]" not in user_part
+    assert report["used_summary_long_fallback"] is True

@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
-import kombu
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,22 +120,6 @@ def check_config_validates() -> CheckResult:
             passed=False,
             message=str(exc),
             fix_hint="Fix the configuration issues listed above.",
-        )
-
-
-def check_rabbitmq(broker_url: str) -> CheckResult:
-    try:
-        conn = kombu.Connection(broker_url)
-        conn.ensure_connection(max_retries=1)
-        conn.close()
-        return CheckResult(name="RabbitMQ reachable", passed=True, message="connected")
-    except Exception as exc:
-        return CheckResult(
-            name="RabbitMQ reachable",
-            passed=False,
-            message=str(exc),
-            fix_hint="Start RabbitMQ: docker compose up -d rabbitmq (or 'make dev').",
-            fix_fn=lambda: _docker_compose_up("rabbitmq"),
         )
 
 
@@ -269,29 +252,25 @@ def check_api_running() -> CheckResult:
     return check_http_service("API", "http://localhost:8000", "/healthz")
 
 
-def check_celery_worker() -> CheckResult:
+def check_task_runner() -> CheckResult:
     try:
-        result = subprocess.run(
-            ["uv", "run", "celery", "-A", "jarvis.celery_app", "inspect", "ping"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        ok = result.returncode == 0 and "pong" in result.stdout.lower()
+        from jarvis.tasks import get_task_runner
+
+        runner = get_task_runner()
+        ok = runner.max_concurrent > 0
         return CheckResult(
-            name="Celery workers respond to ping",
+            name="Task runner configured",
             passed=ok,
-            message="pong received" if ok else result.stderr.strip() or "no response",
-            fix_hint="Start a worker: make worker",
+            message=f"max_concurrent={runner.max_concurrent}",
+            fix_hint="Set TASK_RUNNER_MAX_CONCURRENT to a positive integer.",
         )
     except Exception as exc:
         return CheckResult(
-            name="Celery workers respond to ping",
+            name="Task runner configured",
             passed=False,
             message=str(exc),
-            fix_hint="Start a worker: make worker",
+            fix_hint="Check task runner imports and configuration.",
         )
-
 
 def _service_fix_fn(name: str) -> Callable[[], bool] | None:
     mapping = {

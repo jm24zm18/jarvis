@@ -1,16 +1,27 @@
 """Bug report CRUD API routes."""
 
+from datetime import UTC
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.db.connection import get_conn
 from jarvis.ids import new_id
+from jarvis.tasks import get_task_runner
 
 router = APIRouter(tags=["api-bugs"])
 
+def _send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
+    try:
+        return get_task_runner().send_task(name, kwargs=kwargs, queue=queue)
+    except Exception:
+        return False
+
+
 VALID_STATUSES = {"open", "in_progress", "resolved", "closed"}
 VALID_PRIORITIES = {"low", "medium", "high", "critical"}
+VALID_KINDS = {"bug", "feature"}
 
 
 class CreateBugBody(BaseModel):
@@ -19,6 +30,8 @@ class CreateBugBody(BaseModel):
     priority: str = "medium"
     thread_id: str | None = None
     trace_id: str | None = None
+    kind: str = "bug"
+    sync_to_github: bool = False
 
 
 class UpdateBugBody(BaseModel):
@@ -30,15 +43,16 @@ class UpdateBugBody(BaseModel):
 
 
 def _now() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    from datetime import datetime
+    return datetime.now(UTC).isoformat()
 
 
 @router.get("/bugs")
 def list_bugs(
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     status: str | None = None,
     priority: str | None = None,
+    kind: str | None = None,
     search: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -54,6 +68,11 @@ def list_bugs(
     if priority:
         filters.append("priority=?")
         params.append(priority)
+    if kind:
+        if kind not in VALID_KINDS:
+            raise HTTPException(status_code=400, detail=f"Invalid kind: {kind}")
+        filters.append("kind=?")
+        params.append(kind)
     if search:
         filters.append("(title LIKE ? OR description LIKE ?)")
         params.append(f"%{search}%")
@@ -75,21 +94,27 @@ def list_bugs(
 @router.post("/bugs")
 def create_bug(
     body: CreateBugBody,
-    ctx: UserContext = Depends(require_auth),
-) -> dict[str, str]:
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+) -> dict[str, object]:
     if body.priority not in VALID_PRIORITIES:
         raise HTTPException(status_code=400, detail=f"Invalid priority: {body.priority}")
+    if body.kind not in VALID_KINDS:
+        raise HTTPException(status_code=400, detail=f"Invalid kind: {body.kind}")
     bug_id = new_id("bug")
     now = _now()
+    degraded = False
     with get_conn() as conn:
         conn.execute(
             (
-                "INSERT INTO bug_reports(id, title, description, status, priority, "
-                "reporter_id, assignee_agent, thread_id, trace_id, created_at, updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)"
+                "INSERT INTO bug_reports(id, kind, title, description, status, priority, "
+                "reporter_id, assignee_agent, thread_id, trace_id, "
+                "github_issue_number, github_issue_url, github_synced_at, github_sync_error, "
+                "created_at, updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
             ),
             (
                 bug_id,
+                body.kind,
                 body.title,
                 body.description,
                 "open",
@@ -98,18 +123,72 @@ def create_bug(
                 None,
                 body.thread_id,
                 body.trace_id,
+                None,
+                None,
+                None,
+                None,
                 now,
                 now,
             ),
         )
-    return {"id": bug_id}
+    github_sync_queued = False
+    if body.sync_to_github:
+        github_sync_queued = _send_task(
+            "jarvis.tasks.github.github_issue_sync_bug_report",
+            kwargs={"bug_id": bug_id},
+            queue="tools_io",
+        )
+        degraded = not github_sync_queued
+    return {
+        "id": bug_id,
+        "kind": body.kind,
+        "github_sync_queued": github_sync_queued,
+        "degraded": degraded,
+    }
+
+
+@router.get("/feature-requests")
+def list_feature_requests(
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+    status: str | None = None,
+    priority: str | None = None,
+    search: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    return list_bugs(
+        ctx=ctx,
+        status=status,
+        priority=priority,
+        kind="feature",
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/feature-requests")
+def create_feature_request(
+    body: CreateBugBody,
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+) -> dict[str, object]:
+    feature_body = CreateBugBody(
+        title=body.title,
+        description=body.description,
+        priority=body.priority,
+        thread_id=body.thread_id,
+        trace_id=body.trace_id,
+        kind="feature",
+        sync_to_github=body.sync_to_github,
+    )
+    return create_bug(body=feature_body, ctx=ctx)
 
 
 @router.patch("/bugs/{bug_id}")
 def update_bug(
     bug_id: str,
     body: UpdateBugBody,
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, bool]:
     updates: list[str] = []
     params: list[object] = []
@@ -156,7 +235,7 @@ def update_bug(
 @router.delete("/bugs/{bug_id}")
 def delete_bug(
     bug_id: str,
-    ctx: UserContext = Depends(require_auth),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, bool]:
     with get_conn() as conn:
         row = conn.execute(

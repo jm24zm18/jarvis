@@ -7,7 +7,6 @@ from pathlib import Path
 
 import httpx
 
-from jarvis.celery_app import celery_app
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import consume_approval, get_system_state, register_rollback
@@ -79,7 +78,6 @@ def _readyz_ok(url: str, attempts: int) -> bool:
     return False
 
 
-@celery_app.task(name="jarvis.tasks.selfupdate.self_update_propose")
 def self_update_propose(
     trace_id: str, repo_path: str, patch_text: str, rationale: str
 ) -> dict[str, str]:
@@ -101,7 +99,6 @@ def self_update_propose(
     return {"trace_id": trace_id, "status": "proposed", "patch": str(path)}
 
 
-@celery_app.task(name="jarvis.tasks.selfupdate.self_update_validate")
 def self_update_validate(trace_id: str) -> dict[str, str]:
     patch_base = _patch_base()
     context = read_context(trace_id, patch_base)
@@ -128,7 +125,6 @@ def self_update_validate(trace_id: str) -> dict[str, str]:
     return {"trace_id": trace_id, "status": "validated"}
 
 
-@celery_app.task(name="jarvis.tasks.selfupdate.self_update_test")
 def self_update_test(trace_id: str) -> dict[str, str]:
     settings = get_settings()
     patch_base = _patch_base()
@@ -165,7 +161,6 @@ def self_update_test(trace_id: str) -> dict[str, str]:
     return {"trace_id": trace_id, "status": "passed"}
 
 
-@celery_app.task(name="jarvis.tasks.selfupdate.self_update_apply")
 def self_update_apply(trace_id: str) -> dict[str, str]:
     settings = get_settings()
     patch_base = _patch_base()
@@ -253,7 +248,6 @@ def self_update_apply(trace_id: str) -> dict[str, str]:
     }
 
 
-@celery_app.task(name="jarvis.tasks.selfupdate.self_update_rollback")
 def self_update_rollback(trace_id: str, reason: str = "auto rollback") -> dict[str, str]:
     settings = get_settings()
     patch_base = _patch_base()

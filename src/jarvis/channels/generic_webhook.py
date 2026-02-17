@@ -6,9 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
-from kombu.exceptions import OperationalError
 
-from jarvis.celery_app import celery_app
 from jarvis.channels.registry import get_channel
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
@@ -22,6 +20,7 @@ from jarvis.db.queries import (
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
+from jarvis.tasks import get_task_runner
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +28,7 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
 def _safe_send_task(name: str, kwargs: dict[str, str], queue: str) -> bool:
-    try:
-        celery_app.send_task(name, kwargs=kwargs, queue=queue)
-        return True
-    except OperationalError:
-        return False
+    return get_task_runner().send_task(name, kwargs=kwargs, queue=queue)
 
 
 @router.post("/{channel_type}")

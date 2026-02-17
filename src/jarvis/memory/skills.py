@@ -227,8 +227,12 @@ class SkillsService:
             "package_version": (
                 str(row["package_version"]) if row["package_version"] is not None else None
             ),
-            "manifest_json": str(row["manifest_json"]) if row["manifest_json"] is not None else None,
-            "installed_at": str(row["installed_at"]) if row["installed_at"] is not None else None,
+            "manifest_json": (
+                str(row["manifest_json"]) if row["manifest_json"] is not None else None
+            ),
+            "installed_at": (
+                str(row["installed_at"]) if row["installed_at"] is not None else None
+            ),
             "install_source": (
                 str(row["install_source"]) if row["install_source"] is not None else None
             ),
@@ -469,7 +473,7 @@ class SkillsService:
             try:
                 path.relative_to(base.resolve())
             except ValueError:
-                raise ValueError(f"invalid package file path: {rel}")
+                raise ValueError(f"invalid package file path: {rel}") from None
             chunks.append(path.read_text(encoding="utf-8").strip())
         content = "\n\n".join(chunk for chunk in chunks if chunk).strip()
         if not content:

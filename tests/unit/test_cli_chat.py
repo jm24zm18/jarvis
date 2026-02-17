@@ -35,14 +35,17 @@ def test_ask_json_output(monkeypatch) -> None:
 
 
 def test_ask_enqueue_mode(monkeypatch) -> None:
-    def _send_task(name: str, kwargs: dict[str, str], queue: str) -> None:
-        assert name == "jarvis.tasks.agent.agent_step"
-        assert queue == "agent_priority"
-        thread_id = kwargs["thread_id"]
-        with get_conn() as conn:
-            insert_message(conn, thread_id, "assistant", "queued reply")
+    class _Runner:
+        def send_task(self, name: str, kwargs: dict[str, str], queue: str) -> bool:
+            assert name == "jarvis.tasks.agent.agent_step"
+            assert queue == "agent_priority"
+            thread_id = kwargs["thread_id"]
+            with get_conn() as conn:
+                insert_message(conn, thread_id, "assistant", "queued reply")
+            return True
 
-    monkeypatch.setattr("jarvis.cli.chat.celery_app.send_task", _send_task)
+    monkeypatch.setattr("jarvis.cli.chat.get_task_runner", lambda: _Runner())
+
     runner = CliRunner()
     result = runner.invoke(
         cli,

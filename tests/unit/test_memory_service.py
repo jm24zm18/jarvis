@@ -60,6 +60,27 @@ def test_semantic_search_prefers_closest_embedding(monkeypatch) -> None:
     assert results[0]["text"] == "alpha memory"
 
 
+def test_write_persists_metadata_json() -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550125")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        memory_id = service.write(
+            conn,
+            thread_id,
+            "assistant found critical info",
+            metadata={"role": "assistant", "source": "agent.step.end"},
+        )
+        row = conn.execute(
+            "SELECT metadata_json FROM memory_items WHERE id=?",
+            (memory_id,),
+        ).fetchone()
+    assert row is not None
+    assert row["metadata_json"] == '{"role": "assistant", "source": "agent.step.end"}'
+
+
 def test_backfill_memory_vec_runtime_from_embeddings() -> None:
     service = MemoryService()
     with get_conn() as conn:

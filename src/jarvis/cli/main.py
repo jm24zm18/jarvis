@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-import click
-
+import asyncio
 import json
 import sys
+from pathlib import Path
+
+import click
 
 from jarvis.cli.chat import default_cli_user, format_reply, resolve_thread, send_and_wait
+from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.memory.skills import SkillsService
 
@@ -33,6 +36,24 @@ def doctor(json_output: bool, fix: bool) -> None:
     from jarvis.cli.doctor import run_doctor
 
     run_doctor(json_output=json_output, fix=fix)
+
+
+@cli.command("gemini-login")
+@click.option(
+    "--token-path",
+    type=click.Path(path_type=str),
+    default=None,
+    help="Override token cache path (default: GEMINI_CODE_ASSIST_TOKEN_PATH).",
+)
+def gemini_login(token_path: str | None) -> None:
+    """Run manual Gemini OAuth login and write Code Assist token cache."""
+    from jarvis.providers.google_gemini_cli import run_manual_login
+
+    settings = get_settings()
+    resolved = Path(token_path or settings.gemini_code_assist_token_path).expanduser()
+    result = asyncio.run(run_manual_login(resolved))
+    click.echo(f"token cache: {result['token_path']}")
+    click.echo(f"cloudaicompanionProject: {result['cloudaicompanion_project']}")
 
 
 @cli.command()
@@ -133,7 +154,13 @@ def chat(
 @cli.command()
 @click.argument("thread_id")
 @click.option("--include-events", is_flag=True, help="Include event trace data in export.")
-@click.option("--output", "-o", type=click.Path(), default=None, help="Output file path (default: stdout).")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(),
+    default=None,
+    help="Output file path (default: stdout).",
+)
 def export(thread_id: str, include_events: bool, output: str | None) -> None:
     """Export a thread's data as JSONL."""
     from jarvis.db.migrations.runner import run_migrations
@@ -211,6 +238,61 @@ def export(thread_id: str, include_events: bool, output: str | None) -> None:
         click.echo(f"exported to {output}")
 
 
+@cli.command("build")
+@click.option("--thread-id", type=str, default=None, help="Use an existing thread ID.")
+@click.option("--new-thread", is_flag=True, help="Create a new thread for this build run.")
+@click.option(
+    "--user-id",
+    type=str,
+    default=default_cli_user,
+    show_default="cli:<local-user>@<host>",
+    help="External user ID used to group CLI threads.",
+)
+@click.option(
+    "--web", is_flag=True,
+    help="Create thread under web_admin for web UI visibility.",
+)
+@click.option("--timeout-s", type=float, default=300.0, show_default=True)
+@click.option(
+    "--poll-interval-s", type=float, default=2.0, show_default=True,
+    help="Seconds between polling for agent reply.",
+)
+def build(
+    thread_id: str | None,
+    new_thread: bool,
+    user_id: str,
+    web: bool,
+    timeout_s: float,
+    poll_interval_s: float,
+) -> None:
+    """Trigger Jarvis to build, test, and fix its own repo.
+
+    Requires a running worker (make worker) since the build delegates to
+    the coder agent asynchronously.
+    """
+    from jarvis.cli.build import run_build
+
+    run_build(
+        thread_id=thread_id,
+        new_thread=new_thread,
+        user_id=user_id,
+        web=web,
+        enqueue=True,
+        timeout_s=timeout_s,
+        poll_interval_s=poll_interval_s,
+    )
+
+
+@cli.command("test-gates")
+@click.option("--fail-fast", is_flag=True, help="Stop on first failure.")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON summary.")
+def test_gates(fail_fast: bool, json_output: bool) -> None:
+    """Run all pre-commit quality gates (lint, typecheck, tests, coverage)."""
+    from jarvis.cli.test_gates import run_test_gates
+
+    run_test_gates(fail_fast=fail_fast, json_output=json_output)
+
+
 @cli.group("skill")
 def skill_group() -> None:
     """Managed skill package commands."""
@@ -281,3 +363,131 @@ def skill_info(slug: str, scope: str) -> None:
                 f"  {event['created_at']} action={event['action']} "
                 f"from={event['from_version']} to={event['to_version']} source={event['source']}"
             )
+
+
+@cli.group("maintenance")
+def maintenance_group() -> None:
+    """Local maintenance loop controls."""
+
+
+def _maintenance_status_payload() -> dict[str, object]:
+    from jarvis.tasks import is_periodic_scheduler_configured
+    from jarvis.tasks.maintenance import _commands_from_settings
+
+    settings = get_settings()
+    commands = _commands_from_settings(settings.maintenance_commands)
+
+    with get_conn() as conn:
+        open_count_row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM bug_reports "
+            "WHERE title LIKE 'Local maintenance check failed:%' "
+            "AND status IN ('open','in_progress')"
+        ).fetchone()
+        heartbeat_row = conn.execute(
+            "SELECT id, trace_id, created_at FROM events "
+            "WHERE event_type='maintenance.heartbeat' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        latest_row = conn.execute(
+            "SELECT id, title, created_at, status FROM bug_reports "
+            "WHERE title LIKE 'Local maintenance check failed:%' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+
+    latest: dict[str, str] | None = None
+    if latest_row is not None:
+        latest = {
+            "id": str(latest_row["id"]),
+            "title": str(latest_row["title"]),
+            "created_at": str(latest_row["created_at"]),
+            "status": str(latest_row["status"]),
+        }
+
+    last_heartbeat: dict[str, str] | None = None
+    if heartbeat_row is not None:
+        last_heartbeat = {
+            "event_id": str(heartbeat_row["id"]),
+            "trace_id": str(heartbeat_row["trace_id"]),
+            "created_at": str(heartbeat_row["created_at"]),
+        }
+
+    return {
+        "enabled": int(settings.maintenance_enabled) == 1,
+        "heartbeat_interval_seconds": int(settings.maintenance_heartbeat_interval_seconds),
+        "interval_seconds": int(settings.maintenance_interval_seconds),
+        "timeout_seconds": int(settings.maintenance_timeout_seconds),
+        "create_bugs": int(settings.maintenance_create_bugs) == 1,
+        "workdir": settings.maintenance_workdir or str(Path.cwd()),
+        "commands": commands,
+        "periodic_scheduler_active": is_periodic_scheduler_configured(),
+        "last_heartbeat": last_heartbeat,
+        "open_maintenance_bugs": int(open_count_row["cnt"]) if open_count_row is not None else 0,
+        "latest_maintenance_bug": latest,
+    }
+
+
+@maintenance_group.command("status")
+@click.option("--json", "json_output", is_flag=True, help="Print full JSON status.")
+def maintenance_status(json_output: bool) -> None:
+    """Show maintenance configuration and local runtime status."""
+    payload = _maintenance_status_payload()
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"enabled: {payload['enabled']}")
+    click.echo(f"heartbeat_interval_seconds: {payload['heartbeat_interval_seconds']}")
+    click.echo(f"interval_seconds: {payload['interval_seconds']}")
+    click.echo(f"timeout_seconds: {payload['timeout_seconds']}")
+    click.echo(f"create_bugs: {payload['create_bugs']}")
+    click.echo(f"workdir: {payload['workdir']}")
+    click.echo("commands:")
+    commands = payload.get("commands")
+    if not isinstance(commands, list):
+        commands = []
+    for command in commands:
+        click.echo(f"  - {command}")
+    click.echo(f"periodic_scheduler_active: {payload['periodic_scheduler_active']}")
+    last_heartbeat = payload.get("last_heartbeat")
+    if isinstance(last_heartbeat, dict):
+        click.echo(
+            "last_heartbeat: "
+            f"{last_heartbeat.get('created_at')} trace={last_heartbeat.get('trace_id')}"
+        )
+    click.echo(f"open_maintenance_bugs: {payload['open_maintenance_bugs']}")
+    latest = payload["latest_maintenance_bug"]
+    if isinstance(latest, dict):
+        click.echo(
+            "latest_maintenance_bug: "
+            f"{latest.get('id')} {latest.get('status')} {latest.get('created_at')}"
+        )
+
+
+@maintenance_group.command("run")
+@click.option("--json", "json_output", is_flag=True, help="Print full JSON result.")
+def maintenance_run(json_output: bool) -> None:
+    """Run local maintenance checks immediately (in-process)."""
+    from jarvis.tasks.maintenance import run_local_maintenance
+
+    result = run_local_maintenance()
+    if json_output:
+        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+    if result.get("ok"):
+        click.echo("maintenance run: ok")
+    else:
+        click.echo("maintenance run: failures detected")
+    bug_ids = result.get("bug_ids", [])
+    if isinstance(bug_ids, list) and bug_ids:
+        click.echo(f"bugs created: {', '.join(str(item) for item in bug_ids)}")
+
+
+@maintenance_group.command("enqueue")
+def maintenance_enqueue() -> None:
+    """Enqueue local maintenance checks onto the in-process task runner."""
+    from jarvis.tasks import get_task_runner
+
+    ok = get_task_runner().send_task(
+        "jarvis.tasks.maintenance.run_local_maintenance",
+        queue="agent_default",
+    )
+    click.echo("maintenance task queued" if ok else "failed to queue maintenance task")

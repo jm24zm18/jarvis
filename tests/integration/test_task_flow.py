@@ -25,7 +25,18 @@ def test_scheduler_tick_and_agent_step_flow(monkeypatch) -> None:
         ) and queue == "tools_io":
             enqueued_from_agent.append(kwargs)
 
-    monkeypatch.setattr("jarvis.tasks.scheduler.celery_app.send_task", _send_task)
+    monkeypatch.setattr("jarvis.tasks.scheduler._send_task", _send_task)
+
+    class _Runner:
+        def send_task(self, name: str, kwargs: dict[str, str], queue: str) -> bool:
+            if name in (
+                "jarvis.tasks.channel.send_whatsapp_message",
+                "jarvis.tasks.channel.send_channel_message",
+            ) and queue == "tools_io":
+                enqueued_from_agent.append(kwargs)
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.agent.get_task_runner", lambda: _Runner())
 
     with get_conn() as conn:
         ensure_system_state(conn)

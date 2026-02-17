@@ -1,27 +1,28 @@
 """Memory/indexing Celery tasks."""
 
-from jarvis.celery_app import celery_app
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.memory.service import MemoryService
 
 
-@celery_app.task(name="jarvis.tasks.memory.index_event")
-def index_event(trace_id: str, thread_id: str, text: str) -> str:
+def index_event(
+    trace_id: str,
+    thread_id: str,
+    text: str,
+    metadata: dict[str, object] | None = None,
+) -> str:
     del trace_id
     service = MemoryService()
     with get_conn() as conn:
-        return service.write(conn, thread_id, text)
+        return service.write(conn, thread_id, text, metadata=metadata)
 
 
-@celery_app.task(name="jarvis.tasks.memory.compact_thread")
 def compact_thread(thread_id: str) -> dict[str, str]:
     service = MemoryService()
     with get_conn() as conn:
         return service.compact_thread(conn, thread_id)
 
 
-@celery_app.task(name="jarvis.tasks.memory.periodic_compaction")
 def periodic_compaction() -> dict[str, int]:
     """Compact all threads that have accumulated messages since last compaction."""
     settings = get_settings()

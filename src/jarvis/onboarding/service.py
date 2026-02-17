@@ -7,13 +7,34 @@ import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict
 
 from jarvis.db.queries import now_iso
 from jarvis.providers.router import ProviderRouter
 
 logger = logging.getLogger(__name__)
 
-AGENT_IDS = ("main", "researcher", "planner", "coder")
+
+class _OnboardingState(TypedDict):
+    status: str
+    step: int
+    answers: dict[str, str]
+    conversation: list[dict[str, str]]
+
+AGENT_IDS = (
+    "main",
+    "researcher",
+    "planner",
+    "coder",
+    "tester",
+    "lintfixer",
+    "api_guardian",
+    "data_migrator",
+    "web_builder",
+    "security_reviewer",
+    "docs_keeper",
+    "release_ops",
+)
 REQUIRED_FILES = ("identity.md", "soul.md", "heartbeat.md")
 MAX_CONVERSATION_EXCHANGES = 20
 MIN_CONVERSATION_EXCHANGES = 5
@@ -32,8 +53,18 @@ ALLOWED_TOOLS_BY_AGENT: dict[str, list[str]] = {
         "update_persona",
     ],
     "researcher": ["echo", "web_search", "session_send", "skill_list", "skill_read", "skill_write"],
-    "planner": ["echo", "skill_list", "skill_read", "skill_write"],
+    "planner": ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
     "coder": ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+    "tester": ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+    "lintfixer": ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+    "api_guardian": ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+    "data_migrator": ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+    "web_builder": ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+    "security_reviewer": [
+        "echo", "exec_host", "web_search", "skill_list", "skill_read", "skill_write",
+    ],
+    "docs_keeper": ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
+    "release_ops": ["echo", "exec_host", "skill_list", "skill_read", "skill_write"],
 }
 
 ONBOARDING_STATUS_PROMPT = "Onboarding is required."
@@ -52,21 +83,30 @@ ONBOARDING_SYSTEM_PROMPT = (
     "2) user_name (what to call the user),\n"
     "3) user goals and recurring work types,\n"
     "4) preferred communication tone/style (formality, humor, verbosity, emoji use),\n"
-    "5) delegation preferences for main/researcher/planner/coder.\n\n"
+    "5) delegation preferences for the agent team.\n\n"
     "Do not dump a checklist. Ask one focused question per turn. "
     "You MUST ask about all 5 topics and collect answers over at least 5 user exchanges "
     "before using finalize_onboarding. "
     "Keep the exchange concise and friendly. "
     "Once you have enough detail, call the finalize_onboarding tool "
-    "with complete markdown for all four agents.\n\n"
-    "For each agent (main, researcher, planner, coder), "
+    "with complete markdown for all agents.\n\n"
+    "For each agent (main, researcher, planner, coder, tester, lintfixer, "
+    "api_guardian, data_migrator, web_builder, security_reviewer, docs_keeper, release_ops), "
     "provide identity_md and soul_md in the tool args. "
     "identity_md MUST include YAML frontmatter with agent_id and allowed_tools exactly matching:\n"
     "- main: echo, session_list, session_history, session_send, web_search, exec_host, "
     "skill_list, skill_read, skill_write, update_persona\n"
     "- researcher: echo, web_search, session_send, skill_list, skill_read, skill_write\n"
-    "- planner: echo, skill_list, skill_read, skill_write\n"
-    "- coder: echo, exec_host, skill_list, skill_read, skill_write\n\n"
+    "- planner: echo, exec_host, skill_list, skill_read, skill_write\n"
+    "- coder: echo, exec_host, skill_list, skill_read, skill_write\n"
+    "- tester: echo, exec_host, skill_list, skill_read, skill_write\n"
+    "- lintfixer: echo, exec_host, skill_list, skill_read, skill_write\n"
+    "- api_guardian: echo, exec_host, skill_list, skill_read, skill_write\n"
+    "- data_migrator: echo, exec_host, skill_list, skill_read, skill_write\n"
+    "- web_builder: echo, exec_host, skill_list, skill_read, skill_write\n"
+    "- security_reviewer: echo, exec_host, web_search, skill_list, skill_read, skill_write\n"
+    "- docs_keeper: echo, exec_host, skill_list, skill_read, skill_write\n"
+    "- release_ops: echo, exec_host, skill_list, skill_read, skill_write\n\n"
     "The markdown should be personalized prose, not key-value templates. "
     "Also include assistant_name and user_name in the tool args."
 )
@@ -114,8 +154,76 @@ FINALIZE_TOOL_SCHEMA: dict[str, object] = {
                         },
                         "required": ["identity_md", "soul_md"],
                     },
+                    "tester": {
+                        "type": "object",
+                        "properties": {
+                            "identity_md": {"type": "string"},
+                            "soul_md": {"type": "string"},
+                        },
+                        "required": ["identity_md", "soul_md"],
+                    },
+                    "lintfixer": {
+                        "type": "object",
+                        "properties": {
+                            "identity_md": {"type": "string"},
+                            "soul_md": {"type": "string"},
+                        },
+                        "required": ["identity_md", "soul_md"],
+                    },
+                    "api_guardian": {
+                        "type": "object",
+                        "properties": {
+                            "identity_md": {"type": "string"},
+                            "soul_md": {"type": "string"},
+                        },
+                        "required": ["identity_md", "soul_md"],
+                    },
+                    "data_migrator": {
+                        "type": "object",
+                        "properties": {
+                            "identity_md": {"type": "string"},
+                            "soul_md": {"type": "string"},
+                        },
+                        "required": ["identity_md", "soul_md"],
+                    },
+                    "web_builder": {
+                        "type": "object",
+                        "properties": {
+                            "identity_md": {"type": "string"},
+                            "soul_md": {"type": "string"},
+                        },
+                        "required": ["identity_md", "soul_md"],
+                    },
+                    "security_reviewer": {
+                        "type": "object",
+                        "properties": {
+                            "identity_md": {"type": "string"},
+                            "soul_md": {"type": "string"},
+                        },
+                        "required": ["identity_md", "soul_md"],
+                    },
+                    "docs_keeper": {
+                        "type": "object",
+                        "properties": {
+                            "identity_md": {"type": "string"},
+                            "soul_md": {"type": "string"},
+                        },
+                        "required": ["identity_md", "soul_md"],
+                    },
+                    "release_ops": {
+                        "type": "object",
+                        "properties": {
+                            "identity_md": {"type": "string"},
+                            "soul_md": {"type": "string"},
+                        },
+                        "required": ["identity_md", "soul_md"],
+                    },
                 },
-                "required": ["main", "researcher", "planner", "coder"],
+                "required": [
+                    "main", "researcher", "planner", "coder",
+                    "tester", "lintfixer", "api_guardian", "data_migrator",
+                    "web_builder", "security_reviewer", "docs_keeper", "release_ops",
+                ],
             },
         },
         "required": ["assistant_name", "user_name", "agents"],
@@ -248,7 +356,9 @@ async def maybe_handle_onboarding_message(
         )
         return assistant_text or "I need a bit more detail before I can finalize onboarding."
 
-    finalize_args = response["args"]
+    finalize_args: dict[str, object] = (
+        dict(response["args"]) if isinstance(response["args"], dict) else {}
+    )
     validation_error = _validate_finalize_args(finalize_args)
     if validation_error is not None:
         conversation.append(
@@ -275,7 +385,7 @@ async def maybe_handle_onboarding_message(
             )
             return assistant_text or "I still need more detail to finalize onboarding."
 
-        finalize_args = retry["args"]
+        finalize_args = dict(retry["args"]) if isinstance(retry["args"], dict) else {}
         validation_error = _validate_finalize_args(finalize_args)
         if validation_error is not None:
             fallback_text = (
@@ -443,7 +553,7 @@ def get_onboarding_status(
     }
 
 
-def _get_state(conn: sqlite3.Connection, user_id: str) -> dict[str, object] | None:
+def _get_state(conn: sqlite3.Connection, user_id: str) -> _OnboardingState | None:
     row = conn.execute(
         (
             "SELECT status, step, answers_json, conversation_json "
@@ -488,12 +598,12 @@ def _get_state(conn: sqlite3.Connection, user_id: str) -> dict[str, object] | No
         except json.JSONDecodeError:
             parsed_conversation = []
 
-    return {
-        "status": str(row["status"]),
-        "step": int(row["step"]),
-        "answers": parsed_answers,
-        "conversation": parsed_conversation,
-    }
+    return _OnboardingState(
+        status=str(row["status"]),
+        step=int(row["step"]),
+        answers=parsed_answers,
+        conversation=parsed_conversation,
+    )
 
 
 def _upsert_state(

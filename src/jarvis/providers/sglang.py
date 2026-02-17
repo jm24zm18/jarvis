@@ -20,6 +20,22 @@ class SGLangProvider:
         self._transport = transport
 
     @staticmethod
+    def _coerce_text(value: object) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            chunks: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    chunks.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        chunks.append(text)
+            return "".join(chunks)
+        return ""
+
+    @staticmethod
     def _normalize_base_url(base_url: str) -> str:
         return base_url.rstrip("/")
 
@@ -60,8 +76,8 @@ class SGLangProvider:
         message = first.get("message")
         if not isinstance(message, dict):
             raise RuntimeError("sglang response message missing")
-        text = message.get("content")
-        content = text if isinstance(text, str) else ""
+        content = SGLangProvider._coerce_text(message.get("content"))
+        reasoning = SGLangProvider._coerce_text(message.get("reasoning_content"))
         tool_calls_raw = message.get("tool_calls", [])
         tool_calls: list[dict[str, Any]] = []
         if isinstance(tool_calls_raw, list):
@@ -85,7 +101,7 @@ class SGLangProvider:
                     parsed_arguments = arguments
                 if isinstance(name, str) and name:
                     tool_calls.append({"name": name, "arguments": parsed_arguments})
-        return ModelResponse(text=content, tool_calls=tool_calls)
+        return ModelResponse(text=content, tool_calls=tool_calls, reasoning_text=reasoning)
 
     async def generate(
         self,
@@ -101,6 +117,7 @@ class SGLangProvider:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "separate_reasoning": True,
         }
         normalized_tools = self._to_tools(tools)
         if normalized_tools is not None:

@@ -11,8 +11,6 @@ class Settings(BaseSettings):
 
     app_env: str = Field(alias="APP_ENV", default="dev")
     app_db: str = Field(alias="APP_DB", default="/tmp/jarvis.db")
-    broker_url: str = Field(alias="BROKER_URL", default="amqp://guest:guest@localhost:5672//")
-    result_backend: str = Field(alias="RESULT_BACKEND", default="rpc://")
     log_level: str = Field(alias="LOG_LEVEL", default="INFO")
     trace_sample_rate: float = Field(alias="TRACE_SAMPLE_RATE", default=1.0)
     compaction_every_n_events: int = Field(alias="COMPACTION_EVERY_N_EVENTS", default=25)
@@ -29,21 +27,17 @@ class Settings(BaseSettings):
     selfupdate_readyz_url: str = Field(alias="SELFUPDATE_READYZ_URL", default="")
     selfupdate_readyz_attempts: int = Field(alias="SELFUPDATE_READYZ_ATTEMPTS", default=3)
     scheduler_max_catchup: int = Field(alias="SCHEDULER_MAX_CATCHUP", default=10)
-    rabbitmq_mgmt_url: str = Field(alias="RABBITMQ_MGMT_URL", default="")
-    rabbitmq_mgmt_user: str = Field(alias="RABBITMQ_MGMT_USER", default="")
-    rabbitmq_mgmt_password: str = Field(alias="RABBITMQ_MGMT_PASSWORD", default="")
-    restart_drain_timeout_seconds: int = Field(alias="RESTART_DRAIN_TIMEOUT_SECONDS", default=20)
-    restart_drain_poll_seconds: int = Field(alias="RESTART_DRAIN_POLL_SECONDS", default=2)
+    task_runner_max_concurrent: int = Field(alias="TASK_RUNNER_MAX_CONCURRENT", default=20)
+    task_runner_shutdown_timeout_seconds: int = Field(
+        alias="TASK_RUNNER_SHUTDOWN_TIMEOUT_SECONDS",
+        default=30,
+    )
     restart_command: str = Field(alias="RESTART_COMMAND", default="")
     lockdown_readyz_fail_threshold: int = Field(alias="LOCKDOWN_READYZ_FAIL_THRESHOLD", default=3)
     lockdown_rollback_threshold: int = Field(alias="LOCKDOWN_ROLLBACK_THRESHOLD", default=2)
     lockdown_rollback_window_minutes: int = Field(
         alias="LOCKDOWN_ROLLBACK_WINDOW_MINUTES", default=30
     )
-    queue_threshold_agent_priority: int = Field(alias="QUEUE_THRESHOLD_AGENT_PRIORITY", default=200)
-    queue_threshold_agent_default: int = Field(alias="QUEUE_THRESHOLD_AGENT_DEFAULT", default=500)
-    queue_threshold_tools_io: int = Field(alias="QUEUE_THRESHOLD_TOOLS_IO", default=500)
-    queue_threshold_local_llm: int = Field(alias="QUEUE_THRESHOLD_LOCAL_LLM", default=10)
     lockdown_exec_host_fail_threshold: int = Field(
         alias="LOCKDOWN_EXEC_HOST_FAIL_THRESHOLD", default=5
     )
@@ -57,12 +51,26 @@ class Settings(BaseSettings):
 
     google_oauth_client_id: str = Field(alias="GOOGLE_OAUTH_CLIENT_ID", default="")
     google_oauth_client_secret: str = Field(alias="GOOGLE_OAUTH_CLIENT_SECRET", default="")
-    google_oauth_refresh_token: str = Field(alias="GOOGLE_OAUTH_REFRESH_TOKEN", default="")
-    gemini_provider: str = Field(alias="GEMINI_PROVIDER", default="google-gemini-cli")
-    gemini_model: str = Field(alias="GEMINI_MODEL", default="gemini-3-flash-preview")
-    gemini_cli_binary: str = Field(alias="GEMINI_CLI_BINARY", default="gemini")
-    gemini_cli_home_dir: str = Field(alias="GEMINI_CLI_HOME_DIR", default="")
+    primary_provider: str = Field(alias="PRIMARY_PROVIDER", default="gemini")
+    gemini_model: str = Field(alias="GEMINI_MODEL", default="gemini-2.5-flash")
+    gemini_code_assist_token_path: str = Field(
+        alias="GEMINI_CODE_ASSIST_TOKEN_PATH",
+        default="~/.config/gemini-cli-oauth/token.json",
+    )
     gemini_cli_timeout_seconds: int = Field(alias="GEMINI_CLI_TIMEOUT_SECONDS", default=120)
+    gemini_code_assist_plan_tier: str = Field(alias="GEMINI_CODE_ASSIST_PLAN_TIER", default="free")
+    gemini_code_assist_requests_per_minute: int = Field(
+        alias="GEMINI_CODE_ASSIST_REQUESTS_PER_MINUTE",
+        default=0,
+    )
+    gemini_code_assist_requests_per_day: int = Field(
+        alias="GEMINI_CODE_ASSIST_REQUESTS_PER_DAY",
+        default=0,
+    )
+    gemini_quota_cooldown_default_seconds: int = Field(
+        alias="GEMINI_QUOTA_COOLDOWN_DEFAULT_SECONDS",
+        default=60,
+    )
 
     sglang_base_url: str = Field(alias="SGLANG_BASE_URL", default="http://localhost:30000/v1")
     sglang_model: str = Field(alias="SGLANG_MODEL", default="openai/gpt-oss-120b")
@@ -72,6 +80,18 @@ class Settings(BaseSettings):
     ollama_embed_model: str = Field(alias="OLLAMA_EMBED_MODEL", default="nomic-embed-text")
     memory_embed_dims: int = Field(alias="MEMORY_EMBED_DIMS", default=768)
     sqlite_vec_extension_path: str = Field(alias="SQLITE_VEC_EXTENSION_PATH", default="")
+    state_extraction_enabled: int = Field(alias="STATE_EXTRACTION_ENABLED", default=1)
+    state_extraction_max_messages: int = Field(alias="STATE_EXTRACTION_MAX_MESSAGES", default=20)
+    state_extraction_merge_threshold: float = Field(
+        alias="STATE_EXTRACTION_MERGE_THRESHOLD", default=0.92
+    )
+    state_extraction_conflict_threshold: float = Field(
+        alias="STATE_EXTRACTION_CONFLICT_THRESHOLD", default=0.85
+    )
+    state_max_active_items: int = Field(alias="STATE_MAX_ACTIVE_ITEMS", default=40)
+    state_extraction_timeout_seconds: int = Field(
+        alias="STATE_EXTRACTION_TIMEOUT_SECONDS", default=15
+    )
 
     searxng_base_url: str = Field(alias="SEARXNG_BASE_URL", default="http://localhost:8080")
     searxng_api_key: str = Field(alias="SEARXNG_API_KEY", default="")
@@ -97,12 +117,32 @@ class Settings(BaseSettings):
     backup_retention_weekly: int = Field(alias="BACKUP_RETENTION_WEEKLY", default=8)
     pagerduty_routing_key: str = Field(alias="PAGERDUTY_ROUTING_KEY", default="")
     alert_slack_webhook_url: str = Field(alias="ALERT_SLACK_WEBHOOK_URL", default="")
+    maintenance_enabled: int = Field(alias="MAINTENANCE_ENABLED", default=0)
+    maintenance_heartbeat_interval_seconds: int = Field(
+        alias="MAINTENANCE_HEARTBEAT_INTERVAL_SECONDS",
+        default=300,
+    )
+    maintenance_interval_seconds: int = Field(alias="MAINTENANCE_INTERVAL_SECONDS", default=0)
+    maintenance_commands: str = Field(
+        alias="MAINTENANCE_COMMANDS",
+        default="make lint\nmake typecheck",
+    )
+    maintenance_timeout_seconds: int = Field(alias="MAINTENANCE_TIMEOUT_SECONDS", default=1800)
+    maintenance_create_bugs: int = Field(alias="MAINTENANCE_CREATE_BUGS", default=1)
+    maintenance_workdir: str = Field(alias="MAINTENANCE_WORKDIR", default="")
     github_token: str = Field(alias="GITHUB_TOKEN", default="")
     github_webhook_secret: str = Field(alias="GITHUB_WEBHOOK_SECRET", default="")
     github_api_base_url: str = Field(alias="GITHUB_API_BASE_URL", default="https://api.github.com")
     github_repo_allowlist: str = Field(alias="GITHUB_REPO_ALLOWLIST", default="")
     github_bot_login: str = Field(alias="GITHUB_BOT_LOGIN", default="jarvis")
     github_pr_summary_enabled: int = Field(alias="GITHUB_PR_SUMMARY_ENABLED", default=0)
+    github_issue_sync_enabled: int = Field(alias="GITHUB_ISSUE_SYNC_ENABLED", default=0)
+    github_issue_sync_repo: str = Field(alias="GITHUB_ISSUE_SYNC_REPO", default="")
+    github_issue_labels_bug: str = Field(alias="GITHUB_ISSUE_LABELS_BUG", default="jarvis,bug")
+    github_issue_labels_feature: str = Field(
+        alias="GITHUB_ISSUE_LABELS_FEATURE",
+        default="jarvis,feature-request",
+    )
     exec_host_timeout_max_seconds: int = Field(alias="EXEC_HOST_TIMEOUT_MAX_SECONDS", default=120)
     exec_host_log_dir: str = Field(alias="EXEC_HOST_LOG_DIR", default="/var/lib/agent/exec")
     exec_host_env_allowlist: str = Field(
@@ -157,14 +197,12 @@ def validate_settings_for_env(settings: Settings) -> None:
     missing: list[str] = []
     required_non_empty = {
         "APP_DB": settings.app_db,
-        "BROKER_URL": settings.broker_url,
-        "RESULT_BACKEND": settings.result_backend,
         "WHATSAPP_VERIFY_TOKEN": settings.whatsapp_verify_token,
         "WHATSAPP_ACCESS_TOKEN": settings.whatsapp_access_token,
         "WHATSAPP_PHONE_NUMBER_ID": settings.whatsapp_phone_number_id,
         "GOOGLE_OAUTH_CLIENT_ID": settings.google_oauth_client_id,
         "GOOGLE_OAUTH_CLIENT_SECRET": settings.google_oauth_client_secret,
-        "GOOGLE_OAUTH_REFRESH_TOKEN": settings.google_oauth_refresh_token,
+        "PRIMARY_PROVIDER": settings.primary_provider,
         "GEMINI_MODEL": settings.gemini_model,
         "SGLANG_BASE_URL": settings.sglang_base_url,
         "SGLANG_MODEL": settings.sglang_model,
@@ -172,9 +210,6 @@ def validate_settings_for_env(settings: Settings) -> None:
         "OLLAMA_EMBED_MODEL": settings.ollama_embed_model,
         "SEARXNG_BASE_URL": settings.searxng_base_url,
         "ADMIN_WHATSAPP_IDS": settings.admin_whatsapp_ids,
-        "RABBITMQ_MGMT_URL": settings.rabbitmq_mgmt_url,
-        "RABBITMQ_MGMT_USER": settings.rabbitmq_mgmt_user,
-        "RABBITMQ_MGMT_PASSWORD": settings.rabbitmq_mgmt_password,
         "BACKUP_S3_ENDPOINT": settings.backup_s3_endpoint,
         "BACKUP_S3_BUCKET": settings.backup_s3_bucket,
         "BACKUP_S3_REGION": settings.backup_s3_region,
@@ -195,6 +230,11 @@ def validate_settings_for_env(settings: Settings) -> None:
             missing.append("GITHUB_TOKEN")
         if not settings.github_webhook_secret.strip():
             missing.append("GITHUB_WEBHOOK_SECRET")
+    if int(settings.github_issue_sync_enabled) == 1:
+        if not settings.github_token.strip():
+            missing.append("GITHUB_TOKEN")
+        if not settings.github_issue_sync_repo.strip():
+            missing.append("GITHUB_ISSUE_SYNC_REPO")
     if not settings.app_db.startswith("/"):
         missing.append("APP_DB(absolute path required)")
 

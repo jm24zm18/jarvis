@@ -4,7 +4,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Send, Search, Plus, Eye, EyeOff } from "lucide-react";
 import {
   createThread,
+  getTrace,
   getOnboardingStatus,
+  listEvents,
   listMessages,
   listThreads,
   sendMessage,
@@ -39,7 +41,7 @@ const COMMANDS: Array<{ value: string; help: string }> = [
 function toThreadPreview(content?: string | null): string {
   if (!content) return "No messages yet";
   let text = content;
-  text = text.replace(/[\u200B\u200C\u200D\uFEFF]/g, "");
+  text = text.replace(/\u200B|\u200C|\u200D|\uFEFF/g, "");
   text = text.replace(/\u202f/g, " ");
   text = text.replace(/```[\s\S]*?```/g, " [code] ");
   text = text.replace(/`([^`]+)`/g, "$1");
@@ -93,6 +95,7 @@ export default function ChatPage() {
   const setThinking = useChatStore((s) => s.setThinking);
   const setDelegation = useChatStore((s) => s.setDelegation);
   const setActiveTrace = useChatStore((s) => s.setActiveTrace);
+  const setTraceEvents = useChatStore((s) => s.setTraceEvents);
   const appendTraceEvent = useChatStore((s) => s.appendTraceEvent);
   const clearTrace = useChatStore((s) => s.clearTrace);
   const thinking = useChatStore((s) => (threadId ? !!s.thinkingByThread[threadId] : false));
@@ -263,6 +266,63 @@ export default function ChatPage() {
     const traceId = useChatStore.getState().activeTraceByThread[threadId] ?? "";
     setPanelTraceId(traceId);
   }, [threadId]);
+
+  useEffect(() => {
+    if (!threadId || panelTraceId) return;
+    let cancelled = false;
+    void listEvents({ thread_id: threadId, event_type: "agent.step.end" })
+      .then((resp) => {
+        if (cancelled) return;
+        const latest = resp.items?.[0];
+        const traceId = String(latest?.trace_id ?? "").trim();
+        if (!traceId) return;
+        setActiveTrace(threadId, traceId);
+        setPanelTraceId(traceId);
+      })
+      .catch(() => {
+        if (cancelled) return;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [panelTraceId, setActiveTrace, threadId]);
+
+  useEffect(() => {
+    if (!panelTraceId) return;
+    let cancelled = false;
+    const current = traceEventsByTrace[panelTraceId] ?? EMPTY_TRACE_EVENTS;
+    if (current.length > 0) return;
+    void getTrace(panelTraceId, "redacted")
+      .then((data) => {
+        if (cancelled) return;
+        const hydrated = (data.items ?? []).map((item) => {
+          let parsedFallback: Record<string, unknown> = {};
+          if (item.payload_redacted_json) {
+            try {
+              const parsed = JSON.parse(item.payload_redacted_json);
+              if (typeof parsed === "object" && parsed !== null) {
+                parsedFallback = parsed as Record<string, unknown>;
+              }
+            } catch {
+              parsedFallback = { raw: item.payload_redacted_json };
+            }
+          }
+          return {
+            event_type: item.event_type,
+            payload: item.payload ?? parsedFallback,
+            created_at: item.created_at,
+          };
+        });
+        setTraceEvents(panelTraceId, hydrated);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTraceEvents(panelTraceId, []);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [panelTraceId, setTraceEvents, traceEventsByTrace]);
 
   const threadItems = useMemo(() => threads.data?.items ?? [], [threads.data]);
   const filteredThreads = useMemo(() => {

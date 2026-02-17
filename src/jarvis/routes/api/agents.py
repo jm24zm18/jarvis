@@ -12,7 +12,7 @@ router = APIRouter(prefix="/agents", tags=["api-agents"])
 
 
 @router.get("")
-def list_agents(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:
+def list_agents(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     try:
         bundles = load_agent_registry(Path("agents"))
@@ -41,7 +41,7 @@ def list_agents(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:
 
 
 @router.get("/{agent_id}")
-def get_agent(agent_id: str, ctx: UserContext = Depends(require_auth)) -> dict[str, object]:
+def get_agent(agent_id: str, ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     try:
         bundles = load_agent_registry(Path("agents"))

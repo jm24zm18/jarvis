@@ -1,5 +1,6 @@
 """FastAPI entrypoint."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -23,13 +24,14 @@ from jarvis.channels.whatsapp.router import router as whatsapp_router
 from jarvis.config import get_settings, validate_settings_for_env
 from jarvis.db.connection import get_conn
 from jarvis.db.migrations.runner import run_migrations
-from jarvis.db.queries import ensure_system_state
+from jarvis.db.queries import ensure_root_user, ensure_system_state
 from jarvis.logging import configure_logging
 from jarvis.memory.service import MemoryService
 from jarvis.routes.api import router as api_router
 from jarvis.routes.health import router as health_router
 from jarvis.routes.ws import router as ws_router
 from jarvis.routes.ws import start_notification_poller
+from jarvis.tasks import get_periodic_scheduler, get_task_runner
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.warning("Agent bundle load skipped at startup: %s", exc)
     with get_conn() as conn:
         ensure_system_state(conn)
+        root_user_id = ensure_root_user(conn)
+        logger.info("Root user ready: %s", root_user_id)
         sync_stats = sync_seed_skills(conn)
         if (sync_stats["inserted"] + sync_stats["updated"]) > 0:
             logger.info(
@@ -62,9 +66,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             sync_tool_permissions(conn, bundles)
         MemoryService().ensure_vector_indexes(conn)
     poller_task, poller_stop = start_notification_poller()
+    task_runner = get_task_runner()
+    periodic = get_periodic_scheduler()
+    periodic_task = asyncio.create_task(periodic.run())
     yield
     poller_stop.set()
     await poller_task
+    await periodic.shutdown()
+    await periodic_task
+    await task_runner.shutdown(timeout_s=float(settings.task_runner_shutdown_timeout_seconds))
 
 
 limiter = Limiter(key_func=get_remote_address)

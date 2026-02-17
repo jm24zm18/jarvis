@@ -13,9 +13,24 @@ from jarvis.db.queries import (
 )
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event
-from jarvis.providers.gemini import GeminiProvider
+from jarvis.providers.base import ModelResponse
 from jarvis.providers.router import ProviderRouter
 from jarvis.providers.sglang import SGLangProvider
+
+
+class StubProvider:
+    async def generate(  # type: ignore[no-untyped-def]
+        self,
+        messages,
+        tools=None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> ModelResponse:
+        del messages, tools, temperature, max_tokens
+        return ModelResponse(text="ok", tool_calls=[])
+
+    async def health_check(self) -> bool:
+        return True
 
 
 @pytest.mark.asyncio
@@ -45,7 +60,7 @@ async def test_status_command_returns_json() -> None:
                 1,
             ),
         )
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
         result = await maybe_execute_command(
             conn,
             thread_id,
@@ -99,7 +114,7 @@ async def test_logs_trace_command_returns_ordered_events() -> None:
         user_id = ensure_user(conn, "15555550123")
         channel_id = ensure_channel(conn, user_id, "whatsapp")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
         result = await maybe_execute_command(
             conn,
             thread_id,
@@ -122,7 +137,7 @@ async def test_restart_requires_admin() -> None:
         user_id = ensure_user(conn, "15555550123")
         channel_id = ensure_channel(conn, user_id, "whatsapp")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
 
         denied = await maybe_execute_command(
             conn,
@@ -167,7 +182,7 @@ async def test_logs_search_command_returns_matches() -> None:
         user_id = ensure_user(conn, "15555550123")
         channel_id = ensure_channel(conn, user_id, "whatsapp")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
         result = await maybe_execute_command(
             conn,
             thread_id,
@@ -198,7 +213,7 @@ async def test_unlock_requires_admin_and_correct_code(tmp_path) -> None:
             user_id = ensure_user(conn, "15555550123")
             channel_id = ensure_channel(conn, user_id, "whatsapp")
             thread_id = ensure_open_thread(conn, user_id, channel_id)
-            router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+            router = ProviderRouter(StubProvider(), SGLangProvider("f"))
 
             denied = await maybe_execute_command(
                 conn,
@@ -243,7 +258,7 @@ async def test_approve_command_requires_admin_and_inserts_record() -> None:
         user_id = ensure_user(conn, "15555550123")
         channel_id = ensure_channel(conn, user_id, "whatsapp")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
 
         denied = await maybe_execute_command(
             conn,
@@ -279,7 +294,7 @@ async def test_approve_command_rejects_unknown_action() -> None:
         user_id = ensure_user(conn, "15555550123")
         channel_id = ensure_channel(conn, user_id, "whatsapp")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
         result = await maybe_execute_command(
             conn,
             thread_id,
@@ -298,7 +313,7 @@ async def test_new_command_closes_current_and_creates_next_thread() -> None:
         user_id = ensure_user(conn, "15555550123")
         channel_id = ensure_channel(conn, user_id, "whatsapp")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
         result = await maybe_execute_command(
             conn,
             thread_id,
@@ -327,7 +342,7 @@ async def test_kb_add_search_and_get_commands() -> None:
         user_id = ensure_user(conn, "15555550900")
         channel_id = ensure_channel(conn, user_id, "whatsapp")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
 
         added = await maybe_execute_command(
             conn,
@@ -369,17 +384,18 @@ async def test_kb_add_search_and_get_commands() -> None:
 async def test_compact_command_enqueues_task(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[tuple[str, dict[str, str], str]] = []
 
-    def _send_task(name: str, kwargs: dict[str, str], queue: str) -> None:
+    def _send_task(name: str, kwargs: dict[str, str], queue: str) -> bool:
         captured.append((name, kwargs, queue))
+        return True
 
-    monkeypatch.setattr("jarvis.commands.service.celery_app.send_task", _send_task)
+    monkeypatch.setattr("jarvis.commands.service._send_task", _send_task)
 
     with get_conn() as conn:
         ensure_system_state(conn)
         user_id = ensure_user(conn, "15555550123")
         channel_id = ensure_channel(conn, user_id, "whatsapp")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
         result = await maybe_execute_command(
             conn,
             thread_id,
@@ -403,7 +419,7 @@ async def test_verbose_command_updates_thread_setting() -> None:
         user_id = ensure_user(conn, "15555550123")
         channel_id = ensure_channel(conn, user_id, "whatsapp")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
         result = await maybe_execute_command(
             conn,
             thread_id,
@@ -433,7 +449,7 @@ async def test_group_command_uses_existing_state_and_keeps_main() -> None:
             "VALUES(?,?,?,datetime('now'))",
             (thread_id, 0, '["main","planner"]'),
         )
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
         first = await maybe_execute_command(
             conn,
             thread_id,
@@ -493,7 +509,7 @@ async def test_onboarding_reset_command_clears_state(monkeypatch) -> None:
                 "2026-02-15T12:00:00+00:00",
             ),
         )
-        router = ProviderRouter(GeminiProvider("m"), SGLangProvider("f"))
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
         result = await maybe_execute_command(
             conn,
             thread_id,

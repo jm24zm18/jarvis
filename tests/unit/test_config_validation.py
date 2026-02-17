@@ -16,7 +16,6 @@ def _base_prod_env() -> dict[str, str]:
         "WHATSAPP_PHONE_NUMBER_ID": "1234567890",
         "GOOGLE_OAUTH_CLIENT_ID": "cid",
         "GOOGLE_OAUTH_CLIENT_SECRET": "csecret",
-        "GOOGLE_OAUTH_REFRESH_TOKEN": "refresh",
         "GEMINI_MODEL": "gemini-2.5-pro",
         "SGLANG_BASE_URL": "http://localhost:30000/v1",
         "SGLANG_MODEL": "openai/gpt-oss-120b",
@@ -86,6 +85,24 @@ def test_validate_settings_prod_requires_github_secrets_when_enabled(
     monkeypatch.setenv("GITHUB_PR_SUMMARY_ENABLED", "1")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_WEBHOOK_SECRET", raising=False)
+
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        with pytest.raises(ValueError):
+            validate_settings_for_env(settings)
+    finally:
+        get_settings.cache_clear()
+
+
+def test_validate_settings_prod_requires_issue_sync_repo_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in list(_base_prod_env()):
+        monkeypatch.setenv(key, _base_prod_env()[key])
+    monkeypatch.setenv("GITHUB_ISSUE_SYNC_ENABLED", "1")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.delenv("GITHUB_ISSUE_SYNC_REPO", raising=False)
 
     get_settings.cache_clear()
     try:

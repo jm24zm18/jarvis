@@ -1,7 +1,7 @@
 import { useEffect } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Lock, Unlock, Server, AlertTriangle, Calendar, RefreshCw } from "lucide-react";
-import { getSystemStatus, setLockdown } from "../../../api/endpoints";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Lock, Unlock, Server, Calendar, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { getSystemStatus, reloadAgents, resetDatabase, setLockdown } from "../../../api/endpoints";
 import { useWebSocket } from "../../../hooks/useWebSocket";
 import Header from "../../../components/layout/Header";
 import Button from "../../../components/ui/Button";
@@ -9,6 +9,7 @@ import Card from "../../../components/ui/Card";
 import Badge from "../../../components/ui/Badge";
 
 export default function AdminDashboardPage() {
+  const queryClient = useQueryClient();
   const status = useQuery({
     queryKey: ["system-status"],
     queryFn: getSystemStatus,
@@ -17,6 +18,13 @@ export default function AdminDashboardPage() {
   const toggleLockdown = useMutation({
     mutationFn: (next: boolean) => setLockdown(next, "web_ui"),
     onSuccess: () => void status.refetch(),
+  });
+  const reloadAgentsMutation = useMutation({
+    mutationFn: reloadAgents,
+  });
+  const resetDatabaseMutation = useMutation({
+    mutationFn: resetDatabase,
+    onSuccess: () => void queryClient.invalidateQueries(),
   });
   const ws = useWebSocket((event) => {
     if (String(event.type ?? "").startsWith("system.")) void status.refetch();
@@ -28,7 +36,8 @@ export default function AdminDashboardPage() {
 
   const data = status.data;
   const lockdown = data?.system.lockdown === 1;
-  const lastPrimaryFailure = data?.provider_errors?.last_primary_failure;
+  const primaryProviderName = data?.providers.primary_name ?? "primary";
+  const fallbackProviderName = data?.providers.fallback_name ?? "fallback";
   const queueDepths = Object.entries(data?.queue_depths ?? {});
   const maxDepth = Math.max(1, ...queueDepths.map(([, d]) => Number(d)));
 
@@ -71,7 +80,7 @@ export default function AdminDashboardPage() {
           <div className="flex items-start justify-between">
             <div>
               <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                Primary Provider
+                Primary Provider ({primaryProviderName})
               </p>
               <p className="mt-1 font-display text-2xl text-[var(--text-primary)]">
                 {data?.providers.primary ? "UP" : "DOWN"}
@@ -104,7 +113,7 @@ export default function AdminDashboardPage() {
           <div className="flex items-start justify-between">
             <div>
               <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                Fallback Provider
+                Fallback Provider ({fallbackProviderName})
               </p>
               <p className="mt-1 font-display text-2xl text-[var(--text-primary)]">
                 {data?.providers.fallback ? "UP" : "DOWN"}
@@ -178,6 +187,33 @@ export default function AdminDashboardPage() {
           {lockdown ? "Disable Lockdown" : "Enable Lockdown"}
         </Button>
         <Button
+          variant="secondary"
+          icon={<RotateCcw className="h-4 w-4" />}
+          onClick={() => {
+            if (!window.confirm("Reload all agents from disk now?")) return;
+            reloadAgentsMutation.mutate();
+          }}
+          disabled={reloadAgentsMutation.isPending}
+        >
+          Reload Agents
+        </Button>
+        <Button
+          variant="danger"
+          icon={<Trash2 className="h-4 w-4" />}
+          onClick={() => {
+            if (
+              !window.confirm(
+                "This will permanently delete all database data and cannot be undone. Continue?",
+              )
+            )
+              return;
+            resetDatabaseMutation.mutate();
+          }}
+          disabled={resetDatabaseMutation.isPending}
+        >
+          Reset Database
+        </Button>
+        <Button
           variant="ghost"
           icon={<RefreshCw className={`h-4 w-4 ${status.isFetching ? "animate-spin" : ""}`} />}
           onClick={() => void status.refetch()}
@@ -185,26 +221,6 @@ export default function AdminDashboardPage() {
           Refresh
         </Button>
       </div>
-
-      {/* Provider failure alert */}
-      {lastPrimaryFailure ? (
-        <Card className="mb-6 border-amber-300 dark:border-amber-700">
-          <div className="flex items-start gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-              <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-[var(--text-primary)]">
-                Latest Primary Provider Failure
-              </p>
-              <p className="mt-0.5 text-sm text-[var(--text-secondary)]">
-                {lastPrimaryFailure.reason}
-              </p>
-              <p className="mt-1 text-xs text-[var(--text-muted)]">{lastPrimaryFailure.at}</p>
-            </div>
-          </div>
-        </Card>
-      ) : null}
 
       {/* Queue depths + Scheduler backlog */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

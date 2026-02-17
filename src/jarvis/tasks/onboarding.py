@@ -4,19 +4,16 @@ import asyncio
 import json
 import logging
 
-from jarvis.celery_app import celery_app
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import insert_message, now_iso
 from jarvis.onboarding.service import maybe_handle_onboarding_message
-from jarvis.providers.factory import build_primary_provider
+from jarvis.providers.factory import build_fallback_provider, build_primary_provider
 from jarvis.providers.router import ProviderRouter
-from jarvis.providers.sglang import SGLangProvider
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="jarvis.tasks.onboarding.onboarding_step")
 def onboarding_step(trace_id: str, thread_id: str, user_id: str, user_message: str) -> str | None:
     start_created_at = now_iso()
     with get_conn() as conn:
@@ -63,7 +60,7 @@ def onboarding_step(trace_id: str, thread_id: str, user_id: str, user_message: s
     settings = get_settings()
     router = ProviderRouter(
         build_primary_provider(settings),
-        SGLangProvider(settings.sglang_model),
+        build_fallback_provider(settings),
     )
 
     assistant_reply: str | None = None
@@ -95,7 +92,8 @@ def onboarding_step(trace_id: str, thread_id: str, user_id: str, user_message: s
             fallback_created_at = now_iso()
             conn.execute(
                 (
-                    "INSERT INTO web_notifications(thread_id, event_type, payload_json, created_at) "
+                    "INSERT INTO web_notifications"
+                    "(thread_id, event_type, payload_json, created_at) "
                     "VALUES(?,?,?,?)"
                 ),
                 (
@@ -116,6 +114,26 @@ def onboarding_step(trace_id: str, thread_id: str, user_id: str, user_message: s
         message_id: str | None = None
         if assistant_reply is not None:
             message_id = insert_message(conn, thread_id, "assistant", assistant_reply)
+            try:
+                from jarvis.tasks import get_task_runner
+
+                get_task_runner().send_task(
+                    "jarvis.tasks.memory.index_event",
+                    kwargs={
+                        "trace_id": trace_id,
+                        "thread_id": thread_id,
+                        "text": assistant_reply,
+                        "metadata": {
+                            "role": "assistant",
+                            "actor_id": "main",
+                            "message_id": message_id,
+                            "source": "onboarding.step",
+                        },
+                    },
+                    queue="tools_io",
+                )
+            except Exception:
+                logger.debug("failed to enqueue onboarding assistant memory indexing", exc_info=True)
             conn.execute(
                 (
                     "INSERT INTO web_notifications("

@@ -8,9 +8,10 @@ import re
 import shutil
 import sqlite3
 import unicodedata
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
+from typing import Any
 
 from jarvis.agents.loader import load_agent_bundle_cached, load_agent_registry
 from jarvis.commands.service import maybe_execute_command
@@ -22,12 +23,21 @@ from jarvis.ids import new_id
 from jarvis.memory.knowledge import KnowledgeBaseService
 from jarvis.memory.service import MemoryService
 from jarvis.memory.skills import SkillsService
+from jarvis.memory.state_extractor import extract_state_items
+from jarvis.memory.state_renderer import render_state_section
+from jarvis.memory.state_store import StateStore
 from jarvis.orchestrator.prompt_builder import build_prompt_with_report, estimate_tokens
+from jarvis.providers.factory import resolve_primary_provider_name
 from jarvis.providers.router import ProviderRouter
 from jarvis.tools.runtime import ToolRuntime
 
-MAX_TOOL_ITERATIONS = 3
+MAX_TOOL_ITERATIONS = 8
+FALLBACK_ONLY_RETRIES = 2
 logger = logging.getLogger(__name__)
+PLACEHOLDER_RESPONSE = "I can help with that."
+DEGRADED_RESPONSE = (
+    "I hit an internal response issue while processing that request. Please try again."
+)
 IDENTITY_POLICY = (
     "Response policy:\n"
     "- Never say you are an AI, language model, chatbot, or similar.\n"
@@ -36,23 +46,164 @@ IDENTITY_POLICY = (
 )
 
 
-def _enforce_identity_policy(text: str) -> str:
-    cleaned = unicodedata.normalize("NFKC", text).translate(
-        str.maketrans(
+_CONTROL_MARKERS = (
+    "<|start|>",
+    "<|channel|>",
+    "<|message|>",
+    "<|analysis|>",
+    "<|final|>",
+    "<|call|>",
+)
+
+
+def _strip_control_tokens(text: str) -> str:
+    """Remove LLM control tokens that should never reach the user."""
+    cleaned = text.replace("<|end|>", "").strip()
+    first_marker: int | None = None
+    for marker in _CONTROL_MARKERS:
+        idx = cleaned.find(marker)
+        if idx == -1:
+            continue
+        first_marker = idx if first_marker is None else min(first_marker, idx)
+    if first_marker is not None:
+        cleaned = cleaned[:first_marker].strip()
+    return cleaned
+
+
+def _normalize_tool_calls(tool_calls_raw: object) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    if not isinstance(tool_calls_raw, list):
+        return calls
+    for item in tool_calls_raw:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        arguments = item.get("arguments", {})
+        if not isinstance(name, str) or not name.strip():
+            continue
+        calls.append(
             {
-                "\u2010": "-",  # hyphen
-                "\u2011": "-",  # non-breaking hyphen
-                "\u2012": "-",  # figure dash
-                "\u2013": "-",  # en dash
-                "\u2014": "-",  # em dash
-                "\u2212": "-",  # minus sign
-                "\u2018": "'",  # left single quotation mark
-                "\u2019": "'",  # right single quotation mark
+                "name": name.strip(),
+                "arguments": arguments if isinstance(arguments, dict) else {},
             }
         )
+    return calls
+
+
+def _extract_embedded_tool_payload(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """Extract JSON tool payload leaked into plain text responses.
+
+    Returns cleaned assistant text and parsed tool calls. If no valid payload
+    is found, returns the input text and an empty list.
+    """
+    decoder = json.JSONDecoder()
+    best: tuple[int, int, dict[str, Any]] | None = None
+    idx = 0
+    while idx < len(text):
+        try:
+            obj, end = decoder.raw_decode(text, idx)
+        except json.JSONDecodeError:
+            idx += 1
+            continue
+        if isinstance(obj, dict) and "tool_calls" in obj:
+            try:
+                normalized = dict(obj)
+            except Exception:
+                normalized = {}
+            best = (idx, end, normalized)
+        idx = max(end, idx + 1)
+    if best is None:
+        return text, []
+
+    start, end, payload = best
+    parsed_calls = _normalize_tool_calls(payload.get("tool_calls"))
+    if not parsed_calls:
+        return text, []
+
+    response_text = payload.get("text")
+    if not isinstance(response_text, str):
+        response_text = payload.get("response")
+    if isinstance(response_text, str) and response_text.strip():
+        cleaned_text = response_text.strip()
+    else:
+        cleaned_text = (text[:start] + text[end:]).strip()
+    return cleaned_text, parsed_calls
+
+
+def _extract_primary_failure_fields(primary_error: str) -> dict[str, object]:
+    text = (primary_error or "").strip()
+    if not text:
+        return {}
+
+    lower = text.lower()
+    kind = "generic"
+    if "timed out" in lower or "timeout" in lower:
+        kind = "timeout"
+    elif "quota exhausted (terminal)" in lower:
+        kind = "quota_terminal"
+    elif (
+        "quota exceeded" in lower
+        or "rate limit" in lower
+        or "resource_exhausted" in lower
+        or "429" in lower
+    ):
+        kind = "quota_retryable"
+    elif "auth/permission error" in lower:
+        kind = "auth_or_permission"
+    elif "validation required" in lower:
+        kind = "validation_required"
+    elif "model unavailable" in lower or "not found" in lower:
+        kind = "model_not_found"
+    elif "invalid argument" in lower:
+        kind = "invalid_argument"
+
+    status_code: int | None = None
+    status_match = re.search(r"\b([1-5]\d{2})\b", text)
+    if status_match:
+        try:
+            status_code = int(status_match.group(1))
+        except ValueError:
+            status_code = None
+
+    retry_seconds: int | None = None
+    retry_match = re.search(r"retry(?:[-\s]*after| in)\s+(\d+(?:\.\d+)?)", lower)
+    if retry_match:
+        try:
+            retry_seconds = max(1, int(float(retry_match.group(1))))
+        except ValueError:
+            retry_seconds = None
+
+    request_id: str | None = None
+    req_match = re.search(r"\b(req_[a-z0-9]+)\b", lower)
+    if req_match:
+        request_id = req_match.group(1)
+
+    payload: dict[str, object] = {"primary_failure_kind": kind}
+    if status_code is not None:
+        payload["primary_status_code"] = status_code
+    if retry_seconds is not None:
+        payload["primary_retry_seconds"] = retry_seconds
+    if request_id is not None:
+        payload["primary_request_id"] = request_id
+    return payload
+
+
+def _enforce_identity_policy(text: str) -> str:
+    _translate_table: dict[int, str | int | None] = {
+        0x2010: "-",  # hyphen
+        0x2011: "-",  # non-breaking hyphen
+        0x2012: "-",  # figure dash
+        0x2013: "-",  # en dash
+        0x2014: "-",  # em dash
+        0x2212: "-",  # minus sign
+        0x2018: "'",  # left single quotation mark
+        0x2019: "'",  # right single quotation mark
+    }
+    cleaned = unicodedata.normalize("NFKC", text).translate(
+        str.maketrans(_translate_table)
     )
     # Strip delegation patterns like [main->researcher] and everything after
-    cleaned = re.sub(r"\[(?:main|researcher|coder|planner)->(?:main|researcher|coder|planner)\].*", "", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r"\[\w+->\w+\].*", "", cleaned, flags=re.DOTALL)
     # Strip generic AI identity claims
     cleaned = re.sub(
         r"(?i)\b(as an ai|as a language model|as an assistant model)\b[:,]?\s*",
@@ -84,13 +235,15 @@ def _enforce_identity_policy(text: str) -> str:
         cleaned,
     )
     cleaned = re.sub(
-        r"(?i)\b(i am|i'm)\s+(?:a\s+)?(?:piece\s+of\s+software|software\s+system|software)\b[^.]*\.?\s*",
+        r"(?i)\b(i am|i'm)\s+(?:a\s+)?"
+        r"(?:piece\s+of\s+software|software\s+system|software)\b[^.]*\.?\s*",
         "",
         cleaned,
     )
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
-    if not cleaned:
-        return "I can help with that."
+    # Guard against degenerate outputs like "." after aggressive stripping.
+    if not cleaned or not re.search(r"[A-Za-z0-9]", cleaned):
+        return PLACEHOLDER_RESPONSE
     return cleaned
 
 
@@ -108,12 +261,12 @@ def _load_agent_context(actor_id: str) -> str:
         # Fallback to direct file reads
         identity_path = root / "identity.md"
         soul_path = root / "soul.md"
-        parts: list[str] = []
+        fallback_parts: list[str] = []
         if identity_path.exists():
-            parts.append(identity_path.read_text())
+            fallback_parts.append(identity_path.read_text())
         if soul_path.exists():
-            parts.append(soul_path.read_text())
-        return "\n\n".join(parts).strip()
+            fallback_parts.append(soul_path.read_text())
+        return "\n\n".join(fallback_parts).strip()
 
 
 def _build_environment_context(conn: sqlite3.Connection) -> str:
@@ -136,6 +289,14 @@ def _build_environment_context(conn: sqlite3.Connection) -> str:
         "coder": "code implementation",
         "researcher": "web research",
         "planner": "task planning",
+        "tester": "test quality",
+        "lintfixer": "lint & typecheck fixes",
+        "api_guardian": "API contracts & auth",
+        "data_migrator": "database migrations",
+        "web_builder": "frontend UI",
+        "security_reviewer": "security audits",
+        "docs_keeper": "documentation",
+        "release_ops": "release operations",
     }
     roster_line = "none"
     try:
@@ -153,7 +314,8 @@ def _build_environment_context(conn: sqlite3.Connection) -> str:
         f"Host machine: {host_line}\n"
         f"System state: {state_line}\n"
         f"Available agents: {roster_line}\n"
-        "Reminder: Handle simple requests directly. Only delegate when the task genuinely requires a specialist."
+        "Reminder: Handle simple requests directly. "
+        "Only delegate when the task genuinely requires a specialist."
     )
 
 
@@ -170,6 +332,30 @@ def _update_heartbeat(actor_id: str, message: str) -> None:
         "## Last Action\n"
         f"{message[:2000]}\n"
     )
+
+
+def _enqueue_memory_index(
+    *,
+    trace_id: str,
+    thread_id: str,
+    text: str,
+    metadata: dict[str, object],
+) -> None:
+    try:
+        from jarvis.tasks import get_task_runner
+
+        get_task_runner().send_task(
+            "jarvis.tasks.memory.index_event",
+            kwargs={
+                "trace_id": trace_id,
+                "thread_id": thread_id,
+                "text": text,
+                "metadata": metadata,
+            },
+            queue="tools_io",
+        )
+    except Exception:
+        logger.debug("failed to enqueue assistant memory indexing", exc_info=True)
 
 
 async def run_agent_step(
@@ -232,6 +418,17 @@ async def run_agent_step(
         )
         if command_result is not None:
             command_message_id = insert_message(conn, thread_id, "assistant", command_result)
+            _enqueue_memory_index(
+                trace_id=trace_id,
+                thread_id=thread_id,
+                text=command_result,
+                metadata={
+                    "role": "assistant",
+                    "actor_id": actor_id,
+                    "message_id": command_message_id,
+                    "source": "command.executed",
+                },
+            )
             _update_heartbeat(actor_id, f"Executed command on thread {thread_id}")
             emit_event(
                 conn,
@@ -254,6 +451,52 @@ async def run_agent_step(
 
     memory = MemoryService()
     summaries = memory.thread_summary(conn, thread_id)
+    state_store = StateStore()
+    if int(settings.state_extraction_enabled) == 1:
+        try:
+            extraction_result = await extract_state_items(
+                conn=conn,
+                thread_id=thread_id,
+                router=router,
+                memory=memory,
+            )
+            extraction_payload = {
+                "thread_id": thread_id,
+                "actor_id": actor_id,
+                "items_extracted": extraction_result.items_extracted,
+                "items_merged": extraction_result.items_merged,
+                "items_conflicted": extraction_result.items_conflicted,
+                "items_dropped": extraction_result.items_dropped,
+                "duration_ms": extraction_result.duration_ms,
+                "skipped_reason": extraction_result.skipped_reason,
+            }
+            logger.info(
+                "State extraction result: %s",
+                json.dumps(extraction_payload, sort_keys=True),
+            )
+            if notify_fn is not None:
+                notify_fn("state.extraction.complete", extraction_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="state.extraction.complete",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(extraction_payload),
+                    payload_redacted_json=json.dumps(redact_payload(extraction_payload)),
+                ),
+            )
+        except Exception:
+            logger.exception("Structured state extraction failed for thread %s", thread_id)
+    active_state_items = state_store.get_active_items(
+        conn, thread_id, limit=max(1, int(settings.state_max_active_items))
+    )
+    structured_state = render_state_section(active_state_items)
     retrieved = [item["text"] for item in memory.search(conn, thread_id, limit=8)]
     kb_context: list[str] = []
     if actor_id == "main":
@@ -300,15 +543,10 @@ async def run_agent_step(
     agent_context = f"{agent_context}\n\n{IDENTITY_POLICY}"
     agent_context = f"{agent_context}\n\n[environment]\n{_build_environment_context(conn)}"
 
-    # Choose token budget based on which provider is available
-    try:
-        health = await router.health()
-        primary_ok = health.get("primary", False)
-    except Exception:
-        primary_ok = False
+    primary_provider = resolve_primary_provider_name(settings)
     token_budget = (
         settings.prompt_budget_gemini_tokens
-        if primary_ok
+        if primary_provider == "gemini"
         else settings.prompt_budget_sglang_tokens
     )
 
@@ -326,6 +564,7 @@ async def run_agent_step(
         system_context=agent_context,
         summary_short=summaries["short"],
         summary_long=summaries["long"],
+        structured_state=structured_state,
         memory_chunks=kb_context + retrieved,
         tail=tail,
         token_budget=token_budget,
@@ -371,10 +610,15 @@ async def run_agent_step(
         mem_service.compact_thread(conn, thread_id, llm_summarize=False)
         # Reload summaries after compaction
         summaries = mem_service.thread_summary(conn, thread_id)
+        active_state_items = state_store.get_active_items(
+            conn, thread_id, limit=max(1, int(settings.state_max_active_items))
+        )
+        structured_state = render_state_section(active_state_items)
         system_prompt, user_prompt, prompt_report = build_prompt_with_report(
             system_context=agent_context,
             summary_short=summaries["short"],
             summary_long=summaries["long"],
+            structured_state=structured_state,
             memory_chunks=kb_context + retrieved,
             tail=tail,
             token_budget=token_budget,
@@ -419,6 +663,7 @@ async def run_agent_step(
         run_end_payload: dict[str, object] = {"iteration": step_idx, "lane": lane}
         if primary_error:
             run_end_payload["primary_error"] = primary_error[:500]
+            run_end_payload.update(_extract_primary_failure_fields(primary_error))
         if notify_fn is not None:
             notify_fn("model.run.end", run_end_payload)
         emit_event(
@@ -442,6 +687,7 @@ async def run_agent_step(
             fallback_payload: dict[str, object] = {"iteration": step_idx}
             if primary_error:
                 fallback_payload["primary_error"] = primary_error[:500]
+                fallback_payload.update(_extract_primary_failure_fields(primary_error))
             if notify_fn is not None:
                 notify_fn("model.fallback", fallback_payload)
             emit_event(
@@ -461,13 +707,62 @@ async def run_agent_step(
                     ),
                 ),
             )
-        final_text = _enforce_identity_policy(model_resp.text)
+        stripped_text = _strip_control_tokens(model_resp.text)
+        stripped_text, embedded_tool_calls = _extract_embedded_tool_payload(stripped_text)
+        reasoning_text_raw = getattr(model_resp, "reasoning_text", "")
+        reasoning_text = (
+            _strip_control_tokens(reasoning_text_raw)
+            if isinstance(reasoning_text_raw, str)
+            else ""
+        ).strip()
+        reasoning_parts_raw = getattr(model_resp, "reasoning_parts", [])
+        reasoning_parts = reasoning_parts_raw if isinstance(reasoning_parts_raw, list) else []
+        parsed_tool_calls = (
+            _normalize_tool_calls(model_resp.tool_calls)
+            if model_resp.tool_calls
+            else embedded_tool_calls
+        )
+        thought_text = reasoning_text or stripped_text
+        thought_payload: dict[str, object] = {
+            "iteration": step_idx,
+            "lane": lane,
+            "text": thought_text,
+            "thought_source": (
+                "provider_reasoning" if reasoning_text else "assistant_text_fallback"
+            ),
+            "tool_call_count": len(parsed_tool_calls),
+            "tool_calls_preview": [
+                str(item.get("name", ""))
+                for item in parsed_tool_calls
+                if isinstance(item, dict) and str(item.get("name", "")).strip()
+            ],
+        }
+        if reasoning_parts:
+            thought_payload["reasoning_parts"] = reasoning_parts
+        if notify_fn is not None:
+            notify_fn("agent.thought", thought_payload)
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="agent.thought",
+                component="orchestrator",
+                actor_type="agent",
+                actor_id=actor_id,
+                payload_json=json.dumps(thought_payload),
+                payload_redacted_json=json.dumps(redact_payload(thought_payload)),
+            ),
+        )
+        final_text = _strip_control_tokens(_enforce_identity_policy(stripped_text))
 
-        if not model_resp.tool_calls or step_idx >= MAX_TOOL_ITERATIONS:
+        if not parsed_tool_calls or step_idx >= MAX_TOOL_ITERATIONS:
             break
 
-        convo.append({"role": "assistant", "content": model_resp.text})
-        for tool_call in model_resp.tool_calls:
+        convo.append({"role": "assistant", "content": stripped_text})
+        for tool_call in parsed_tool_calls:
             tool_name = str(tool_call.get("name", ""))
             raw_args = tool_call.get("arguments", {})
             arguments = raw_args if isinstance(raw_args, dict) else {}
@@ -499,6 +794,19 @@ async def run_agent_step(
                         },
                     )
                 payload = json.dumps({"tool": tool_name, "result": result})
+                _enqueue_memory_index(
+                    trace_id=trace_id,
+                    thread_id=thread_id,
+                    text=f"Tool {tool_name} succeeded on iteration {step_idx + 1}.",
+                    metadata={
+                        "role": "system",
+                        "actor_id": actor_id,
+                        "source": "tool.call.end",
+                        "tool": tool_name,
+                        "status": "success",
+                        "iteration": step_idx,
+                    },
+                )
             except Exception as exc:
                 logger.exception("Tool execution failed for '%s'", tool_name)
                 if notify_fn is not None:
@@ -511,9 +819,187 @@ async def run_agent_step(
                         },
                     )
                 payload = json.dumps({"tool": tool_name, "error": str(exc)})
+                _enqueue_memory_index(
+                    trace_id=trace_id,
+                    thread_id=thread_id,
+                    text=f"Tool {tool_name} failed on iteration {step_idx + 1}: {str(exc)[:240]}",
+                    metadata={
+                        "role": "system",
+                        "actor_id": actor_id,
+                        "source": "tool.call.end",
+                        "tool": tool_name,
+                        "status": "error",
+                        "iteration": step_idx,
+                    },
+                )
             convo.append({"role": "user", "content": f"[tool_result] {payload}"})
 
-    message_id = insert_message(conn, thread_id, "assistant", final_text)
+    if lane == "fallback" and final_text.strip() == PLACEHOLDER_RESPONSE:
+        for retry_idx in range(FALLBACK_ONLY_RETRIES):
+            synthetic_iteration = MAX_TOOL_ITERATIONS + 1 + retry_idx
+            start_payload = {"iteration": synthetic_iteration, "fallback_only": True}
+            if notify_fn is not None:
+                notify_fn("model.run.start", start_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="model.run.start",
+                    component="orchestrator",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(start_payload),
+                    payload_redacted_json=json.dumps(redact_payload(start_payload)),
+                ),
+            )
+            retry_resp, retry_lane, retry_primary_error = await router.generate(
+                convo,
+                tools=None,
+                priority="normal" if actor_id == "main" else "low",
+            )
+            run_end_payload = {
+                "iteration": synthetic_iteration,
+                "lane": retry_lane,
+                "fallback_only": True,
+            }
+            if retry_primary_error:
+                run_end_payload["primary_error"] = retry_primary_error[:500]
+                run_end_payload.update(_extract_primary_failure_fields(retry_primary_error))
+            if notify_fn is not None:
+                notify_fn("model.run.end", run_end_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="model.run.end",
+                    component="orchestrator",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(run_end_payload),
+                    payload_redacted_json=json.dumps(redact_payload(run_end_payload)),
+                ),
+            )
+            if retry_lane == "fallback":
+                fallback_payload: dict[str, object] = {
+                    "iteration": synthetic_iteration,
+                    "fallback_only": True,
+                }
+                if retry_primary_error:
+                    fallback_payload["primary_error"] = retry_primary_error[:500]
+                    fallback_payload.update(_extract_primary_failure_fields(retry_primary_error))
+                if notify_fn is not None:
+                    notify_fn("model.fallback", fallback_payload)
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id,
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="model.fallback",
+                        component="orchestrator",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(fallback_payload),
+                        payload_redacted_json=json.dumps(redact_payload(fallback_payload)),
+                    ),
+                )
+            retry_text = _strip_control_tokens(
+                _enforce_identity_policy(_strip_control_tokens(retry_resp.text))
+            )
+            retry_reasoning_raw = getattr(retry_resp, "reasoning_text", "")
+            retry_reasoning = (
+                _strip_control_tokens(retry_reasoning_raw)
+                if isinstance(retry_reasoning_raw, str)
+                else ""
+            ).strip()
+            retry_reasoning_parts_raw = getattr(retry_resp, "reasoning_parts", [])
+            retry_reasoning_parts = (
+                retry_reasoning_parts_raw if isinstance(retry_reasoning_parts_raw, list) else []
+            )
+            retry_thought_payload: dict[str, object] = {
+                "iteration": synthetic_iteration,
+                "lane": retry_lane,
+                "fallback_only": True,
+                "text": retry_reasoning or _strip_control_tokens(retry_resp.text),
+                "thought_source": (
+                    "provider_reasoning"
+                    if retry_reasoning
+                    else "assistant_text_fallback"
+                ),
+                "tool_call_count": 0,
+                "tool_calls_preview": [],
+            }
+            if retry_reasoning_parts:
+                retry_thought_payload["reasoning_parts"] = retry_reasoning_parts
+            if notify_fn is not None:
+                notify_fn("agent.thought", retry_thought_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="agent.thought",
+                    component="orchestrator",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(retry_thought_payload),
+                    payload_redacted_json=json.dumps(redact_payload(retry_thought_payload)),
+                ),
+            )
+            if retry_text and retry_text != PLACEHOLDER_RESPONSE:
+                final_text = retry_text
+                lane = retry_lane
+                if retry_primary_error:
+                    primary_error = retry_primary_error
+                break
+
+    if final_text.strip() == PLACEHOLDER_RESPONSE:
+        final_text = DEGRADED_RESPONSE
+        degraded_payload = {
+            "reason": "placeholder_response",
+            "actor_id": actor_id,
+        }
+        if notify_fn is not None:
+            notify_fn("agent.response.degraded", degraded_payload)
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="agent.response.degraded",
+                component="orchestrator",
+                actor_type="agent",
+                actor_id=actor_id,
+                payload_json=json.dumps(degraded_payload),
+                payload_redacted_json=json.dumps(redact_payload(degraded_payload)),
+            ),
+        )
+
+    message_role = "assistant" if actor_id == "main" else "agent"
+    message_id = insert_message(conn, thread_id, message_role, final_text)
+    _enqueue_memory_index(
+        trace_id=trace_id,
+        thread_id=thread_id,
+        text=final_text,
+        metadata={
+            "role": message_role,
+            "actor_id": actor_id,
+            "message_id": message_id,
+            "source": "agent.step.end",
+            "lane": lane,
+        },
+    )
     _update_heartbeat(actor_id, f"Produced assistant reply for thread {thread_id}")
 
     # Check if thread needs compaction based on N-message threshold
@@ -571,9 +1057,9 @@ def _maybe_trigger_compaction(
     ).fetchone()
     if row is not None and int(row["cnt"]) >= threshold:
         try:
-            from jarvis.celery_app import celery_app
+            from jarvis.tasks import get_task_runner
 
-            celery_app.send_task(
+            get_task_runner().send_task(
                 "jarvis.tasks.memory.compact_thread",
                 kwargs={"thread_id": thread_id},
                 queue="agent_default",

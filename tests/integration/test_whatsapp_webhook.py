@@ -1,5 +1,4 @@
 from fastapi.testclient import TestClient
-from kombu.exceptions import OperationalError
 
 from jarvis.db.connection import get_conn
 from jarvis.main import app
@@ -49,10 +48,12 @@ def test_inbound_accepted() -> None:
 def test_inbound_degraded_when_broker_unavailable(monkeypatch) -> None:
     from jarvis.channels.whatsapp import router as whatsapp_router
 
-    def fake_send_task(*_args, **_kwargs):
-        raise OperationalError("broker down")
+    class _FailRunner:
+        def send_task(self, *_args, **_kwargs) -> bool:
+            raise RuntimeError("runner unavailable")
 
-    monkeypatch.setattr(whatsapp_router.celery_app, "send_task", fake_send_task)
+    monkeypatch.setattr(whatsapp_router, "get_task_runner", lambda: _FailRunner())
+
     client = TestClient(app)
     response = client.post("/webhooks/whatsapp", json=PAYLOAD)
     assert response.status_code == 202
@@ -85,13 +86,25 @@ def test_webhook_to_outbound_flow_emits_events(monkeypatch) -> None:
     }
     enqueued: list[dict[str, object]] = []
 
-    def fake_send_task(name: str, kwargs: dict[str, str], queue: str) -> None:
+    def fake_send_task(name: str, kwargs: dict[str, str], queue: str) -> bool:
         enqueued.append({"name": name, "kwargs": kwargs, "queue": queue})
+        return True
 
     async def fake_send_text(_recipient: str, _text: str) -> int:
         return 200
 
-    monkeypatch.setattr(whatsapp_router.celery_app, "send_task", fake_send_task)
+    class _InboundRunner:
+        def send_task(self, name: str, kwargs: dict[str, str], queue: str) -> bool:
+            return fake_send_task(name, kwargs, queue)
+
+    monkeypatch.setattr(whatsapp_router, "get_task_runner", lambda: _InboundRunner())
+
+    class _Runner:
+        def send_task(self, name: str, kwargs: dict[str, str], queue: str) -> bool:
+            enqueued.append({"name": name, "kwargs": kwargs, "queue": queue})
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.agent.get_task_runner", lambda: _Runner())
 
     from jarvis.channels.registry import get_channel
 

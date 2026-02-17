@@ -9,7 +9,7 @@ router = APIRouter(prefix="/permissions", tags=["api-permissions"])
 
 
 @router.get("")
-def get_permissions(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:
+def get_permissions(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
     del ctx
     with get_conn() as conn:
         rows = conn.execute(
@@ -30,7 +30,9 @@ def get_permissions(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
             },
         )
         if row["tool_name"] is not None:
-            item["tools"][str(row["tool_name"])] = str(row["effect"])
+            tools = item["tools"]
+            assert isinstance(tools, dict)
+            tools[str(row["tool_name"])] = str(row["effect"])
     return {"items": list(grouped.values())}
 
 
@@ -38,7 +40,7 @@ def get_permissions(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
 def set_permission(
     principal_id: str,
     tool_name: str,
-    ctx: UserContext = Depends(require_admin),  # TODO: admin-only now
+    ctx: UserContext = Depends(require_admin),  # TODO: admin-only now  # noqa: B008
 ) -> dict[str, bool]:
     del ctx
     with get_conn() as conn:
@@ -57,7 +59,7 @@ def set_permission(
 def delete_permission(
     principal_id: str,
     tool_name: str,
-    ctx: UserContext = Depends(require_admin),  # TODO: admin-only now
+    ctx: UserContext = Depends(require_admin),  # TODO: admin-only now  # noqa: B008
 ) -> dict[str, bool]:
     del ctx
     with get_conn() as conn:

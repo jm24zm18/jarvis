@@ -1,4 +1,4 @@
-.PHONY: dev api worker test test-gates lint typecheck migrate setup doctor \
+.PHONY: dev api test test-gates lint typecheck migrate setup doctor \
        web-install web-build web-dev web-lint web-typecheck web-test \
        hooks validate-agents test-migrations security
 
@@ -7,9 +7,6 @@ dev:
 
 api:
 	uv run uvicorn jarvis.main:app --reload --app-dir src
-
-worker:
-	uv run celery -A jarvis.celery_app worker -Q agent_priority,agent_default,tools_io,local_llm --loglevel=info
 
 test:
 	uv run pytest tests

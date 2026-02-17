@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from fastapi import HTTPException
 
+from jarvis.agents.loader import get_all_agent_ids
 from jarvis.ids import new_id
 
 
@@ -188,6 +189,25 @@ def record_exec_host_result(
     return lockdown == 1
 
 
+def ensure_root_user(conn: sqlite3.Connection) -> str:
+    """Ensure a root admin user exists for system/agent operations."""
+    external_id = "system:root"
+    row = conn.execute(
+        "SELECT id, role FROM users WHERE external_id=?", (external_id,)
+    ).fetchone()
+    if row:
+        user_id = str(row["id"])
+        if row["role"] != "admin":
+            conn.execute("UPDATE users SET role='admin' WHERE id=?", (user_id,))
+        return user_id
+    user_id = new_id("usr")
+    conn.execute(
+        "INSERT INTO users(id, external_id, role, created_at) VALUES(?,?,?,?)",
+        (user_id, external_id, "admin", now_iso()),
+    )
+    return user_id
+
+
 def ensure_user(conn: sqlite3.Connection, external_id: str) -> str:
     row = conn.execute("SELECT id FROM users WHERE external_id=?", (external_id,)).fetchone()
     if row:
@@ -320,7 +340,7 @@ def set_thread_verbose(conn: sqlite3.Connection, thread_id: str, verbose: bool) 
         (
             thread_id,
             int(verbose),
-            json.dumps(["main", "researcher", "planner", "coder"]),
+            json.dumps(sorted(get_all_agent_ids())),
             now_iso(),
         ),
     )
