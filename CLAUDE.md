@@ -60,6 +60,7 @@ uv run jarvis skill install <path>
 - Every agent bundle in `agents/<id>/` must include `identity.md`, `soul.md`, `heartbeat.md`.
 - New DB migration files must be additive, ordered, and never renumber existing migrations.
 - Do not widen tool permissions by default; explicit allow is required.
+- Self-update evidence must include concrete file and line references.
 
 ## Project Structure
 

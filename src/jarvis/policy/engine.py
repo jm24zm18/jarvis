@@ -1,9 +1,114 @@
 """Minimal policy engine for tool access."""
 
+import json
 import sqlite3
+from pathlib import Path
+from typing import Any
 
 SAFE_DURING_LOCKDOWN = {"session_list", "session_history"}
 SESSION_TOOLS = {"session_list", "session_history", "session_send"}
+HIGH_RISK_TOOLS = {"exec_host", "session_send"}
+PATH_HINT_KEYS = {
+    "path",
+    "paths",
+    "cwd",
+    "file",
+    "files",
+    "dir",
+    "directory",
+    "target",
+    "repo_path",
+}
+
+
+def _risk_rank(value: str) -> int:
+    return {"low": 0, "medium": 1, "high": 2}.get(value.strip().lower(), 0)
+
+
+def _normalize_path(value: str) -> str:
+    try:
+        return str(Path(value).expanduser().resolve())
+    except OSError:
+        return value
+
+
+def _path_allowed(candidate: str, allowed_prefixes: list[str]) -> bool:
+    for prefix in allowed_prefixes:
+        if candidate == prefix or candidate.startswith(prefix.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def _extract_paths(arguments: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+
+    def visit(value: Any, hint: str | None = None) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                visit(child, key)
+            return
+        if isinstance(value, list):
+            for child in value:
+                visit(child, hint)
+            return
+        if isinstance(value, str) and hint and hint in PATH_HINT_KEYS:
+            clean = value.strip()
+            if clean:
+                paths.append(_normalize_path(clean))
+
+    visit(arguments)
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in paths:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return unique
+
+
+def _governance_decision(
+    conn: sqlite3.Connection,
+    principal_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> tuple[bool, str]:
+    row = conn.execute(
+        (
+            "SELECT risk_tier, allowed_paths_json, can_request_privileged_change "
+            "FROM agent_governance WHERE principal_id=? LIMIT 1"
+        ),
+        (principal_id,),
+    ).fetchone()
+    if row is None:
+        return True, "allow"
+
+    risk_tier = str(row["risk_tier"]).strip().lower()
+    can_request = int(row["can_request_privileged_change"]) == 1
+
+    if (
+        tool_name in HIGH_RISK_TOOLS
+        and _risk_rank(risk_tier) < _risk_rank("high")
+        and not can_request
+    ):
+        return False, "R6: governance.risk_tier"
+
+    raw_paths = row["allowed_paths_json"]
+    try:
+        decoded = json.loads(str(raw_paths)) if raw_paths is not None else []
+    except json.JSONDecodeError:
+        decoded = []
+    allowed_prefixes = [
+        _normalize_path(item.strip())
+        for item in decoded
+        if isinstance(item, str) and item.strip()
+    ]
+    if not allowed_prefixes:
+        return True, "allow"
+    for candidate in _extract_paths(arguments):
+        if not _path_allowed(candidate, allowed_prefixes):
+            return False, "R7: governance.allowed_paths"
+    return True, "allow"
 
 
 def is_allowed(conn: sqlite3.Connection, principal_id: str, tool_name: str) -> bool:
@@ -14,7 +119,12 @@ def is_allowed(conn: sqlite3.Connection, principal_id: str, tool_name: str) -> b
     return bool(row and row["effect"] == "allow")
 
 
-def decision(conn: sqlite3.Connection, principal_id: str, tool_name: str) -> tuple[bool, str]:
+def decision(
+    conn: sqlite3.Connection,
+    principal_id: str,
+    tool_name: str,
+    arguments: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
     state_row = conn.execute(
         "SELECT lockdown, restarting FROM system_state WHERE id='singleton'"
     ).fetchone()
@@ -28,6 +138,11 @@ def decision(conn: sqlite3.Connection, principal_id: str, tool_name: str) -> tup
         return False, "R5: main-agent-only session tool"
     if not is_allowed(conn, principal_id, tool_name):
         return False, "R4: permission denied"
+    gov_allowed, gov_reason = _governance_decision(
+        conn, principal_id, tool_name, arguments or {}
+    )
+    if not gov_allowed:
+        return False, gov_reason
     return True, "allow"
 
 

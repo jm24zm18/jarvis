@@ -5,6 +5,7 @@ from pathlib import Path
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import ensure_system_state
+from jarvis.selfupdate.pipeline import write_context
 from jarvis.tasks.selfupdate import (
     self_update_apply,
     self_update_propose,
@@ -51,8 +52,9 @@ def _evidence() -> dict[str, object]:
     return {
         "intent": "apply patch safely",
         "file_refs": ["hello.txt:1"],
+        "line_refs": ["hello.txt:1"],
         "policy_refs": ["deny-by-default tool access"],
-        "invariant_checks": ["append-only migrations"],
+        "invariant_checks": ["append-only database migrations"],
         "test_plan": ["pytest tests -q"],
         "risk_notes": ["low-risk text replacement"],
     }
@@ -254,6 +256,54 @@ def test_selfupdate_requires_evidence_packet(tmp_path: Path) -> None:
     assert propose["status"] == "rejected"
 
 
+def test_selfupdate_requires_line_refs(tmp_path: Path) -> None:
+    trace_id = "trc_self_missing_line_refs"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    evidence = _evidence()
+    del evidence["line_refs"]
+    propose = self_update_propose(
+        trace_id,
+        str(repo),
+        patch,
+        "missing line refs",
+        evidence=evidence,
+    )
+    assert propose["status"] == "rejected"
+
+
+def test_selfupdate_rejects_malformed_line_refs(tmp_path: Path) -> None:
+    trace_id = "trc_self_bad_line_refs"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    evidence = _evidence()
+    evidence["line_refs"] = ["hello.txt:0"]
+    propose = self_update_propose(trace_id, str(repo), patch, "bad line refs", evidence=evidence)
+    assert propose["status"] == "rejected"
+
+
 def test_selfupdate_critical_path_requires_test_changes(tmp_path: Path) -> None:
     trace_id = "trc_self_critical_no_tests"
     _clean(trace_id)
@@ -285,3 +335,31 @@ def test_selfupdate_critical_path_requires_test_changes(tmp_path: Path) -> None:
     result = self_update_test(trace_id)
     assert result["status"] == "failed"
     assert "requires tests" in result["reason"]
+
+
+def test_selfupdate_validate_requires_baseline_for_replay(tmp_path: Path) -> None:
+    trace_id = "trc_self_missing_baseline"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    _ = self_update_propose(trace_id, str(repo), patch, "test", evidence=_evidence())
+    write_context(
+        trace_id,
+        Path(get_settings().selfupdate_patch_dir),
+        str(repo),
+        "test",
+        baseline_ref="",
+    )
+    result = self_update_validate(trace_id)
+    assert result["status"] == "rejected"
+    assert "baseline_ref" in result["reason"]

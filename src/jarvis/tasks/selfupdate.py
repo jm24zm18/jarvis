@@ -10,6 +10,7 @@ import httpx
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import consume_approval, get_system_state, now_iso, register_rollback
+from jarvis.events.envelope import with_action_envelope
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
@@ -27,6 +28,7 @@ from jarvis.selfupdate.pipeline import (
     read_context,
     read_patch,
     read_state,
+    replay_patch_determinism_check,
     run_smoke_gate,
     touches_critical_paths,
     update_artifact_section,
@@ -50,6 +52,7 @@ def _patch_base() -> Path:
 
 
 def _emit(trace_id: str, event_type: str, payload: dict[str, object]) -> None:
+    enveloped = with_action_envelope(payload)
     with get_conn() as conn:
         emit_event(
             conn,
@@ -62,8 +65,8 @@ def _emit(trace_id: str, event_type: str, payload: dict[str, object]) -> None:
                 component="selfupdate",
                 actor_type="system",
                 actor_id="selfupdate",
-                payload_json=json.dumps(payload),
-                payload_redacted_json=json.dumps(redact_payload(payload)),
+                payload_json=json.dumps(enveloped),
+                payload_redacted_json=json.dumps(redact_payload(enveloped)),
             ),
         )
 
@@ -355,11 +358,29 @@ def self_update_propose(
     if issues:
         reason = "; ".join(f"{item.field}:{item.message}" for item in issues)
         write_state(trace_id, patch_base, "rejected", reason)
-        _emit(trace_id, "evidence.check", {"status": "failed", "reason": reason})
+        _emit(
+            trace_id,
+            "evidence.check",
+            {
+                "status": "failed",
+                "reason": reason,
+                "result": {
+                    "status": "failed",
+                    "issues": [
+                        {"field": item.field, "message": item.message}
+                        for item in issues
+                    ],
+                },
+            },
+        )
         _record_failure_capsule(trace_id, "propose", reason)
         return {"trace_id": trace_id, "status": "rejected", "reason": reason}
 
-    _emit(trace_id, "evidence.check", {"status": "passed"})
+    _emit(
+        trace_id,
+        "evidence.check",
+        {"status": "passed", "result": {"status": "passed"}},
+    )
     baseline_ref = ""
     proc = subprocess.run(
         ["git", "-C", repo_path, "rev-parse", "HEAD"],
@@ -413,14 +434,68 @@ def self_update_validate(trace_id: str) -> dict[str, str]:
         _record_failure_capsule(trace_id, "validate", git_result.reason)
         return {"trace_id": trace_id, "status": "rejected", "reason": git_result.reason}
 
+    replay_result = replay_patch_determinism_check(
+        repo_path=context["repo_path"],
+        baseline_ref=context.get("baseline_ref", ""),
+        patch_path=patch_path,
+        work_dir=patch_base / trace_id,
+    )
+    if not replay_result.ok:
+        write_state(trace_id, patch_base, "rejected", replay_result.reason)
+        update_artifact_section(
+            trace_id,
+            patch_base,
+            "verification",
+            {
+                "status": "rejected",
+                "detail": replay_result.reason,
+                "replay": {
+                    "status": "failed",
+                    "detail": replay_result.reason,
+                    "tree_hash": replay_result.tree_hash,
+                    "changed_files": replay_result.changed_files,
+                },
+            },
+        )
+        _emit(
+            trace_id,
+            "self_update.validate",
+            {
+                "status": "rejected",
+                "reason": replay_result.reason,
+                "result": {"status": "rejected"},
+            },
+        )
+        _record_failure_capsule(trace_id, "validate", replay_result.reason)
+        return {"trace_id": trace_id, "status": "rejected", "reason": replay_result.reason}
+
     update_artifact_section(
         trace_id,
         patch_base,
         "verification",
-        {"status": "validated", "detail": git_result.reason},
+        {
+            "status": "validated",
+            "detail": git_result.reason,
+            "replay": {
+                "status": "passed",
+                "detail": replay_result.reason,
+                "tree_hash": replay_result.tree_hash,
+                "changed_files": replay_result.changed_files,
+            },
+        },
     )
     write_state(trace_id, patch_base, "validated", git_result.reason)
-    _emit(trace_id, "self_update.validate", {"status": "validated"})
+    _emit(
+        trace_id,
+        "self_update.validate",
+        {
+            "status": "validated",
+            "result": {
+                "status": "validated",
+                "replay_tree_hash": replay_result.tree_hash,
+            },
+        },
+    )
     return {"trace_id": trace_id, "status": "validated"}
 
 

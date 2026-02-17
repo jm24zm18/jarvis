@@ -5,6 +5,7 @@ import sqlite3
 from typing import Any
 
 from jarvis.errors import PolicyError
+from jarvis.events.envelope import with_action_envelope
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
@@ -37,6 +38,7 @@ class ToolRuntime:
             }
             if reason:
                 payload["error"]["reason"] = reason
+            enveloped = with_action_envelope(payload)
             emit_event(
                 conn,
                 EventInput(
@@ -48,11 +50,12 @@ class ToolRuntime:
                     component="tools.runtime",
                     actor_type="agent",
                     actor_id=caller_id,
-                    payload_json=json.dumps(payload),
-                    payload_redacted_json=json.dumps(redact_payload(payload)),
+                    payload_json=json.dumps(enveloped),
+                    payload_redacted_json=json.dumps(redact_payload(enveloped)),
                 ),
             )
 
+        start_payload = with_action_envelope({"tool": tool_name, "arguments": arguments})
         emit_event(
             conn,
             EventInput(
@@ -64,16 +67,17 @@ class ToolRuntime:
                 component="tools.runtime",
                 actor_type="agent",
                 actor_id=caller_id,
-                payload_json=json.dumps({"tool": tool_name, "arguments": arguments}),
-                payload_redacted_json=json.dumps(
-                    redact_payload({"tool": tool_name, "arguments": arguments})
-                ),
+                payload_json=json.dumps(start_payload),
+                payload_redacted_json=json.dumps(redact_payload(start_payload)),
             ),
         )
 
         tool = self.registry.get(tool_name)
         if tool is None:
             reason = "R3: unknown tool"
+            policy_payload = with_action_envelope(
+                {"tool": tool_name, "allowed": False, "reason": reason}
+            )
             emit_event(
                 conn,
                 EventInput(
@@ -85,12 +89,8 @@ class ToolRuntime:
                     component="policy",
                     actor_type="agent",
                     actor_id=caller_id,
-                    payload_json=json.dumps(
-                        {"tool": tool_name, "allowed": False, "reason": reason}
-                    ),
-                    payload_redacted_json=json.dumps(
-                        redact_payload({"tool": tool_name, "allowed": False, "reason": reason})
-                    ),
+                    payload_json=json.dumps(policy_payload),
+                    payload_redacted_json=json.dumps(redact_payload(policy_payload)),
                 ),
             )
             _emit_terminal_error(
@@ -100,8 +100,11 @@ class ToolRuntime:
             )
             raise PolicyError("tool denied by policy: R3: unknown tool")
 
-        allowed, reason = decision(conn, caller_id, tool_name)
+        allowed, reason = decision(conn, caller_id, tool_name, arguments=arguments)
         if not allowed:
+            policy_payload = with_action_envelope(
+                {"tool": tool_name, "allowed": False, "reason": reason}
+            )
             emit_event(
                 conn,
                 EventInput(
@@ -113,12 +116,8 @@ class ToolRuntime:
                     component="policy",
                     actor_type="agent",
                     actor_id=caller_id,
-                    payload_json=json.dumps(
-                        {"tool": tool_name, "allowed": False, "reason": reason}
-                    ),
-                    payload_redacted_json=json.dumps(
-                        redact_payload({"tool": tool_name, "allowed": False, "reason": reason})
-                    ),
+                    payload_json=json.dumps(policy_payload),
+                    payload_redacted_json=json.dumps(redact_payload(policy_payload)),
                 ),
             )
             _emit_terminal_error(
@@ -134,6 +133,7 @@ class ToolRuntime:
             _emit_terminal_error("runtime_exception", str(exc))
             raise
 
+        end_payload = with_action_envelope({"tool": tool_name, "result": result})
         emit_event(
             conn,
             EventInput(
@@ -145,10 +145,8 @@ class ToolRuntime:
                 component="tools.runtime",
                 actor_type="agent",
                 actor_id=caller_id,
-                payload_json=json.dumps({"tool": tool_name, "result": result}),
-                payload_redacted_json=json.dumps(
-                    redact_payload({"tool": tool_name, "result": result})
-                ),
+                payload_json=json.dumps(end_payload),
+                payload_redacted_json=json.dumps(redact_payload(end_payload)),
             ),
         )
         return result

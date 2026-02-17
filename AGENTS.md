@@ -54,6 +54,7 @@ uv run jarvis skill list
   - Unknown tool: deny
   - During lockdown: deny all but safe tools
   - Session tools: `main` agent only
+- Self-update evidence is mandatory and must include path+line references.
 - Ownership boundaries must hold for non-admin users across API and WebSocket subscriptions.
 
 ## Decision Trees

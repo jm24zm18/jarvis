@@ -7,6 +7,8 @@
 - Migration ordering is append-only and monotonic (`src/jarvis/db/migrations/*`).
 - Event schema fields (`trace_id`, `span_id`, `event_type`) remain stable for observability.
 - ID format prefixes are stable (`src/jarvis/ids.py`).
+- Self-update evidence packets must include `file_refs`, `line_refs`, `policy_refs`, and `invariant_checks`.
+- Self-update validation must preserve deterministic replay from the captured `baseline_ref`.
 
 ## High-Risk Files
 

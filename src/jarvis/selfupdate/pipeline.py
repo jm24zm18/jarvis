@@ -27,6 +27,14 @@ class ValidationResult:
     reason: str
 
 
+@dataclass(slots=True)
+class ReplayResult:
+    ok: bool
+    reason: str
+    tree_hash: str
+    changed_files: list[str]
+
+
 def trace_dir(base_dir: Path, trace_id: str) -> Path:
     return base_dir / trace_id
 
@@ -320,6 +328,117 @@ def run_smoke_gate(
                 detail = stderr or stdout or f"{cmd[0]} failed"
                 return ValidationResult(ok=False, reason=detail)
         return ValidationResult(ok=True, reason="smoke gate passed")
+    finally:
+        subprocess.run(
+            ["git", "-C", repo_path, "worktree", "remove", "--force", str(worktree)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+
+def replay_patch_determinism_check(
+    repo_path: str,
+    baseline_ref: str,
+    patch_path: Path,
+    work_dir: Path,
+) -> ReplayResult:
+    baseline = baseline_ref.strip()
+    if not baseline:
+        return ReplayResult(
+            ok=False,
+            reason="missing baseline_ref for replay verification",
+            tree_hash="",
+            changed_files=[],
+        )
+    work_dir.mkdir(parents=True, exist_ok=True)
+    worktree = work_dir / "replay_worktree"
+    if worktree.exists():
+        subprocess.run(
+            ["git", "-C", repo_path, "worktree", "remove", "--force", str(worktree)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    add = subprocess.run(
+        ["git", "-C", repo_path, "worktree", "add", "--detach", str(worktree), baseline],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if add.returncode != 0:
+        return ReplayResult(
+            ok=False,
+            reason=add.stderr.strip() or "replay worktree add failed",
+            tree_hash="",
+            changed_files=[],
+        )
+    try:
+        apply_result = git_apply(str(worktree), patch_path)
+        if not apply_result.ok:
+            return ReplayResult(
+                ok=False,
+                reason=apply_result.reason,
+                tree_hash="",
+                changed_files=[],
+            )
+        patch_text = patch_path.read_text()
+        expected_files = sorted(changed_files_from_patch(patch_text))
+        diff_proc = subprocess.run(
+            ["git", "-C", str(worktree), "diff", "--name-only"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if diff_proc.returncode != 0:
+            return ReplayResult(
+                ok=False,
+                reason=diff_proc.stderr.strip() or "replay diff listing failed",
+                tree_hash="",
+                changed_files=[],
+            )
+        changed_files = sorted(
+            [line.strip() for line in diff_proc.stdout.splitlines() if line.strip()]
+        )
+        if changed_files != expected_files:
+            return ReplayResult(
+                ok=False,
+                reason="replay changed files mismatch",
+                tree_hash="",
+                changed_files=changed_files,
+            )
+        write_tree = subprocess.run(
+            ["git", "-C", str(worktree), "write-tree"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if write_tree.returncode != 0:
+            return ReplayResult(
+                ok=False,
+                reason=write_tree.stderr.strip() or "replay write-tree failed",
+                tree_hash="",
+                changed_files=changed_files,
+            )
+        tree_hash = write_tree.stdout.strip()
+        if not tree_hash:
+            return ReplayResult(
+                ok=False,
+                reason="replay tree hash missing",
+                tree_hash="",
+                changed_files=changed_files,
+            )
+        return ReplayResult(
+            ok=True,
+            reason="replay verification passed",
+            tree_hash=tree_hash,
+            changed_files=changed_files,
+        )
     finally:
         subprocess.run(
             ["git", "-C", repo_path, "worktree", "remove", "--force", str(worktree)],
