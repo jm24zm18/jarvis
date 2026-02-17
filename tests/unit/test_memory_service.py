@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -79,6 +80,56 @@ def test_write_persists_metadata_json() -> None:
         ).fetchone()
     assert row is not None
     assert row["metadata_json"] == '{"role": "assistant", "source": "agent.step.end"}'
+
+
+def test_write_chunked_splits_large_payload_and_sets_chunk_metadata() -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550135")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        ids = service.write_chunked(
+            conn,
+            thread_id,
+            "abcdefghij",
+            metadata={"source": "tool.call.end"},
+            chunk_size=4,
+        )
+        rows = conn.execute(
+            (
+                "SELECT id, text, metadata_json FROM memory_items "
+                "WHERE thread_id=? ORDER BY created_at ASC"
+            ),
+            (thread_id,),
+        ).fetchall()
+    assert len(ids) == 3
+    assert len(rows) == 3
+    assert "".join(str(row["text"]) for row in rows) == "abcdefghij"
+    parsed = [json.loads(str(row["metadata_json"])) for row in rows]
+    assert all(item["source"] == "tool.call.end" for item in parsed)
+    assert all(item["is_chunked"] is True for item in parsed)
+    assert [int(item["chunk_index"]) for item in parsed] == [0, 1, 2]
+    assert all(int(item["chunk_total"]) == 3 for item in parsed)
+
+
+def test_search_stitches_chunked_group_and_deduplicates_results() -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550136")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        _ = service.write_chunked(
+            conn,
+            thread_id,
+            "chunked-memory-text",
+            metadata={"source": "agent.thought"},
+            chunk_size=6,
+        )
+        results = service.search(conn, thread_id=thread_id, limit=10)
+    assert results
+    assert results[0]["text"] == "chunked-memory-text"
 
 
 def test_backfill_memory_vec_runtime_from_embeddings() -> None:

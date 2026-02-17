@@ -190,9 +190,11 @@ def test_user_memory_search_scoped() -> None:
 
     response = client.get("/api/v1/memory", headers=_headers(alice["token"]))
     assert response.status_code == 200
-    thread_ids = {item["thread_id"] for item in response.json()["items"]}
+    items = response.json()["items"]
+    thread_ids = {item["thread_id"] for item in items}
     assert alice_thread in thread_ids
     assert bob_thread not in thread_ids
+    assert all(isinstance(item.get("metadata"), dict) for item in items)
 
 
 def test_user_bugs_list_scoped() -> None:

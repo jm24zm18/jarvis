@@ -22,6 +22,7 @@ class MemoryService:
     EVENT_VEC_INDEX_TABLE = "event_vec_index"
     EVENT_VEC_INDEX_MAP_TABLE = "event_vec_index_map"
     BACKFILL_BATCH_SIZE = 200
+    DEFAULT_CHUNK_SIZE = 8192
 
     def ensure_vector_indexes(self, conn: sqlite3.Connection) -> bool:
         return self._ensure_vec_runtime(conn)
@@ -77,6 +78,40 @@ class MemoryService:
         self._upsert_memory_vec_index(conn, memory_id, vector)
         return memory_id
 
+    def write_chunked(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        text: str,
+        metadata: dict[str, object] | None = None,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+    ) -> list[str]:
+        chunk_len = max(1, int(chunk_size))
+        content = str(text)
+        if len(content) <= chunk_len:
+            return [self.write(conn, thread_id, content, metadata=metadata)]
+
+        chunk_group_id = f"mcg_{sha256(content.encode('utf-8')).hexdigest()[:24]}"
+        pieces = [content[idx: idx + chunk_len] for idx in range(0, len(content), chunk_len)]
+        chunk_total = len(pieces)
+        memory_ids: list[str] = []
+        base_metadata = dict(metadata or {})
+        for chunk_idx, piece in enumerate(pieces):
+            chunk_metadata: dict[str, object] = dict(base_metadata)
+            chunk_metadata.update(
+                {
+                    "is_chunked": True,
+                    "chunk_group_id": chunk_group_id,
+                    "chunk_index": chunk_idx,
+                    "chunk_total": chunk_total,
+                    "continued": chunk_idx < (chunk_total - 1),
+                }
+            )
+            memory_ids.append(
+                self.write(conn, thread_id, piece, metadata=chunk_metadata)
+            )
+        return memory_ids
+
     def embed_text(self, text: str) -> list[float]:
         return self._embed_text(text)
 
@@ -111,7 +146,7 @@ class MemoryService:
         vector_weight: float = 0.4,
         bm25_weight: float = 0.35,
         recency_weight: float = 0.25,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, object]]:
         """Hybrid retrieval using Reciprocal Rank Fusion (vector + BM25 + recency)."""
         rrf_k = 60  # RRF smoothing constant
         pool_size = max(limit * 3, 15)
@@ -184,10 +219,85 @@ class MemoryService:
 
         # Sort by fused score
         ranked = sorted(rrf_scores.items(), key=lambda kv: kv[1], reverse=True)
-        return [
-            {"id": mid, "text": all_texts.get(mid, "")}
-            for mid, _ in ranked[:limit]
-        ]
+        results: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for mid, _ in ranked:
+            stitched_id, stitched_text, stitched_metadata = self._materialize_memory_hit(
+                conn,
+                thread_id=thread_id,
+                memory_id=mid,
+                fallback_text=all_texts.get(mid, ""),
+            )
+            if stitched_id in seen:
+                continue
+            seen.add(stitched_id)
+            results.append(
+                {"id": stitched_id, "text": stitched_text, "metadata": stitched_metadata}
+            )
+            if len(results) >= limit:
+                break
+        return results
+
+    @staticmethod
+    def _parse_metadata(metadata_raw: object) -> dict[str, object]:
+        if not isinstance(metadata_raw, str) or not metadata_raw:
+            return {}
+        try:
+            parsed = json.loads(metadata_raw)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _materialize_memory_hit(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        memory_id: str,
+        fallback_text: str,
+    ) -> tuple[str, str, dict[str, object]]:
+        row = conn.execute(
+            "SELECT id, text, metadata_json FROM memory_items WHERE id=? LIMIT 1",
+            (memory_id,),
+        ).fetchone()
+        if row is None:
+            return memory_id, fallback_text, {}
+        metadata = self._parse_metadata(row["metadata_json"])
+        group_id = metadata.get("chunk_group_id")
+        if not isinstance(group_id, str) or not group_id.strip():
+            return str(row["id"]), str(row["text"]), metadata
+        try:
+            chunk_rows = conn.execute(
+                (
+                    "SELECT id, text, metadata_json, created_at "
+                    "FROM memory_items "
+                    "WHERE thread_id=? AND json_extract(metadata_json, '$.chunk_group_id')=? "
+                    "ORDER BY CAST(json_extract(metadata_json, '$.chunk_index') AS INTEGER) ASC, "
+                    "created_at ASC"
+                ),
+                (thread_id, group_id),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return str(row["id"]), str(row["text"]), metadata
+        if not chunk_rows:
+            return str(row["id"]), str(row["text"]), metadata
+        ordered = []
+        for chunk_row in chunk_rows:
+            chunk_metadata = self._parse_metadata(chunk_row["metadata_json"])
+            chunk_index_raw = chunk_metadata.get("chunk_index", 0)
+            if isinstance(chunk_index_raw, int | float | str):
+                try:
+                    chunk_index = int(chunk_index_raw)
+                except ValueError:
+                    chunk_index = 0
+            else:
+                chunk_index = 0
+            ordered.append(
+                (chunk_index, str(chunk_row["id"]), str(chunk_row["text"]), chunk_metadata)
+            )
+        ordered.sort(key=lambda item: item[0])
+        stitched = "".join(item[2] for item in ordered)
+        primary = ordered[0]
+        return primary[1], stitched, primary[3]
 
     def _semantic_scored(
         self,

@@ -1,5 +1,7 @@
 """Memory browser API routes."""
 
+import json
+
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
@@ -15,6 +17,16 @@ class KbUpsertInput(BaseModel):
     title: str
     content: str
     tags: list[str] = Field(default_factory=list)
+
+
+def _parse_metadata(raw: object) -> dict[str, object]:
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 @router.get("")
@@ -40,7 +52,7 @@ def search_memory(
         if q.strip() and not ctx.is_admin:
             rows = conn.execute(
                 (
-                    "SELECT mi.id, mi.thread_id, mi.text, mi.created_at "
+                    "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
                     "FROM memory_fts mf JOIN memory_items mi ON mi.id=mf.memory_id "
                     "JOIN threads t ON t.id=mi.thread_id "
                     "WHERE memory_fts MATCH ? AND t.user_id=? "
@@ -51,7 +63,7 @@ def search_memory(
         elif q.strip():
             rows = conn.execute(
                 (
-                    "SELECT mi.id, mi.thread_id, mi.text, mi.created_at "
+                    "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
                     "FROM memory_fts mf JOIN memory_items mi ON mi.id=mf.memory_id "
                     "WHERE memory_fts MATCH ? ORDER BY mi.created_at DESC LIMIT ?"
                 ),
@@ -60,7 +72,7 @@ def search_memory(
         elif not ctx.is_admin:
             rows = conn.execute(
                 (
-                    "SELECT mi.id, mi.thread_id, mi.text, mi.created_at "
+                    "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
                     "FROM memory_items mi JOIN threads t ON t.id=mi.thread_id "
                     "WHERE t.user_id=? "
                     "ORDER BY mi.created_at DESC LIMIT ?"
@@ -70,7 +82,7 @@ def search_memory(
         else:
             rows = conn.execute(
                 (
-                    "SELECT id, thread_id, text, created_at FROM memory_items "
+                    "SELECT id, thread_id, text, metadata_json, created_at FROM memory_items "
                     "ORDER BY created_at DESC LIMIT ?"
                 ),
                 (limit,),
@@ -80,6 +92,7 @@ def search_memory(
                 "id": str(row["id"]),
                 "thread_id": str(row["thread_id"]),
                 "text": str(row["text"]),
+                "metadata": _parse_metadata(row["metadata_json"]),
                 "created_at": str(row["created_at"]),
             }
             for row in rows

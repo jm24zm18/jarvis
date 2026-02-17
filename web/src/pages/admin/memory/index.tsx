@@ -185,7 +185,30 @@ export default function AdminMemoryPage() {
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-xs leading-relaxed text-[var(--text-secondary)]">
-                    {item.text}
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {typeof item.metadata?.source === "string" ? (
+                          <Badge variant="default">{String(item.metadata.source)}</Badge>
+                        ) : null}
+                        {item.metadata?.is_chunked ? (
+                          <Badge variant="warning">
+                            chunk {Number(item.metadata?.chunk_index ?? 0) + 1}/
+                            {Number(item.metadata?.chunk_total ?? 1)}
+                          </Badge>
+                        ) : null}
+                      </div>
+                      <p className="whitespace-pre-wrap">{item.text}</p>
+                      {item.metadata ? (
+                        <details>
+                          <summary className="cursor-pointer text-[11px] text-[var(--text-muted)]">
+                            details
+                          </summary>
+                          <pre className="mt-1 overflow-auto rounded bg-[var(--bg-mist)] p-2 text-[11px]">
+                            {JSON.stringify(item.metadata, null, 2)}
+                          </pre>
+                        </details>
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               ))}

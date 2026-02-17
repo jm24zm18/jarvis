@@ -80,6 +80,7 @@ export interface MemoryItem {
   id: string;
   thread_id?: string;
   text: string;
+  metadata?: Record<string, unknown>;
   created_at?: string;
 }
 

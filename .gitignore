@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .env
 app.db
+app.db-shm
 .coverage
 workplace/*
 !workplace/.gitkeep
