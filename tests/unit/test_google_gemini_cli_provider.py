@@ -58,7 +58,8 @@ async def test_generate_streams_text_and_tool_calls(tmp_path) -> None:
                 [
                     (
                         "data: "
-                        '{"response":{"candidates":[{"content":{"parts":[{"thought":true,"text":"plan first "},{"text":"hello "}]}}]}}'
+                        '{"response":{"candidates":[{"content":{"parts":['
+                        '{"thought":true,"text":"plan first "},{"text":"hello "}]}}]}}'
                     ),
                     (
                         "data: "

@@ -89,7 +89,7 @@ def _compute_retry_delay_seconds(primary_error: str, attempt: int) -> float:
         return float(min(_MAX_RETRY_DELAY_SECONDS, max(_BASE_RETRY_DELAY_SECONDS, hint)))
     base = min(_MAX_RETRY_DELAY_SECONDS, _BASE_RETRY_DELAY_SECONDS * (2 ** attempt))
     jitter = random.uniform(0.05, 0.25)
-    return min(_MAX_RETRY_DELAY_SECONDS, base + jitter)
+    return float(min(_MAX_RETRY_DELAY_SECONDS, base + jitter))
 
 
 def _parse_retry_after_seconds(text: str) -> int:

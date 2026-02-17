@@ -18,6 +18,9 @@ from jarvis.orchestrator.step import (
     MAX_TOOL_ITERATIONS,
     _enforce_identity_policy,
     _extract_embedded_tool_payload,
+    _extract_primary_failure_fields,
+    _get_thread_compaction_threshold,
+    _load_agent_context,
     run_agent_step,
 )
 from jarvis.providers.base import ModelResponse
@@ -135,7 +138,13 @@ def test_run_agent_step_prefers_provider_reasoning_for_thought_payload(monkeypat
         thread_id = ensure_open_thread(conn, user_id, channel_id)
         insert_message(conn, thread_id, "user", "hello")
         _ = asyncio.run(
-            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_reasoning")
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_reasoning",
+            )
         )
         thought_row = conn.execute(
             "SELECT payload_json FROM events WHERE trace_id=? AND event_type='agent.thought' "
@@ -169,7 +178,10 @@ def test_run_agent_step_worker_ignores_command_short_path(monkeypatch) -> None:
                 actor_id="researcher",
             )
         )
-        row = conn.execute("SELECT role, content FROM messages WHERE id=?", (message_id,)).fetchone()
+        row = conn.execute(
+            "SELECT role, content FROM messages WHERE id=?",
+            (message_id,),
+        ).fetchone()
     assert row is not None and row["content"] == "worker reply"
     assert row["role"] == "agent"
     assert runtime.execute_calls == 0
@@ -432,7 +444,10 @@ def test_run_agent_step_rewrites_placeholder_to_degraded_response(monkeypatch) -
         )
         row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
         evt = conn.execute(
-            "SELECT COUNT(*) AS c FROM events WHERE trace_id=? AND event_type='agent.response.degraded'",
+            (
+                "SELECT COUNT(*) AS c FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.degraded'"
+            ),
             ("trc_step_10",),
         ).fetchone()
     assert row is not None
@@ -445,7 +460,13 @@ def test_run_agent_step_fallback_only_retry_recovers_response(monkeypatch) -> No
     router = _SequenceRouter(
         [
             (ModelResponse(text="I can help with that.", tool_calls=[]), "fallback"),
-            (ModelResponse(text="Recovered answer after fallback retry.", tool_calls=[]), "fallback"),
+            (
+                ModelResponse(
+                    text="Recovered answer after fallback retry.",
+                    tool_calls=[],
+                ),
+                "fallback",
+            ),
         ]
     )
     runtime = _FakeRuntime()
@@ -463,3 +484,97 @@ def test_run_agent_step_fallback_only_retry_recovers_response(monkeypatch) -> No
     assert row["content"] == "Recovered answer after fallback retry."
     assert runtime.execute_calls == 0
     assert router.calls == 2
+
+
+def test_extract_primary_failure_fields_parses_retry_and_request_id() -> None:
+    payload = _extract_primary_failure_fields(
+        "Quota exceeded 429 retry-after 2.5 req_abc123"
+    )
+    assert payload["primary_failure_kind"] == "quota_retryable"
+    assert payload["primary_status_code"] == 429
+    assert payload["primary_retry_seconds"] == 2
+    assert payload["primary_request_id"] == "req_abc123"
+
+
+def test_load_agent_context_falls_back_to_files(monkeypatch, tmp_path) -> None:
+    bundle_dir = tmp_path / "agents" / "tester"
+    bundle_dir.mkdir(parents=True)
+    (bundle_dir / "identity.md").write_text("# id", encoding="utf-8")
+    (bundle_dir / "soul.md").write_text("# soul", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "jarvis.orchestrator.step.load_agent_bundle_cached",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    assert _load_agent_context("tester") == "# id\n\n# soul"
+
+
+def test_get_thread_compaction_threshold_ignores_non_positive_values() -> None:
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550999")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        conn.execute(
+            (
+                "INSERT INTO thread_settings("
+                "thread_id, verbose, active_agent_ids_json, compaction_threshold, updated_at"
+                ") VALUES(?,?,?,?,datetime('now'))"
+            ),
+            (thread_id, 0, "[]", 0),
+        )
+        assert _get_thread_compaction_threshold(conn, thread_id, default=12) == 12
+
+
+class _FailingRuntime(_FakeRuntime):
+    async def execute(
+        self,
+        conn: sqlite3.Connection,
+        tool_name: str,
+        arguments: dict[str, Any],
+        caller_id: str,
+        trace_id: str,
+        thread_id: str | None = None,
+    ) -> dict[str, object]:
+        del conn, tool_name, arguments, caller_id, trace_id, thread_id
+        self.execute_calls += 1
+        raise RuntimeError("tool failed")
+
+
+def test_run_agent_step_emits_tool_error_notification(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="",
+                    tool_calls=[{"name": "echo", "arguments": {"a": "b"}}],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="done", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FailingRuntime()
+    notifications: list[tuple[str, dict[str, object]]] = []
+
+    def notify(event_type: str, payload: dict[str, object]) -> None:
+        notifications.append((event_type, payload))
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550888")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "do thing")
+        _ = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_tool_error",
+                notify_fn=notify,
+            )
+        )
+    assert any(evt == "tool.call.end" and "error" in payload for evt, payload in notifications)

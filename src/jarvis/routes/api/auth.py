@@ -300,6 +300,12 @@ def google_config(ctx: UserContext = Depends(require_auth)) -> dict[str, object]
     now_ms = int(time.time() * 1000)
     seconds_until_access_expiry = max(0, int((access_expires_at_ms - now_ms) / 1000))
     quota = GeminiCodeAssistProvider.quota_status()
+    seconds_remaining_raw = quota.get("seconds_remaining")
+    quota_block_seconds_remaining = (
+        int(seconds_remaining_raw)
+        if isinstance(seconds_remaining_raw, int | float | str)
+        else 0
+    )
     return {
         "configured": configured,
         "has_client_credentials": has_client_credentials,
@@ -312,7 +318,7 @@ def google_config(ctx: UserContext = Depends(require_auth)) -> dict[str, object]
         "current_tier_id": current_tier_id,
         "current_tier_name": current_tier_name,
         "quota_blocked": bool(quota.get("blocked")),
-        "quota_block_seconds_remaining": int(quota.get("seconds_remaining", 0) or 0),
+        "quota_block_seconds_remaining": quota_block_seconds_remaining,
         "quota_block_reason": str(quota.get("reason", "") or ""),
         "last_refresh_attempt_at": str(quota.get("last_refresh_attempt_at", "") or ""),
         "last_refresh_status": str(quota.get("last_refresh_status", "") or ""),

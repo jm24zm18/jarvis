@@ -113,10 +113,10 @@ def _to_state_item(candidate: dict[str, Any]) -> StateItem | None:
 
 
 async def extract_state_items(
-    conn,
+    conn: Any,
     thread_id: str,
     router: ProviderRouter,
-    memory,
+    memory: Any,
 ) -> ExtractResult:
     settings = get_settings()
     if int(settings.state_extraction_enabled) != 1:
@@ -129,10 +129,10 @@ async def extract_state_items(
 
 
 async def _extract_state_items_impl(
-    conn,
+    conn: Any,
     thread_id: str,
     router: ProviderRouter,
-    memory,
+    memory: Any,
 ) -> ExtractResult:
     started = time.perf_counter()
     settings = get_settings()
@@ -226,14 +226,15 @@ async def _extract_state_items_impl(
                 limit=10,
             )
             best: dict[str, object] | None = similar[0] if similar else None
-            best_score = (
-                float(best["score"])
-                if best and isinstance(best.get("score"), float)
-                else 0.0
-            )
+            best_score = 0.0
             if best:
+                score_raw = best.get("score")
+                if isinstance(score_raw, int | float):
+                    best_score = float(score_raw)
+                topic_tags_raw = best.get("topic_tags", [])
+                topic_tags = topic_tags_raw if isinstance(topic_tags_raw, list) else []
                 topic_overlap = set(item.topic_tags).intersection(
-                    {str(v) for v in best.get("topic_tags", []) if isinstance(v, str)}
+                    {str(v) for v in topic_tags if isinstance(v, str)}
                 )
                 if topic_overlap:
                     best_score = min(1.0, best_score + 0.02)

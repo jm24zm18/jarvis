@@ -837,7 +837,10 @@ async def run_agent_step(
     if lane == "fallback" and final_text.strip() == PLACEHOLDER_RESPONSE:
         for retry_idx in range(FALLBACK_ONLY_RETRIES):
             synthetic_iteration = MAX_TOOL_ITERATIONS + 1 + retry_idx
-            start_payload = {"iteration": synthetic_iteration, "fallback_only": True}
+            start_payload: dict[str, object] = {
+                "iteration": synthetic_iteration,
+                "fallback_only": True,
+            }
             if notify_fn is not None:
                 notify_fn("model.run.start", start_payload)
             emit_event(
@@ -886,15 +889,17 @@ async def run_agent_step(
                 ),
             )
             if retry_lane == "fallback":
-                fallback_payload: dict[str, object] = {
+                fallback_retry_payload: dict[str, object] = {
                     "iteration": synthetic_iteration,
                     "fallback_only": True,
                 }
                 if retry_primary_error:
-                    fallback_payload["primary_error"] = retry_primary_error[:500]
-                    fallback_payload.update(_extract_primary_failure_fields(retry_primary_error))
+                    fallback_retry_payload["primary_error"] = retry_primary_error[:500]
+                    fallback_retry_payload.update(
+                        _extract_primary_failure_fields(retry_primary_error)
+                    )
                 if notify_fn is not None:
-                    notify_fn("model.fallback", fallback_payload)
+                    notify_fn("model.fallback", fallback_retry_payload)
                 emit_event(
                     conn,
                     EventInput(
@@ -906,8 +911,10 @@ async def run_agent_step(
                         component="orchestrator",
                         actor_type="agent",
                         actor_id=actor_id,
-                        payload_json=json.dumps(fallback_payload),
-                        payload_redacted_json=json.dumps(redact_payload(fallback_payload)),
+                        payload_json=json.dumps(fallback_retry_payload),
+                        payload_redacted_json=json.dumps(
+                            redact_payload(fallback_retry_payload)
+                        ),
                     ),
                 )
             retry_text = _strip_control_tokens(
@@ -964,7 +971,7 @@ async def run_agent_step(
 
     if final_text.strip() == PLACEHOLDER_RESPONSE:
         final_text = DEGRADED_RESPONSE
-        degraded_payload = {
+        degraded_payload: dict[str, object] = {
             "reason": "placeholder_response",
             "actor_id": actor_id,
         }

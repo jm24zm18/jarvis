@@ -133,7 +133,10 @@ def onboarding_step(trace_id: str, thread_id: str, user_id: str, user_message: s
                     queue="tools_io",
                 )
             except Exception:
-                logger.debug("failed to enqueue onboarding assistant memory indexing", exc_info=True)
+                logger.debug(
+                    "failed to enqueue onboarding assistant memory indexing",
+                    exc_info=True,
+                )
             conn.execute(
                 (
                     "INSERT INTO web_notifications("

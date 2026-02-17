@@ -77,7 +77,9 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
         if actor_id == "main":
             conn.execute(
                 (
-                    "INSERT INTO web_notifications(thread_id, event_type, payload_json, created_at) "
+                    "INSERT INTO web_notifications("
+                    "thread_id, event_type, payload_json, created_at"
+                    ") "
                     "VALUES(?,?,?,?)"
                 ),
                 (
