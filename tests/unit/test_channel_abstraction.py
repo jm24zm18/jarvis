@@ -60,6 +60,32 @@ def test_whatsapp_adapter_parse_inbound() -> None:
     assert messages[0].text == "hello"
 
 
+def test_whatsapp_adapter_parse_evolution_reaction() -> None:
+    adapter = WhatsAppAdapter()
+    payload = {
+        "event": "messages.upsert",
+        "data": {
+            "key": {
+                "id": "BAE5EVO1",
+                "remoteJid": "15551234567@s.whatsapp.net",
+                "participant": "15551230000@s.whatsapp.net",
+            },
+            "message": {
+                "reactionMessage": {
+                    "text": "👍",
+                    "key": {"id": "BAE5TARGET"},
+                }
+            },
+        },
+    }
+    messages = adapter.parse_inbound(payload)
+    assert len(messages) == 1
+    assert messages[0].external_msg_id == "BAE5EVO1"
+    assert messages[0].message_type == "reaction"
+    assert messages[0].reaction["emoji"] == "👍"
+    assert messages[0].thread_key == "15551234567@s.whatsapp.net"
+
+
 def test_registry_register_and_get() -> None:
     _reset()
     adapter = MockAdapter()

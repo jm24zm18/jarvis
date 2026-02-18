@@ -45,9 +45,17 @@ def _register_tasks(runner: TaskRunner) -> None:
         "jarvis.tasks.maintenance.maintenance_heartbeat",
         maintenance.maintenance_heartbeat,
     )
+    runner.register(
+        "jarvis.tasks.maintenance.compute_system_fitness",
+        maintenance.compute_system_fitness,
+    )
     runner.register("jarvis.tasks.memory.index_event", memory.index_event)
     runner.register("jarvis.tasks.memory.compact_thread", memory.compact_thread)
     runner.register("jarvis.tasks.memory.periodic_compaction", memory.periodic_compaction)
+    runner.register("jarvis.tasks.memory.migrate_tiers", memory.migrate_tiers)
+    runner.register("jarvis.tasks.memory.prune_adaptive", memory.prune_adaptive)
+    runner.register("jarvis.tasks.memory.sync_failure_capsules", memory.sync_failure_capsules)
+    runner.register("jarvis.tasks.memory.evaluate_consistency", memory.evaluate_consistency)
     runner.register("jarvis.tasks.onboarding.onboarding_step", onboarding.onboarding_step)
     runner.register(
         "jarvis.tasks.dependency_steward.run_dependency_steward",
@@ -92,6 +100,10 @@ def get_periodic_scheduler() -> PeriodicScheduler:
         scheduler.add("jarvis.tasks.system.rotate_unlock_code", 600)
         scheduler.add("jarvis.tasks.backup.create_backup", 900)
         scheduler.add("jarvis.tasks.memory.periodic_compaction", 600)
+        scheduler.add("jarvis.tasks.memory.sync_failure_capsules", 1800)
+        scheduler.add("jarvis.tasks.memory.migrate_tiers", 21600)
+        scheduler.add("jarvis.tasks.memory.prune_adaptive", 86400)
+        scheduler.add("jarvis.tasks.memory.evaluate_consistency", 86400)
         scheduler.add("jarvis.tasks.system.db_optimize", 86400)
         scheduler.add("jarvis.tasks.system.db_integrity_check", 604800)
         scheduler.add("jarvis.tasks.system.db_vacuum", 2592000)
@@ -105,6 +117,7 @@ def get_periodic_scheduler() -> PeriodicScheduler:
                 "jarvis.tasks.maintenance.maintenance_heartbeat",
                 float(settings.maintenance_heartbeat_interval_seconds),
             )
+        scheduler.add("jarvis.tasks.maintenance.compute_system_fitness", 604800)
         if int(settings.dependency_steward_enabled) == 1:
             scheduler.add("jarvis.tasks.dependency_steward.run_dependency_steward", 604800)
         if int(settings.release_candidate_agent_enabled) == 1:

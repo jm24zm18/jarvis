@@ -1,5 +1,8 @@
+import os
+
 from fastapi.testclient import TestClient
 
+from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.main import app
 from jarvis.tasks.agent import agent_step
@@ -161,3 +164,40 @@ def test_webhook_to_outbound_flow_emits_events(monkeypatch) -> None:
         ).fetchall()
 
     assert len(outbound_events) >= 2
+
+
+def test_inbound_rejects_invalid_secret(monkeypatch) -> None:
+    del monkeypatch
+    os.environ["WHATSAPP_WEBHOOK_SECRET"] = "secret123"
+    get_settings.cache_clear()
+    client = TestClient(app)
+    response = client.post("/webhooks/whatsapp", json=PAYLOAD)
+    assert response.status_code == 401
+    os.environ["WHATSAPP_WEBHOOK_SECRET"] = ""
+    get_settings.cache_clear()
+
+
+def test_inbound_accepts_evolution_payload(monkeypatch) -> None:
+    from jarvis.channels.whatsapp import router as whatsapp_router
+
+    payload = {
+        "event": "messages.upsert",
+        "data": {
+            "key": {
+                "id": "BAE5TESTEVO2",
+                "remoteJid": "15555550199@s.whatsapp.net",
+                "participant": "15555550199@s.whatsapp.net",
+            },
+            "message": {"conversation": "hello from evolution"},
+        },
+    }
+
+    class _Runner:
+        def send_task(self, *_args, **_kwargs) -> bool:
+            return True
+
+    monkeypatch.setattr(whatsapp_router, "get_task_runner", lambda: _Runner())
+    client = TestClient(app)
+    response = client.post("/webhooks/whatsapp", json=payload)
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True

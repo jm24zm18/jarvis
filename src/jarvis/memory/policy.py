@@ -41,6 +41,39 @@ def _mask_phone(text: str) -> str:
     return _PHONE_RE.sub("[REDACTED_PHONE]", text)
 
 
+def _emit_policy_event(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str | None,
+    actor_id: str,
+    event_type: str,
+    payload: dict[str, object],
+) -> None:
+    encoded = json.dumps(payload, sort_keys=True)
+    conn.execute(
+        (
+            "INSERT INTO events("
+            "id, trace_id, span_id, parent_span_id, thread_id, event_type, component, "
+            "actor_type, actor_id, payload_json, payload_redacted_json, created_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+        ),
+        (
+            new_id("evt"),
+            new_id("trc"),
+            new_id("spn"),
+            None,
+            thread_id,
+            event_type,
+            "memory.policy",
+            "agent",
+            actor_id,
+            encoded,
+            encoded,
+            _now_iso(),
+        ),
+    )
+
+
 def apply_memory_policy(
     conn: sqlite3.Connection,
     *,
@@ -103,5 +136,21 @@ def apply_memory_policy(
         # Table not present yet (pre-migration), avoid breaking runtime.
         pass
 
-    return working, decision, reason
+    if decision == "redact":
+        _emit_policy_event(
+            conn,
+            thread_id=thread_id,
+            actor_id=actor_id,
+            event_type="memory.policy.redaction",
+            payload={"reason": reason, "target_kind": target_kind, "target_id": target_id},
+        )
+    elif decision == "deny":
+        _emit_policy_event(
+            conn,
+            thread_id=thread_id,
+            actor_id=actor_id,
+            event_type="memory.policy.denial",
+            payload={"reason": reason, "target_kind": target_kind, "target_id": target_id},
+        )
 
+    return working, decision, reason

@@ -189,3 +189,27 @@ export interface BugReport {
   created_at: string;
   updated_at: string;
 }
+
+export interface FitnessSnapshot {
+  id: string;
+  period_start: string;
+  period_end: string;
+  metrics: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface GovernanceSlo {
+  status: "safe" | "degraded" | "blocked" | string;
+  reasons: string[];
+  thresholds: Record<string, unknown>;
+  snapshot: FitnessSnapshot | null;
+  detail: Record<string, unknown>;
+}
+
+export interface GovernanceSloHistoryItem {
+  snapshot_id: string;
+  created_at: string;
+  status: string;
+  reasons: string[];
+  detail: Record<string, unknown>;
+}

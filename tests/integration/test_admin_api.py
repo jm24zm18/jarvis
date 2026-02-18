@@ -83,6 +83,32 @@ def test_admin_endpoints_basic_coverage(tmp_path: Path) -> None:
             "INSERT INTO schedule_dispatches(schedule_id, due_at, dispatched_at) VALUES(?,?,?)",
             ("sch_test", now_iso(), now_iso()),
         )
+        conn.execute(
+            (
+                "INSERT INTO failure_patterns("
+                "id, signature, phase, count, latest_reason, latest_trace_id, "
+                "first_seen_at, last_seen_at"
+                ") VALUES(?,?,?,?,?,?,?,?)"
+            ),
+            (
+                "flp_test",
+                "test:failure",
+                "test",
+                2,
+                "pytest failed",
+                "trc_test",
+                now_iso(),
+                now_iso(),
+            ),
+        )
+        conn.execute(
+            (
+                "INSERT INTO failure_pattern_remediations("
+                "id, pattern_id, remediation, verification_test, confidence, created_at"
+                ") VALUES(?,?,?,?,?,?)"
+            ),
+            ("frm_test", "flp_test", "rerun pytest", "pytest -q", "medium", now_iso()),
+        )
 
     client = TestClient(app)
     token = _login(client)
@@ -117,6 +143,10 @@ def test_admin_endpoints_basic_coverage(tmp_path: Path) -> None:
     stats = client.get("/api/v1/memory/stats", headers=headers)
     assert stats.status_code == 200
     assert stats.json()["total_items"] >= 1
+    assert (
+        client.get("/api/v1/memory/state/consistency/report", headers=headers).status_code
+        == 200
+    )
 
     assert client.get("/api/v1/schedules", headers=headers).status_code == 200
     assert (
@@ -133,6 +163,20 @@ def test_admin_endpoints_basic_coverage(tmp_path: Path) -> None:
     assert patches.status_code == 200
     assert client.get(f"/api/v1/selfupdate/patches/{trace_id}", headers=headers).status_code == 200
     assert (
+        client.get(
+            f"/api/v1/selfupdate/patches/{trace_id}/checks",
+            headers=headers,
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            f"/api/v1/selfupdate/patches/{trace_id}/timeline",
+            headers=headers,
+        ).status_code
+        == 200
+    )
+    assert (
         client.post(
             f"/api/v1/selfupdate/patches/{trace_id}/approve",
             json={},
@@ -145,3 +189,32 @@ def test_admin_endpoints_basic_coverage(tmp_path: Path) -> None:
     assert perms.status_code == 200
     assert client.put("/api/v1/permissions/main/echo", json={}, headers=headers).status_code == 200
     assert client.delete("/api/v1/permissions/main/echo", headers=headers).status_code == 200
+
+    assert client.get("/api/v1/governance/fitness/latest", headers=headers).status_code == 200
+    assert client.get("/api/v1/governance/fitness/history", headers=headers).status_code == 200
+    assert client.get("/api/v1/governance/slo", headers=headers).status_code == 200
+    assert client.get("/api/v1/governance/slo/history", headers=headers).status_code == 200
+    assert client.get("/api/v1/governance/dependency-steward", headers=headers).status_code == 200
+    assert client.get("/api/v1/governance/release-candidate", headers=headers).status_code == 200
+    assert client.get("/api/v1/governance/decision-timeline", headers=headers).status_code == 200
+    assert (
+        client.get(f"/api/v1/governance/patch-lifecycle/{trace_id}", headers=headers).status_code
+        == 200
+    )
+    assert client.get("/api/v1/governance/learning-loop", headers=headers).status_code == 200
+    assert (
+        client.post(
+            "/api/v1/governance/remediations/frm_test/feedback",
+            headers=headers,
+            json={"feedback": "accepted"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post("/api/v1/memory/maintenance/run", headers=headers, json={}).status_code == 200
+    )
+    assert client.get("/api/v1/channels/whatsapp/status", headers=headers).status_code == 200
+    assert (
+        client.post("/api/v1/channels/whatsapp/create", headers=headers, json={}).status_code
+        == 200
+    )

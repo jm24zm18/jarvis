@@ -139,6 +139,45 @@ def validate_evidence_packet(evidence: dict[str, object] | None) -> list[Validat
     return issues
 
 
+def validate_evidence_context(
+    evidence: dict[str, object] | None,
+    *,
+    changed_files: list[str],
+    critical_change: bool,
+) -> list[ValidationIssue]:
+    if not isinstance(evidence, dict):
+        return [ValidationIssue(field="evidence", message="missing evidence payload")]
+    issues: list[ValidationIssue] = []
+    file_refs = evidence.get("file_refs")
+    if isinstance(file_refs, list):
+        referenced = {
+            str(item).split(":", 1)[0].strip() for item in file_refs if isinstance(item, str)
+        }
+        missing = [path for path in referenced if path and path not in set(changed_files)]
+        if missing:
+            issues.append(
+                ValidationIssue(
+                    field="file_refs",
+                    message=f"must reference files touched by patch: {sorted(set(missing))}",
+                )
+            )
+    if critical_change:
+        test_plan = evidence.get("test_plan")
+        commands = (
+            [str(item).strip() for item in test_plan if isinstance(item, str)]
+            if isinstance(test_plan, list)
+            else []
+        )
+        if not commands:
+            issues.append(
+                ValidationIssue(
+                    field="test_plan",
+                    message="critical-path patch requires executable test commands",
+                )
+            )
+    return issues
+
+
 def default_artifact(
     *,
     trace_id: str,

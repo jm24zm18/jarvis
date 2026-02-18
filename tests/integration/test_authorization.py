@@ -165,6 +165,73 @@ def test_non_admin_cannot_approve_selfupdate() -> None:
     assert response.status_code == 403
 
 
+def test_non_admin_cannot_read_governance_fitness() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = TestClient(app)
+    alice, _bob = _bootstrap_users(client)
+
+    response = client.get(
+        "/api/v1/governance/fitness/latest",
+        headers=_headers(alice["token"]),
+    )
+    assert response.status_code == 403
+
+
+def test_non_admin_cannot_read_governance_slo() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = TestClient(app)
+    alice, _bob = _bootstrap_users(client)
+
+    response = client.get(
+        "/api/v1/governance/slo",
+        headers=_headers(alice["token"]),
+    )
+    assert response.status_code == 403
+
+
+def test_non_admin_cannot_read_governance_decision_timeline() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = TestClient(app)
+    alice, _bob = _bootstrap_users(client)
+
+    response = client.get(
+        "/api/v1/governance/decision-timeline",
+        headers=_headers(alice["token"]),
+    )
+    assert response.status_code == 403
+
+
+def test_non_admin_cannot_submit_remediation_feedback() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = TestClient(app)
+    alice, _bob = _bootstrap_users(client)
+
+    response = client.post(
+        "/api/v1/governance/remediations/frm_demo/feedback",
+        headers=_headers(alice["token"]),
+        json={"feedback": "accepted"},
+    )
+    assert response.status_code == 403
+
+
+def test_non_admin_cannot_run_memory_maintenance() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = TestClient(app)
+    alice, _bob = _bootstrap_users(client)
+
+    response = client.post(
+        "/api/v1/memory/maintenance/run",
+        headers=_headers(alice["token"]),
+        json={},
+    )
+    assert response.status_code == 403
+
+
 def test_user_memory_search_scoped() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()

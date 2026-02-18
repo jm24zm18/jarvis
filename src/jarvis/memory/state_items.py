@@ -16,6 +16,7 @@ class StateItemType(str, Enum):
     ACTION = "action"
     QUESTION = "question"
     RISK = "risk"
+    FAILURE = "failure"
 
 
 VALID_CONFIDENCE = {"low", "medium", "high"}
@@ -27,17 +28,20 @@ TYPE_UID_PREFIX = {
     StateItemType.ACTION: "a_",
     StateItemType.QUESTION: "q_",
     StateItemType.RISK: "r_",
+    StateItemType.FAILURE: "f_",
 }
 TYPE_PRIORITY = {
     StateItemType.DECISION.value: 0,
     StateItemType.CONSTRAINT.value: 1,
     StateItemType.ACTION.value: 2,
     StateItemType.RISK.value: 3,
-    StateItemType.QUESTION.value: 4,
+    StateItemType.FAILURE.value: 4,
+    StateItemType.QUESTION.value: 5,
 }
 STATUS_PRECEDENCE = {
     StateItemType.ACTION.value: ["open", "blocked", "done", "superseded"],
     StateItemType.QUESTION.value: ["open", "answered", "superseded"],
+    StateItemType.FAILURE.value: ["open", "resolved", "superseded"],
     StateItemType.DECISION.value: ["active", "superseded"],
     StateItemType.CONSTRAINT.value: ["active", "superseded"],
     StateItemType.RISK.value: ["active", "superseded"],
@@ -45,6 +49,7 @@ STATUS_PRECEDENCE = {
 DEFAULT_STATUS = {
     StateItemType.ACTION.value: "open",
     StateItemType.QUESTION.value: "open",
+    StateItemType.FAILURE.value: "open",
     StateItemType.DECISION.value: "active",
     StateItemType.CONSTRAINT.value: "active",
     StateItemType.RISK.value: "active",
@@ -67,6 +72,12 @@ class StateItem:
     source: str = "extraction"
     created_at: str = ""
     last_seen_at: str = ""
+    tier: str = "working"
+    importance_score: float = 0.5
+    access_count: int = 0
+    conflict_count: int = 0
+    agent_id: str = "main"
+    last_accessed_at: str | None = None
 
 
 def normalize_text(text: str) -> str:
@@ -146,4 +157,12 @@ def validate_item(item: StateItem) -> list[str]:
 
     if not item.uid.strip():
         item.uid = compute_uid(item.type_tag, item.text)
+    item.tier = item.tier.strip().lower() or "working"
+    if item.tier not in {"working", "episodic", "semantic_longterm", "procedural"}:
+        item.tier = "working"
+        errors.append("invalid tier")
+    item.importance_score = min(1.0, max(0.0, float(item.importance_score)))
+    item.access_count = max(0, int(item.access_count))
+    item.conflict_count = max(0, int(item.conflict_count))
+    item.agent_id = item.agent_id.strip() or "main"
     return errors

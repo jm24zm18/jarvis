@@ -75,6 +75,11 @@ Source of truth: `src/jarvis/config.py`.
 | `WHATSAPP_VERIFY_TOKEN` | str | `dev-verify-token` | WhatsApp webhook verification token. |
 | `WHATSAPP_ACCESS_TOKEN` | str | `` | WhatsApp API access token. |
 | `WHATSAPP_PHONE_NUMBER_ID` | str | `` | WhatsApp phone number ID. |
+| `WHATSAPP_INSTANCE` | str | `personal` | Evolution instance name. |
+| `WHATSAPP_AUTO_CREATE_ON_STARTUP` | int | `0` | Auto-create Evolution instance on API startup. |
+| `WHATSAPP_WEBHOOK_SECRET` | str | `` | Shared secret header required by WhatsApp webhook route when set. |
+| `EVOLUTION_API_URL` | str | `` | Evolution API base URL for Baileys sidecar. |
+| `EVOLUTION_API_KEY` | str | `` | Evolution API key header value. |
 | `GOOGLE_OAUTH_CLIENT_ID` | str | `` | Google OAuth client ID. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | str | `` | Google OAuth client secret. |
 | `GOOGLE_OAUTH_REFRESH_TOKEN` | str | `` | OAuth refresh token. |

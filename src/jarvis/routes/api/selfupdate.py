@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from jarvis.auth.dependencies import UserContext, require_admin
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
-from jarvis.db.queries import create_approval
+from jarvis.db.queries import create_approval, list_selfupdate_checks, list_selfupdate_transitions
 from jarvis.selfupdate.pipeline import read_artifact, read_patch, read_state
 
 router = APIRouter(prefix="/selfupdate", tags=["api-selfupdate"])
@@ -79,3 +79,24 @@ def approve_patch(
             ttl_minutes=max(1, int(settings.approval_ttl_minutes)),
         )
     return {"approval_id": approval_id, "action": "selfupdate.apply", "target_ref": trace_id}
+
+
+@router.get("/patches/{trace_id}/checks")
+def patch_checks(
+    trace_id: str, ctx: UserContext = Depends(require_admin)  # noqa: B008
+) -> dict[str, object]:
+    del ctx
+    with get_conn() as conn:
+        items = list_selfupdate_checks(conn, trace_id)
+    return {"trace_id": trace_id, "items": items}
+
+
+@router.get("/patches/{trace_id}/timeline")
+def patch_timeline(
+    trace_id: str, ctx: UserContext = Depends(require_admin)  # noqa: B008
+) -> dict[str, object]:
+    del ctx
+    with get_conn() as conn:
+        transitions = list_selfupdate_transitions(conn, trace_id)
+        checks = list_selfupdate_checks(conn, trace_id)
+    return {"trace_id": trace_id, "transitions": transitions, "checks": checks}

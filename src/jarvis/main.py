@@ -20,11 +20,12 @@ from jarvis.agents.seed import ensure_main_agent_seed, sync_seed_skills
 from jarvis.channels.generic_webhook import router as generic_webhook_router
 from jarvis.channels.registry import register_channel
 from jarvis.channels.whatsapp.adapter import WhatsAppAdapter
+from jarvis.channels.whatsapp.evolution_client import EvolutionClient
 from jarvis.channels.whatsapp.router import router as whatsapp_router
 from jarvis.config import get_settings, validate_settings_for_env
 from jarvis.db.connection import get_conn
 from jarvis.db.migrations.runner import run_migrations
-from jarvis.db.queries import ensure_root_user, ensure_system_state
+from jarvis.db.queries import ensure_root_user, ensure_system_state, upsert_whatsapp_instance
 from jarvis.logging import configure_logging
 from jarvis.memory.service import MemoryService
 from jarvis.repo_index import write_repo_index
@@ -45,6 +46,21 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     run_migrations()
     write_repo_index(Path.cwd())
     register_channel(WhatsAppAdapter())
+    evolution = EvolutionClient()
+    if evolution.enabled and int(settings.whatsapp_auto_create_on_startup) == 1:
+        status_code, payload = await evolution.create_instance()
+        with get_conn() as conn:
+            evo_state = str(
+                payload.get("instance", {}).get("state")
+                or payload.get("state")
+                or "unknown"
+            )
+            upsert_whatsapp_instance(
+                conn,
+                instance=evolution.instance,
+                status=evo_state,
+                metadata={"status_code": status_code, **payload},
+            )
     if ensure_main_agent_seed(Path("agents")):
         logger.info("Seeded default main agent bundle files at startup")
     bundles = {}

@@ -242,3 +242,86 @@ def test_sqlite_vec_round_trip_search_when_runtime_available(monkeypatch) -> Non
         assert rows[0]["text"] == "alpha memory"
     finally:
         get_settings.cache_clear()
+
+
+def test_get_failures_and_consistency_report() -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550998")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        conn.execute(
+            (
+                "INSERT INTO failure_capsules("
+                "id, trace_id, phase, error_summary, error_details_json, attempt, created_at"
+                ") VALUES(?,?,?,?,?,?,datetime('now'))"
+            ),
+            ("fcp_1", "trc_1", "test", "socket timeout while deploying", "{}", 1),
+        )
+        conn.execute(
+            (
+                "INSERT INTO state_items("
+                "uid, thread_id, text, status, type_tag, topic_tags_json, refs_json, confidence, "
+                "replaced_by, supersession_evidence, conflict, pinned, source, created_at, "
+                "last_seen_at, updated_at, tier, importance_score, access_count, conflict_count, "
+                "agent_id, last_accessed_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                "d_consistency",
+                thread_id,
+                "Use redis",
+                "active",
+                "decision",
+                "[]",
+                "[]",
+                "high",
+                None,
+                None,
+                1,
+                0,
+                "test",
+                "2026-02-01T00:00:00+00:00",
+                "2026-02-01T00:00:00+00:00",
+                "2026-02-01T00:00:00+00:00",
+                "working",
+                0.5,
+                0,
+                1,
+                "main",
+                None,
+            ),
+        )
+        failures = service.get_failures(conn, similar_to="timeout", k=5)
+        report = service.evaluate_consistency(conn, thread_id=thread_id, sample_size=10)
+    assert failures
+    assert failures[0]["id"] == "fcp_1"
+    assert report["thread_id"] == thread_id
+    assert report["conflicted_items"] == 1
+
+
+def test_graph_traverse_returns_edges() -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        conn.execute(
+            (
+                "INSERT INTO state_relations("
+                "id, source_uid, target_uid, thread_id, agent_id, relation_type, confidence, "
+                "evidence_json, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            ("rel_1", "d_a", "d_b", "thr_1", "main", "enables", 0.8, "{}"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO state_relations("
+                "id, source_uid, target_uid, thread_id, agent_id, relation_type, confidence, "
+                "evidence_json, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            ("rel_2", "d_b", "d_c", "thr_1", "main", "constrains", 0.8, "{}"),
+        )
+        graph = service.graph_traverse(conn, uid="d_a", depth=2)
+    assert graph["root_uid"] == "d_a"
+    assert len(graph["edges"]) >= 2

@@ -114,6 +114,7 @@
     "src/jarvis/routes/api/agents.py",
     "src/jarvis/routes/api/auth.py",
     "src/jarvis/routes/api/bugs.py",
+    "src/jarvis/routes/api/channels.py",
     "src/jarvis/routes/api/events.py",
     "src/jarvis/routes/api/governance.py",
     "src/jarvis/routes/api/memory.py",
@@ -259,7 +260,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-17T22:32:51.804125+00:00",
+  "generated_at": "2026-02-18T04:42:13.075804+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -387,6 +388,70 @@
     {
       "file": "src/jarvis/db/migrations/030_story_runs.sql",
       "number": 30
+    },
+    {
+      "file": "src/jarvis/db/migrations/031_selfupdate_runs.sql",
+      "number": 31
+    },
+    {
+      "file": "src/jarvis/db/migrations/032_system_fitness.sql",
+      "number": 32
+    },
+    {
+      "file": "src/jarvis/db/migrations/033_state_reconciliation_ops.sql",
+      "number": 33
+    },
+    {
+      "file": "src/jarvis/db/migrations/034_governance_runs.sql",
+      "number": 34
+    },
+    {
+      "file": "src/jarvis/db/migrations/035_learning_loop.sql",
+      "number": 35
+    },
+    {
+      "file": "src/jarvis/db/migrations/036_recursive_guardrails.sql",
+      "number": 36
+    },
+    {
+      "file": "src/jarvis/db/migrations/037_fitness_gate_config.sql",
+      "number": 37
+    },
+    {
+      "file": "src/jarvis/db/migrations/038_failure_remediation_feedback.sql",
+      "number": 38
+    },
+    {
+      "file": "src/jarvis/db/migrations/043_state_items_tiers_importance.sql",
+      "number": 43
+    },
+    {
+      "file": "src/jarvis/db/migrations/044_memory_embedding_cache.sql",
+      "number": 44
+    },
+    {
+      "file": "src/jarvis/db/migrations/045_memory_archive.sql",
+      "number": 45
+    },
+    {
+      "file": "src/jarvis/db/migrations/046_state_relations.sql",
+      "number": 46
+    },
+    {
+      "file": "src/jarvis/db/migrations/047_memory_review_queue.sql",
+      "number": 47
+    },
+    {
+      "file": "src/jarvis/db/migrations/048_failure_bridge.sql",
+      "number": 48
+    },
+    {
+      "file": "src/jarvis/db/migrations/049_whatsapp_evolution_state.sql",
+      "number": 49
+    },
+    {
+      "file": "src/jarvis/db/migrations/050_memory_consistency_reports.sql",
+      "number": 50
     }
   ],
   "protected_modules": [

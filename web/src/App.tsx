@@ -14,6 +14,8 @@ import AdminSelfUpdatePage from "./pages/admin/selfupdate";
 import AdminPermissionsPage from "./pages/admin/permissions";
 import AdminProvidersPage from "./pages/admin/providers";
 import AdminBugsPage from "./pages/admin/bugs";
+import AdminGovernancePage from "./pages/admin/governance";
+import AdminChannelsPage from "./pages/admin/channels";
 import { me } from "./api/endpoints";
 import { useAuthStore } from "./stores/auth";
 
@@ -61,6 +63,8 @@ export default function App() {
                 <Route path="admin/permissions" element={<AdminPermissionsPage />} />
                 <Route path="admin/providers" element={<AdminProvidersPage />} />
                 <Route path="admin/bugs" element={<AdminBugsPage />} />
+                <Route path="admin/governance" element={<AdminGovernancePage />} />
+                <Route path="admin/channels" element={<AdminChannelsPage />} />
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Routes>
             </Shell>

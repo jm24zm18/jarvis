@@ -1,4 +1,4 @@
-from jarvis.selfupdate.contracts import validate_evidence_packet
+from jarvis.selfupdate.contracts import validate_evidence_context, validate_evidence_packet
 
 
 def _evidence() -> dict[str, object]:
@@ -32,3 +32,25 @@ def test_validate_evidence_packet_rejects_invalid_invariant_checks() -> None:
     evidence["invariant_checks"] = ["append-only migrations"]
     issues = validate_evidence_packet(evidence)
     assert any(item.field == "invariant_checks" for item in issues)
+
+
+def test_validate_evidence_context_rejects_file_ref_not_in_patch() -> None:
+    evidence = _evidence()
+    evidence["file_refs"] = ["src/unknown.py:1"]
+    issues = validate_evidence_context(
+        evidence,
+        changed_files=["src/jarvis/tools/runtime.py"],
+        critical_change=False,
+    )
+    assert any(item.field == "file_refs" for item in issues)
+
+
+def test_validate_evidence_context_requires_test_plan_for_critical_change() -> None:
+    evidence = _evidence()
+    evidence["test_plan"] = []
+    issues = validate_evidence_context(
+        evidence,
+        changed_files=["src/jarvis/tools/runtime.py"],
+        critical_change=True,
+    )
+    assert any(item.field == "test_plan" for item in issues)

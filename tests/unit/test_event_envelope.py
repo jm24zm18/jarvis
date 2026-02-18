@@ -11,6 +11,9 @@ def test_with_action_envelope_adds_required_keys() -> None:
     assert "diff" in out
     assert "tests" in out
     assert "result" in out
+    assert str(out["intent"]).strip() != ""
+    assert str(out["tests"].get("result", "")).strip() != ""
+    assert str(out["result"].get("status", "")).strip() != ""
 
 
 def test_with_action_envelope_preserves_existing_values() -> None:

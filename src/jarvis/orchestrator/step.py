@@ -31,6 +31,7 @@ from jarvis.memory.state_store import StateStore
 from jarvis.orchestrator.prompt_builder import build_prompt_with_report, estimate_tokens
 from jarvis.providers.factory import resolve_primary_provider_name
 from jarvis.providers.router import ProviderRouter
+from jarvis.repo_index import read_repo_index
 from jarvis.tools.runtime import ToolRuntime
 
 MAX_TOOL_ITERATIONS = 8
@@ -279,6 +280,23 @@ def _load_agent_bundle(actor_id: str) -> AgentBundle | None:
         return load_agent_bundle_cached(root)
     except RuntimeError:
         return None
+
+
+def _repo_index_context() -> str:
+    payload = read_repo_index(Path.cwd())
+    if not isinstance(payload, dict):
+        return ""
+    entrypoints = payload.get("entrypoints")
+    protected = payload.get("protected_modules")
+    invariants = payload.get("invariant_checks")
+    lines = ["[repo_index]"]
+    if isinstance(entrypoints, list) and entrypoints:
+        lines.append("entrypoints: " + ", ".join(str(item) for item in entrypoints[:8]))
+    if isinstance(protected, list) and protected:
+        lines.append("protected_modules: " + ", ".join(str(item) for item in protected[:10]))
+    if isinstance(invariants, list) and invariants:
+        lines.append("invariants: " + ", ".join(str(item) for item in invariants[:10]))
+    return "\n".join(lines)
 
 
 def _build_environment_context(conn: sqlite3.Connection) -> str:
@@ -564,6 +582,9 @@ async def run_agent_step(
     action_calls_used = 0
     agent_context = f"{agent_context}\n\n{IDENTITY_POLICY}"
     agent_context = f"{agent_context}\n\n[environment]\n{_build_environment_context(conn)}"
+    repo_idx = _repo_index_context()
+    if repo_idx:
+        agent_context = f"{agent_context}\n\n{repo_idx}"
 
     primary_provider = resolve_primary_provider_name(settings)
     token_budget = (

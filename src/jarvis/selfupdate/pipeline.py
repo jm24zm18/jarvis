@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -33,6 +34,16 @@ class ReplayResult:
     reason: str
     tree_hash: str
     changed_files: list[str]
+
+
+@dataclass(slots=True)
+class CommandResult:
+    command: str
+    exit_code: int
+    ok: bool
+    stdout: str
+    stderr: str
+    duration_ms: int
 
 
 def trace_dir(base_dir: Path, trace_id: str) -> Path:
@@ -198,6 +209,67 @@ def evaluate_test_gate(patch_text: str) -> ValidationResult:
     return ValidationResult(ok=True, reason="test gate passed")
 
 
+def _git_show_file(repo_path: str, baseline_ref: str, path: str) -> str:
+    proc = subprocess.run(
+        ["git", "-C", repo_path, "show", f"{baseline_ref}:{path}"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise FileNotFoundError(path)
+    return proc.stdout
+
+
+def validate_evidence_refs_in_repo(
+    *,
+    repo_path: str,
+    baseline_ref: str,
+    file_refs: list[str],
+    line_refs: list[str],
+    changed_files: list[str],
+) -> ValidationResult:
+    baseline = baseline_ref.strip()
+    if not baseline:
+        return ValidationResult(ok=False, reason="missing baseline_ref for evidence verification")
+
+    expected_files = set(changed_files)
+    if not expected_files:
+        return ValidationResult(
+            ok=False,
+            reason="patch must include changed files for evidence check",
+        )
+
+    missing_files = []
+    for item in file_refs:
+        path = item.split(":", 1)[0].strip()
+        if path and path not in expected_files:
+            missing_files.append(path)
+    if missing_files:
+        return ValidationResult(
+            ok=False,
+            reason=f"file_refs not present in patch: {sorted(set(missing_files))}",
+        )
+
+    for raw in line_refs:
+        try:
+            path, line_str = raw.split(":", 1)
+            line_no = int(line_str)
+        except Exception:
+            return ValidationResult(ok=False, reason=f"invalid line_ref: {raw}")
+        if path not in expected_files:
+            return ValidationResult(ok=False, reason=f"line_ref path not in patch: {raw}")
+        try:
+            content = _git_show_file(repo_path, baseline, path)
+        except FileNotFoundError:
+            return ValidationResult(ok=False, reason=f"line_ref file missing at baseline: {path}")
+        lines = content.splitlines()
+        if line_no < 1 or line_no > max(1, len(lines)):
+            return ValidationResult(ok=False, reason=f"line_ref out of range: {raw}")
+    return ValidationResult(ok=True, reason="evidence refs verified")
+
+
 def git_apply_check(repo_path: str, patch_path: Path) -> ValidationResult:
     proc = subprocess.run(
         ["git", "-C", repo_path, "apply", "--check", str(patch_path)],
@@ -328,6 +400,79 @@ def run_smoke_gate(
                 detail = stderr or stdout or f"{cmd[0]} failed"
                 return ValidationResult(ok=False, reason=detail)
         return ValidationResult(ok=True, reason="smoke gate passed")
+    finally:
+        subprocess.run(
+            ["git", "-C", repo_path, "worktree", "remove", "--force", str(worktree)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+
+def execute_test_plan(
+    *,
+    repo_path: str,
+    patch_path: Path,
+    work_dir: Path,
+    commands: list[str],
+) -> tuple[ValidationResult, list[CommandResult]]:
+    work_dir.mkdir(parents=True, exist_ok=True)
+    worktree = work_dir / "test_worktree"
+    if worktree.exists():
+        subprocess.run(
+            ["git", "-C", repo_path, "worktree", "remove", "--force", str(worktree)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    add = subprocess.run(
+        ["git", "-C", repo_path, "worktree", "add", "--detach", str(worktree), "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if add.returncode != 0:
+        return (
+            ValidationResult(ok=False, reason=add.stderr.strip() or "test worktree add failed"),
+            [],
+        )
+
+    results: list[CommandResult] = []
+    try:
+        apply_result = git_apply(str(worktree), patch_path)
+        if not apply_result.ok:
+            return apply_result, []
+        for command in commands:
+            started = datetime.now(UTC)
+            proc = subprocess.run(
+                ["/bin/bash", "-lc", command],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
+            finished = datetime.now(UTC)
+            duration_ms = int((finished - started).total_seconds() * 1000)
+            result = CommandResult(
+                command=command,
+                exit_code=proc.returncode,
+                ok=proc.returncode == 0,
+                stdout=(proc.stdout or "")[:5000],
+                stderr=(proc.stderr or "")[:5000],
+                duration_ms=duration_ms,
+            )
+            results.append(result)
+            if proc.returncode != 0:
+                prefix = shlex.split(command)[0] if command.strip() else "command"
+                detail = (proc.stderr or proc.stdout or f"{prefix} failed").strip()
+                return ValidationResult(ok=False, reason=detail[:500]), results
+        return ValidationResult(ok=True, reason="test plan passed"), results
+    except subprocess.TimeoutExpired:
+        return ValidationResult(ok=False, reason="test plan command timed out"), results
     finally:
         subprocess.run(
             ["git", "-C", repo_path, "worktree", "remove", "--force", str(worktree)],

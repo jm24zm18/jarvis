@@ -34,6 +34,19 @@ class Settings(BaseSettings):
         ),
     )
     selfupdate_pr_autoraise: int = Field(alias="SELFUPDATE_PR_AUTORAISE", default=0)
+    selfupdate_fitness_gate_mode: str = Field(alias="SELFUPDATE_FITNESS_GATE_MODE", default="warn")
+    selfupdate_fitness_max_age_minutes: int = Field(
+        alias="SELFUPDATE_FITNESS_MAX_AGE_MINUTES", default=180
+    )
+    selfupdate_min_build_success_rate: float = Field(
+        alias="SELFUPDATE_MIN_BUILD_SUCCESS_RATE", default=0.80
+    )
+    selfupdate_max_regression_frequency: float = Field(
+        alias="SELFUPDATE_MAX_REGRESSION_FREQ", default=0.40
+    )
+    selfupdate_max_rollback_frequency: int = Field(
+        alias="SELFUPDATE_MAX_ROLLBACK_FREQ", default=3
+    )
     scheduler_max_catchup: int = Field(alias="SCHEDULER_MAX_CATCHUP", default=10)
     task_runner_max_concurrent: int = Field(alias="TASK_RUNNER_MAX_CONCURRENT", default=20)
     task_runner_shutdown_timeout_seconds: int = Field(
@@ -56,6 +69,13 @@ class Settings(BaseSettings):
     whatsapp_verify_token: str = Field(alias="WHATSAPP_VERIFY_TOKEN", default="dev-verify-token")
     whatsapp_access_token: str = Field(alias="WHATSAPP_ACCESS_TOKEN", default="")
     whatsapp_phone_number_id: str = Field(alias="WHATSAPP_PHONE_NUMBER_ID", default="")
+    whatsapp_instance: str = Field(alias="WHATSAPP_INSTANCE", default="personal")
+    whatsapp_auto_create_on_startup: int = Field(
+        alias="WHATSAPP_AUTO_CREATE_ON_STARTUP", default=0
+    )
+    whatsapp_webhook_secret: str = Field(alias="WHATSAPP_WEBHOOK_SECRET", default="")
+    evolution_api_url: str = Field(alias="EVOLUTION_API_URL", default="")
+    evolution_api_key: str = Field(alias="EVOLUTION_API_KEY", default="")
 
     google_oauth_client_id: str = Field(alias="GOOGLE_OAUTH_CLIENT_ID", default="")
     google_oauth_client_secret: str = Field(alias="GOOGLE_OAUTH_CLIENT_SECRET", default="")
@@ -114,6 +134,15 @@ class Settings(BaseSettings):
     memory_secret_scan_enabled: int = Field(alias="MEMORY_SECRET_SCAN_ENABLED", default=1)
     memory_pii_redact_mode: str = Field(alias="MEMORY_PII_REDACT_MODE", default="mask")
     memory_retention_days: int = Field(alias="MEMORY_RETENTION_DAYS", default=180)
+    memory_tiers_enabled: int = Field(alias="MEMORY_TIERS_ENABLED", default=0)
+    memory_importance_enabled: int = Field(alias="MEMORY_IMPORTANCE_ENABLED", default=0)
+    memory_graph_enabled: int = Field(alias="MEMORY_GRAPH_ENABLED", default=0)
+    memory_review_queue_enabled: int = Field(alias="MEMORY_REVIEW_QUEUE_ENABLED", default=1)
+    memory_failure_bridge_enabled: int = Field(alias="MEMORY_FAILURE_BRIDGE_ENABLED", default=1)
+    memory_sentence_transformers_model: str = Field(
+        alias="MEMORY_SENTENCE_TRANSFORMERS_MODEL",
+        default="all-MiniLM-L6-v2",
+    )
 
     searxng_base_url: str = Field(alias="SEARXNG_BASE_URL", default="http://localhost:8080")
     searxng_api_key: str = Field(alias="SEARXNG_API_KEY", default="")

@@ -1,7 +1,12 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Brain, Database, Cpu } from "lucide-react";
-import { listMemory, memoryStats } from "../../../api/endpoints";
+import {
+  listMemory,
+  memoryConsistencyReport,
+  memoryStats,
+  runMemoryMaintenance,
+} from "../../../api/endpoints";
 import Header from "../../../components/layout/Header";
 import Input from "../../../components/ui/Input";
 import Button from "../../../components/ui/Button";
@@ -17,9 +22,20 @@ export default function AdminMemoryPage() {
   const [page, setPage] = useState(1);
 
   const stats = useQuery({ queryKey: ["memory-stats"], queryFn: memoryStats });
+  const maintenance = useMutation({
+    mutationFn: runMemoryMaintenance,
+    onSuccess: () => {
+      void stats.refetch();
+      void items.refetch();
+    },
+  });
   const items = useQuery({
     queryKey: ["memory", q, threadId],
     queryFn: () => listMemory(q, threadId),
+  });
+  const consistency = useQuery({
+    queryKey: ["memory-consistency"],
+    queryFn: () => memoryConsistencyReport(20),
   });
 
   const allItems = items.data?.items ?? [];
@@ -135,6 +151,17 @@ export default function AdminMemoryPage() {
               Refresh Stats
             </Button>
           </div>
+          <div className="flex items-end">
+            <Button
+              variant="secondary"
+              icon={<Cpu className="h-4 w-4" />}
+              className="w-full"
+              onClick={() => maintenance.mutate()}
+              disabled={maintenance.isPending}
+            >
+              Run Maintenance
+            </Button>
+          </div>
         </div>
       </Card>
 
@@ -219,6 +246,43 @@ export default function AdminMemoryPage() {
                   </td>
                 </tr>
               ) : null}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Card
+        className="mt-6"
+        header={
+          <div className="flex items-center justify-between">
+            <h3 className="font-display text-base text-[var(--text-primary)]">Consistency Reports</h3>
+            <Badge variant="info">
+              avg {Number(consistency.data?.avg_consistency ?? 1).toFixed(2)}
+            </Badge>
+          </div>
+        }
+      >
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[var(--border-default)] text-left">
+                <th className="px-2 py-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">Thread</th>
+                <th className="px-2 py-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">Score</th>
+                <th className="px-2 py-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">Conflicts</th>
+                <th className="px-2 py-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {((consistency.data?.items as Array<Record<string, unknown>> | undefined) ?? [])
+                .slice(0, 12)
+                .map((row, idx) => (
+                  <tr key={`${String(row.id ?? "row")}-${idx}`} className="border-b border-[var(--border-default)]">
+                    <td className="px-2 py-2 font-mono text-xs">{String(row.thread_id ?? "")}</td>
+                    <td className="px-2 py-2">{Number(row.consistency_score ?? 1).toFixed(2)}</td>
+                    <td className="px-2 py-2">{String(row.conflicted_items ?? 0)}/{String(row.total_items ?? 0)}</td>
+                    <td className="px-2 py-2">{String(row.created_at ?? "")}</td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>

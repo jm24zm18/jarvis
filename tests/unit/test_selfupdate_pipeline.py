@@ -1,7 +1,12 @@
 import subprocess
 from pathlib import Path
 
-from jarvis.selfupdate.pipeline import replay_patch_determinism_check, smoke_commands
+from jarvis.selfupdate.pipeline import (
+    execute_test_plan,
+    replay_patch_determinism_check,
+    smoke_commands,
+    validate_evidence_refs_in_repo,
+)
 
 
 def test_smoke_commands_dev_profile() -> None:
@@ -83,3 +88,47 @@ def test_replay_patch_determinism_check_requires_baseline() -> None:
     )
     assert result.ok is False
     assert "baseline_ref" in result.reason
+
+
+def test_validate_evidence_refs_in_repo_passes(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    baseline = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    result = validate_evidence_refs_in_repo(
+        repo_path=str(repo),
+        baseline_ref=baseline,
+        file_refs=["hello.txt:1"],
+        line_refs=["hello.txt:1"],
+        changed_files=["hello.txt"],
+    )
+    assert result.ok is True
+
+
+def test_execute_test_plan_reports_command_failure(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    patch_path = tmp_path / "proposal.diff"
+    patch_path.write_text(
+        "\n".join(
+            [
+                "diff --git a/hello.txt b/hello.txt",
+                "--- a/hello.txt",
+                "+++ b/hello.txt",
+                "@@ -1 +1 @@",
+                "-one",
+                "+two",
+                "",
+            ]
+        )
+    )
+    result, command_results = execute_test_plan(
+        repo_path=str(repo),
+        patch_path=patch_path,
+        work_dir=tmp_path / "work",
+        commands=["echo ok", "false"],
+    )
+    assert result.ok is False
+    assert len(command_results) == 2

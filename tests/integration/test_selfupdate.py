@@ -4,7 +4,7 @@ from pathlib import Path
 
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
-from jarvis.db.queries import ensure_system_state
+from jarvis.db.queries import ensure_system_state, insert_system_fitness_snapshot, now_iso
 from jarvis.selfupdate.pipeline import write_context
 from jarvis.tasks.selfupdate import (
     self_update_apply,
@@ -48,14 +48,14 @@ def _make_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _evidence() -> dict[str, object]:
+def _evidence(file_ref: str = "hello.txt:1") -> dict[str, object]:
     return {
         "intent": "apply patch safely",
-        "file_refs": ["hello.txt:1"],
-        "line_refs": ["hello.txt:1"],
+        "file_refs": [file_ref],
+        "line_refs": [file_ref],
         "policy_refs": ["deny-by-default tool access"],
         "invariant_checks": ["append-only database migrations"],
-        "test_plan": ["pytest tests -q"],
+        "test_plan": ["echo ok"],
         "risk_notes": ["low-risk text replacement"],
     }
 
@@ -122,12 +122,8 @@ def test_selfupdate_rejects_protected_path(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     patch = "diff --git a/etc/systemd/system/x.service b/etc/systemd/system/x.service\n+bad\n"
 
-    _ = self_update_propose(trace_id, str(repo), patch, "bad", evidence=_evidence())
-    validate = self_update_validate(trace_id)
-    apply = self_update_apply(trace_id)
-
-    assert validate["status"] == "rejected"
-    assert apply["status"] == "rejected"
+    propose = self_update_propose(trace_id, str(repo), patch, "bad", evidence=_evidence())
+    assert propose["status"] == "rejected"
 
 
 def test_selfupdate_test_failure_and_rollback(tmp_path: Path) -> None:
@@ -146,7 +142,9 @@ def test_selfupdate_test_failure_and_rollback(tmp_path: Path) -> None:
         ]
     )
 
-    _ = self_update_propose(trace_id, str(repo), patch, "bad test", evidence=_evidence())
+    evidence = _evidence()
+    evidence["test_plan"] = ["false"]
+    _ = self_update_propose(trace_id, str(repo), patch, "bad test", evidence=evidence)
     validate = self_update_validate(trace_id)
     test = self_update_test(trace_id)
     rollback = self_update_rollback(trace_id, "readyz failed")
@@ -173,7 +171,13 @@ def test_selfupdate_smoke_gate_pytest_failure(tmp_path: Path) -> None:
         ]
     )
 
-    _ = self_update_propose(trace_id, str(repo), patch, "smoke fail", evidence=_evidence())
+    _ = self_update_propose(
+        trace_id,
+        str(repo),
+        patch,
+        "smoke fail",
+        evidence=_evidence("tests/test_basic.py:1"),
+    )
     validate = self_update_validate(trace_id)
     test = self_update_test(trace_id)
 
@@ -205,6 +209,44 @@ def test_selfupdate_apply_blocked_during_lockdown(tmp_path: Path) -> None:
     apply = self_update_apply(trace_id)
     assert apply["status"] == "rejected"
     assert "lockdown" in apply["reason"]
+
+
+def test_selfupdate_apply_blocked_by_fitness_gate(tmp_path: Path, monkeypatch) -> None:
+    trace_id = "trc_self_fitness_gate"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    monkeypatch.setenv("SELFUPDATE_FITNESS_GATE_MODE", "enforce")
+    monkeypatch.setenv("SELFUPDATE_MIN_BUILD_SUCCESS_RATE", "0.95")
+    get_settings.cache_clear()
+    with get_conn() as conn:
+        _ = insert_system_fitness_snapshot(
+            conn,
+            period_start=now_iso(),
+            period_end=now_iso(),
+            metrics={
+                "selfupdate_success_rate": 0.10,
+                "failure_capsule_recurrence_rate": 0.90,
+                "rollback_frequency": 9,
+            },
+        )
+    _ = self_update_propose(trace_id, str(repo), patch, "test", evidence=_evidence())
+    _ = self_update_validate(trace_id)
+    _ = self_update_test(trace_id)
+    apply = self_update_apply(trace_id)
+    assert apply["status"] == "rejected"
+    assert "fitness gate blocked" in str(apply["reason"])
+    get_settings.cache_clear()
 
 
 def test_selfupdate_rollback_burst_emits_lockdown_event(tmp_path: Path) -> None:
@@ -330,7 +372,13 @@ def test_selfupdate_critical_path_requires_test_changes(tmp_path: Path) -> None:
             "",
         ]
     )
-    _ = self_update_propose(trace_id, str(repo), patch, "critical change", evidence=_evidence())
+    _ = self_update_propose(
+        trace_id,
+        str(repo),
+        patch,
+        "critical change",
+        evidence=_evidence("src/jarvis/tools/runtime.py:1"),
+    )
     _ = self_update_validate(trace_id)
     result = self_update_test(trace_id)
     assert result["status"] == "failed"

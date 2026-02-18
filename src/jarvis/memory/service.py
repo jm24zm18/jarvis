@@ -7,12 +7,14 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from math import sqrt
 from random import Random
+from typing import Any
 
 import httpx
 
 from jarvis.config import get_settings
 from jarvis.ids import new_id
 from jarvis.memory.policy import apply_memory_policy
+from jarvis.memory.state_store import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +102,7 @@ class MemoryService:
             "INSERT INTO memory_fts(memory_id, thread_id, text) VALUES(?,?,?)",
             (memory_id, thread_id, governed_text),
         )
-        vector = self._embed_text(governed_text)
+        vector = self._embed_text_cached(conn, governed_text)
         vec_json = json.dumps(vector)
         conn.execute(
             (
@@ -169,6 +171,39 @@ class MemoryService:
 
     def embed_text(self, text: str) -> list[float]:
         return self._embed_text(text)
+
+    def _embed_text_cached(self, conn: sqlite3.Connection, text: str) -> list[float]:
+        settings = get_settings()
+        model = settings.ollama_embed_model
+        key = sha256(f"{model}\n{text.strip()}".encode()).hexdigest()
+        row = conn.execute(
+            "SELECT vector_json FROM embedding_cache WHERE hash=? LIMIT 1",
+            (key,),
+        ).fetchone()
+        if row is not None and isinstance(row["vector_json"], str):
+            try:
+                decoded = json.loads(str(row["vector_json"]))
+                if isinstance(decoded, list):
+                    vec = [float(item) for item in decoded if isinstance(item, int | float)]
+                    if vec:
+                        conn.execute(
+                            "UPDATE embedding_cache SET hit_count=hit_count+1 WHERE hash=?",
+                            (key,),
+                        )
+                        return self._fit_dims(vec, settings.memory_embed_dims)
+            except json.JSONDecodeError:
+                pass
+        vector = self._embed_text(text)
+        conn.execute(
+            (
+                "INSERT OR REPLACE INTO embedding_cache("
+                "hash, model, vector_json, created_at, hit_count"
+                ") "
+                "VALUES(?,?,?,?,COALESCE((SELECT hit_count FROM embedding_cache WHERE hash=?), 0))"
+            ),
+            (key, model, json.dumps(vector), datetime.now(UTC).isoformat(), key),
+        )
+        return vector
 
     def upsert_event_vector(
         self,
@@ -629,7 +664,285 @@ class MemoryService:
                 return self._fit_dims(parsed, settings.memory_embed_dims)
         except Exception:
             pass
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            model = SentenceTransformer(settings.memory_sentence_transformers_model)
+            output = model.encode([text], normalize_embeddings=False)
+            if len(output) > 0:
+                first = output[0]
+                if hasattr(first, "tolist"):
+                    parsed = [float(item) for item in first.tolist()]
+                else:
+                    parsed = [float(item) for item in first]
+                return self._fit_dims(parsed, settings.memory_embed_dims)
+        except Exception:
+            pass
         return self._deterministic_embedding(text, settings.memory_embed_dims)
+
+    def search_state(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        query: str,
+        *,
+        filters: dict[str, Any] | None = None,
+        k: int = 20,
+        min_score: float = 0.75,
+        actor_id: str = "main",
+    ) -> list[dict[str, object]]:
+        if not query.strip():
+            return []
+        store = StateStore()
+        max_k = max(1, int(k))
+        pool_size = max(max_k * 3, 20)
+        rrf_k = 60
+        flt = filters or {}
+        desired_type = str(flt.get("type_tag") or "decision")
+        allowed_tiers = {
+            str(item)
+            for item in (flt.get("tiers") or [])
+            if isinstance(item, str) and item.strip()
+        }
+
+        vector_rows = store.search_similar_items(
+            conn=conn,
+            thread_id=thread_id,
+            embedding=self._embed_text_cached(conn, query),
+            type_tag=desired_type,
+            limit=pool_size,
+        )
+        vector_rank: list[str] = []
+        rows_by_uid: dict[str, dict[str, object]] = {}
+        for row in vector_rows:
+            uid = str(row.get("uid", ""))
+            if not uid:
+                continue
+            vector_rank.append(uid)
+            rows_by_uid[uid] = dict(row)
+
+        lexical_rows = conn.execute(
+            (
+                "SELECT uid, text, status, type_tag, topic_tags_json, confidence, tier, "
+                "importance_score, last_seen_at "
+                "FROM state_items WHERE thread_id=? AND status!='superseded' "
+                "AND LOWER(text) LIKE ? ORDER BY updated_at DESC LIMIT ?"
+            ),
+            (thread_id, f"%{query.strip().lower()}%", pool_size),
+        ).fetchall()
+        lexical_rank: list[str] = []
+        for row in lexical_rows:
+            uid = str(row["uid"])
+            lexical_rank.append(uid)
+            rows_by_uid.setdefault(
+                uid,
+                {
+                    "uid": uid,
+                    "text": str(row["text"]),
+                    "status": str(row["status"]),
+                    "type_tag": str(row["type_tag"]),
+                    "topic_tags": [],
+                    "score": 0.0,
+                    "tier": str(row["tier"]),
+                    "importance_score": float(row["importance_score"] or 0.0),
+                    "last_seen_at": str(row["last_seen_at"]),
+                    "confidence": str(row["confidence"]),
+                },
+            )
+
+        recent_rows = conn.execute(
+            (
+                "SELECT uid, text, status, type_tag, topic_tags_json, confidence, tier, "
+                "importance_score, last_seen_at "
+                "FROM state_items WHERE thread_id=? AND status!='superseded' "
+                "ORDER BY last_seen_at DESC LIMIT ?"
+            ),
+            (thread_id, pool_size),
+        ).fetchall()
+        recency_rank: list[str] = []
+        for row in recent_rows:
+            uid = str(row["uid"])
+            recency_rank.append(uid)
+            rows_by_uid.setdefault(
+                uid,
+                {
+                    "uid": uid,
+                    "text": str(row["text"]),
+                    "status": str(row["status"]),
+                    "type_tag": str(row["type_tag"]),
+                    "topic_tags": [],
+                    "score": 0.0,
+                    "tier": str(row["tier"]),
+                    "importance_score": float(row["importance_score"] or 0.0),
+                    "last_seen_at": str(row["last_seen_at"]),
+                    "confidence": str(row["confidence"]),
+                },
+            )
+
+        if not (vector_rank or lexical_rank or recency_rank):
+            return []
+        scores: dict[str, float] = {}
+        for idx, uid in enumerate(vector_rank):
+            scores[uid] = scores.get(uid, 0.0) + 0.50 / (rrf_k + idx + 1)
+        for idx, uid in enumerate(lexical_rank):
+            scores[uid] = scores.get(uid, 0.0) + 0.30 / (rrf_k + idx + 1)
+        for idx, uid in enumerate(recency_rank):
+            scores[uid] = scores.get(uid, 0.0) + 0.20 / (rrf_k + idx + 1)
+
+        filtered: list[dict[str, object]] = []
+        for uid, base_score in sorted(scores.items(), key=lambda item: item[1], reverse=True):
+            row = dict(rows_by_uid.get(uid, {}))
+            if not row:
+                continue
+            if row.get("type_tag") != desired_type:
+                continue
+            tier = str(row.get("tier") or "working")
+            if allowed_tiers and tier not in allowed_tiers:
+                continue
+            prior = (
+                0.05
+                if tier == "procedural"
+                else 0.03
+                if tier == "semantic_longterm"
+                else 0.015
+                if tier == "episodic"
+                else 0.0
+            )
+            combined = base_score + prior
+            if combined < min_score * 0.05:
+                continue
+            row["score"] = combined
+            row["agent_id"] = actor_id
+            filtered.append(row)
+            if len(filtered) >= max_k:
+                break
+        self._emit_memory_event(
+            conn,
+            "memory.search.executed",
+            {
+                "scope": "state",
+                "result_count": len(filtered),
+                "query": query[:120],
+                "filters": filters or {},
+            },
+            thread_id=thread_id,
+        )
+        return filtered
+
+    def get_failures(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        similar_to: str,
+        k: int = 10,
+        actor_id: str = "main",
+    ) -> list[dict[str, object]]:
+        del actor_id
+        text = similar_to.strip().lower()
+        if not text:
+            rows = conn.execute(
+                (
+                    "SELECT id, trace_id, phase, error_summary, error_details_json, "
+                    "attempt, created_at "
+                    "FROM failure_capsules ORDER BY created_at DESC LIMIT ?"
+                ),
+                (max(1, int(k)),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                (
+                    "SELECT id, trace_id, phase, error_summary, error_details_json, "
+                    "attempt, created_at "
+                    "FROM failure_capsules WHERE LOWER(error_summary) LIKE ? "
+                    "ORDER BY created_at DESC LIMIT ?"
+                ),
+                (f"%{text}%", max(1, int(k))),
+            ).fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "trace_id": str(row["trace_id"]),
+                "phase": str(row["phase"]),
+                "summary": str(row["error_summary"]),
+                "details_json": str(row["error_details_json"]),
+                "attempt": int(row["attempt"]),
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]
+
+    def graph_traverse(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        uid: str,
+        depth: int = 2,
+        relation_types: list[str] | None = None,
+        actor_id: str = "main",
+    ) -> dict[str, object]:
+        del actor_id
+        max_depth = max(1, min(5, int(depth)))
+        rel_filter = ""
+        params: list[object] = [uid, max_depth]
+        if relation_types:
+            placeholders = ",".join("?" for _ in relation_types)
+            rel_filter = f"AND sr.relation_type IN ({placeholders})"
+            params.extend(relation_types)
+        rows = conn.execute(
+            (
+                "WITH RECURSIVE walk(source_uid, target_uid, relation_type, depth) AS ("
+                "  SELECT sr.source_uid, sr.target_uid, sr.relation_type, 1 "
+                "  FROM state_relations sr WHERE sr.source_uid=? "
+                "  UNION ALL "
+                "  SELECT sr.source_uid, sr.target_uid, sr.relation_type, w.depth + 1 "
+                "  FROM state_relations sr JOIN walk w ON sr.source_uid=w.target_uid "
+                "  WHERE w.depth < ? "
+                f"  {rel_filter}"
+                ") "
+                "SELECT source_uid, target_uid, relation_type, depth FROM walk"
+            ),
+            tuple(params),
+        ).fetchall()
+        edges = [
+            {
+                "source_uid": str(row["source_uid"]),
+                "target_uid": str(row["target_uid"]),
+                "relation_type": str(row["relation_type"]),
+                "depth": int(row["depth"]),
+            }
+            for row in rows
+        ]
+        nodes: set[str] = {uid}
+        for edge in edges:
+            nodes.add(str(edge["source_uid"]))
+            nodes.add(str(edge["target_uid"]))
+        return {"root_uid": uid, "nodes": sorted(nodes), "edges": edges}
+
+    def evaluate_consistency(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        thread_id: str,
+        sample_size: int = 50,
+    ) -> dict[str, object]:
+        row = conn.execute(
+            (
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN conflict=1 THEN 1 ELSE 0 END) AS conflicted "
+                "FROM state_items WHERE thread_id=? LIMIT ?"
+            ),
+            (thread_id, max(1, int(sample_size))),
+        ).fetchone()
+        total = int(row["total"]) if row is not None else 0
+        conflicted = int(row["conflicted"] or 0) if row is not None else 0
+        score = 1.0 if total == 0 else max(0.0, 1.0 - (conflicted / total))
+        return {
+            "thread_id": thread_id,
+            "sample_size": max(1, int(sample_size)),
+            "total_items": total,
+            "conflicted_items": conflicted,
+            "consistency_score": score,
+        }
 
     @staticmethod
     def _fit_dims(vector: list[float], dims: int) -> list[float]:
