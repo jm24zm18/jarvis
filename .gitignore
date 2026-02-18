@@ -6,3 +6,15 @@ app.db-shm
 .coverage
 workplace/*
 !workplace/.gitkeep
+
+# Python local env/cache artifacts
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+**/__pycache__/
+
+# Frontend generated artifacts
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo
