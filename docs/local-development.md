@@ -95,3 +95,5 @@ make web-dev
 - `docs/codebase-tour.md`
 - `docs/configuration.md`
 - `docs/github-pr-automation.md`
+- `docs/cli-reference.md`
+- `docs/api-usage-guide.md`

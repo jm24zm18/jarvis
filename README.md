@@ -5,7 +5,7 @@ Implementation scaffold for `planv2.md` (SPEC-001).
 ## What is implemented
 
 - FastAPI app with `/healthz`, `/readyz`, WhatsApp webhook verification + ingestion.
-- Celery app and task routing.
+- In-process asyncio task runner and task routing.
 - SQLite DB connection + ordered SQL migrations.
 - Event system with trace-aware event emission.
 - Provider interface with Gemini + SGLang adapters and fallback routing.
@@ -25,7 +25,6 @@ uv sync
 make migrate
 make dev
 make api
-make worker
 ```
 
 ## Web UI
@@ -38,7 +37,7 @@ make worker
 
 - `uv run jarvis ask "summarize this repo"`
 - `uv run jarvis chat`
-- `uv run jarvis ask "/status" --enqueue`
+- `uv run jarvis ask "/status" --enqueue` (chat slash command status)
 - `uv run jarvis ask "hello" --json`
 
 ## Test and quality
@@ -52,10 +51,16 @@ CI (`.github/workflows/ci.yml`) runs lint, typecheck, unit, integration, and cov
 
 ## Documentation Index
 
+- `docs/README.md`
 - `docs/getting-started.md`
 - `docs/local-development.md`
 - `docs/git-workflow.md`
 - `docs/configuration.md`
+- `docs/cli-reference.md`
+- `docs/api-reference.md`
+- `docs/api-usage-guide.md`
+- `docs/web-admin-guide.md`
+- `docs/deploy-operations.md`
 - `docs/github-pr-automation.md`
 - `docs/architecture.md`
 - `docs/codebase-tour.md`

@@ -28,6 +28,8 @@ make lint
 make typecheck
 make test
 make test-gates
+make docs-generate
+make docs-check
 
 # targeted tests
 uv run pytest tests/unit -v
@@ -86,6 +88,7 @@ uv run jarvis skill list
 - Auth and RBAC: `src/jarvis/auth/`, `src/jarvis/routes/api/auth.py`
 - Web UI: `web/src/App.tsx`, `web/src/pages/admin/*`, `web/src/pages/chat/*`
 - Operations: `docs/runbook.md`, `docs/build-release.md`, `deploy/*`
+- Documentation index: `docs/README.md`
 
 ## Safety Rules
 
@@ -94,6 +97,7 @@ uv run jarvis skill list
 - Do not introduce non-additive migration rollouts without explicit rollback strategy.
 - Do not commit real credentials into docs or `.env.example`.
 - Keep `AGENTS.md` and `CLAUDE.md` operationally consistent.
+- Documentation updates are mandatory: any behavior, API, schema, config, tooling, or operational workflow change MUST update corresponding docs in the same PR before handoff.
 - Git flow policy:
   - Agent changes must be done on a dedicated work branch.
   - Agent PRs target `dev` (never `master` directly).
@@ -105,6 +109,7 @@ uv run jarvis skill list
 make lint
 make typecheck
 make test-gates
+make docs-check
 uv run jarvis doctor
 ```
 
@@ -119,8 +124,14 @@ If `make test-gates` is too slow during iteration, run targeted tests and then f
 ## Related Docs
 
 - `README.md`
+- `docs/README.md`
 - `docs/getting-started.md`
 - `docs/local-development.md`
+- `docs/cli-reference.md`
+- `docs/api-reference.md`
+- `docs/api-usage-guide.md`
+- `docs/web-admin-guide.md`
+- `docs/deploy-operations.md`
 - `docs/git-workflow.md`
 - `docs/architecture.md`
 - `docs/testing.md`

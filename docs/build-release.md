@@ -23,7 +23,8 @@ make test-gates
 ```bash
 make web-build
 make api
-make worker
+make docs-generate
+make docs-check
 ```
 
 ## Deploy Scripts
@@ -57,5 +58,6 @@ Requires conventional commits (e.g. `feat:`, `fix:`, `chore:`) on the `master` b
 
 - `docs/release-checklist.md`
 - `docs/runbook.md`
+- `docs/deploy-operations.md`
 - `docs/change-safety.md`
 - `docs/git-workflow.md`

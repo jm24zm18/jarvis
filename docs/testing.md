@@ -2,8 +2,8 @@
 
 ## Test Layout
 
-- Unit tests: `tests/unit/` (30 files currently)
-- Integration tests: `tests/integration/` (13 files currently)
+- Unit tests: `tests/unit/`
+- Integration tests: `tests/integration/`
 - Shared fixtures: `tests/conftest.py`
 
 ## Core Fixture Behavior (`tests/conftest.py`)
@@ -67,6 +67,7 @@ via `scripts/check_coverage.py` and `/tmp/jarvis_coverage.json`.
 
 ## Related Docs
 
+- `docs/README.md`
 - `docs/change-safety.md`
 - `docs/build-release.md`
 - `docs/local-development.md`

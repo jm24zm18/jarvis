@@ -26,6 +26,8 @@ make test
 make lint
 make typecheck
 make test-gates
+make docs-generate
+make docs-check
 
 # targeted tests
 uv run pytest tests/unit -v
@@ -86,8 +88,11 @@ deploy/                # systemd + healthcheck/rollback/restore scripts
 ## Read First
 
 - `README.md`
+- `docs/README.md`
 - `docs/getting-started.md`
 - `docs/architecture.md`
+- `docs/api-usage-guide.md`
+- `docs/cli-reference.md`
 - `docs/change-safety.md`
 - `docs/testing.md`
 
@@ -96,6 +101,8 @@ deploy/                # systemd + healthcheck/rollback/restore scripts
 - Prefer additive changes to schema and API.
 - For behavior changes, update tests in both unit/integration scopes where relevant.
 - Run at least `make lint`, `make typecheck`, and focused tests before finalizing.
+- Run docs drift checks (`make docs-generate`, `make docs-check`) when changing docs or public interfaces.
+- Documentation updates are mandatory: any behavior, API, schema, config, tooling, or operational workflow change MUST update corresponding docs in the same PR before handoff.
 - Keep `AGENTS.md` and this file aligned on operational facts.
 - Git flow policy:
   - Use a dedicated branch for implementation work.

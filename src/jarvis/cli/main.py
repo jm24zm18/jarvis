@@ -267,8 +267,8 @@ def build(
 ) -> None:
     """Trigger Jarvis to build, test, and fix its own repo.
 
-    Requires a running worker (make worker) since the build delegates to
-    the coder agent asynchronously.
+    Requires a running API process (`make api`) since build work is delegated
+    asynchronously to the in-process task runner.
     """
     from jarvis.cli.build import run_build
 

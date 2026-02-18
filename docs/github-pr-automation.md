@@ -4,7 +4,7 @@ This repo supports GitHub automation in three stages:
 
 - Verify inbound GitHub webhook signatures.
 - Receive `pull_request` events.
-- Queue a worker task that posts or updates a single PR summary comment.
+- Queue an in-process task that posts or updates a single PR summary comment.
 - Receive PR comment events and reply when triggered by `/jarvis ...` or `@jarvis`.
 - Sync bug/feature requests from Jarvis into GitHub Issues when requested.
 - Auto-create a bug report in `/api/v1/bugs` storage if PR automation fails.
@@ -39,11 +39,10 @@ GITHUB_ISSUE_LABELS_BUG=jarvis,bug
 GITHUB_ISSUE_LABELS_FEATURE=jarvis,feature-request
 ```
 
-2. Restart API + worker:
+2. Restart API:
 
 ```bash
 make api
-make worker
 ```
 
 3. Configure GitHub webhook in repository settings:
@@ -90,7 +89,7 @@ Example payload:
 Expected behavior:
 
 - Jarvis stores the local row first (`kind=bug` or `kind=feature`).
-- A worker task creates a GitHub Issue in `GITHUB_ISSUE_SYNC_REPO`.
+- An in-process task creates a GitHub Issue in `GITHUB_ISSUE_SYNC_REPO`.
 - On success, local row is updated with `github_issue_number`, `github_issue_url`, `github_synced_at`.
 - On failure, local row stores `github_sync_error`.
 

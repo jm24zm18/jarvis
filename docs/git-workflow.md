@@ -64,6 +64,7 @@ git checkout -b agent/<topic>
 make lint
 make typecheck
 make test-gates
+make docs-check
 
 # 4) push and open PR to dev
 git push -u origin agent/<topic>
@@ -78,6 +79,7 @@ git push -u origin agent/<topic>
 
 ## Related Docs
 
+- `docs/README.md`
 - `CONTRIBUTING.md`
 - `AGENTS.md`
 - `docs/build-release.md`

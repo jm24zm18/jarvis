@@ -100,10 +100,11 @@ Verification discipline:
   - `uv sync`
   - `make migrate`
   - `make api`
-  - `make worker`
   - `make test`
   - `make lint`
   - `make typecheck`
+  - `make docs-generate`
+  - `make docs-check`
 - If a command cannot be executed in the current environment, mark it as "Not executed" and explain why.
 - If a command/example cannot be verified from repo files or execution, mark it "Needs confirmation" and do not present it as confirmed fact.
 

@@ -94,7 +94,9 @@
 
 ## Related Docs
 
+- `docs/README.md`
 - `docs/codebase-tour.md`
 - `docs/configuration.md`
 - `docs/change-safety.md`
 - `docs/runbook.md`
+- `docs/api-reference.md`

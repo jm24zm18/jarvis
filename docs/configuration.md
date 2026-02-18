@@ -6,7 +6,7 @@ Source of truth: `src/jarvis/config.py`.
 
 1. Copy `.env.example` to `.env`.
 2. Set environment values.
-3. Restart API/worker after changes.
+3. Restart API after changes (`make api` in local dev).
 
 ## Environment Variables
 
@@ -192,6 +192,8 @@ Source of truth: `src/jarvis/config.py`.
 
 ## Related Docs
 
+- `docs/README.md`
 - `.env.example`
 - `docs/local-development.md`
 - `docs/change-safety.md`
+- `docs/deploy-operations.md`

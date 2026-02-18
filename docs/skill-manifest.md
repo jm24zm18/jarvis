@@ -39,3 +39,9 @@ pinned: true
 files:
   - SKILL.md
 ```
+
+## Related Docs
+
+- `docs/cli-reference.md`
+- `docs/architecture.md`
+- `docs/change-safety.md`
