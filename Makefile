@@ -1,6 +1,6 @@
 .PHONY: dev api test test-gates lint typecheck migrate setup doctor \
        web-install web-build web-dev web-lint web-typecheck web-test \
-       hooks validate-agents test-migrations security
+       hooks validate-agents test-migrations security docs-generate docs-check
 
 dev:
 	docker compose up -d
@@ -66,3 +66,9 @@ web-typecheck:
 
 web-test:
 	cd web && npm test
+
+docs-generate:
+	uv run python scripts/generate_api_docs.py
+
+docs-check:
+	uv run python scripts/docs_check.py

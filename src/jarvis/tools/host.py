@@ -12,6 +12,7 @@ from typing import Any
 from jarvis.config import get_settings
 from jarvis.db.queries import (
     consume_approval,
+    get_agent_governance,
     get_system_state,
     record_exec_host_result,
     trigger_lockdown,
@@ -101,6 +102,44 @@ def _resolve_cwd(cwd: str | None) -> tuple[Path | None, str | None]:
     if prefixes and not any(_is_subpath(candidate, prefix) for prefix in prefixes):
         return None, f"cwd outside allowlist: {candidate}"
     return candidate, None
+
+
+def _allowed_prefixes_for_caller(conn: sqlite3.Connection, caller_id: str) -> list[Path]:
+    governance = get_agent_governance(conn, caller_id)
+    if governance is None:
+        return []
+    raw_obj = governance.get("allowed_paths", [])
+    raw = raw_obj if isinstance(raw_obj, list) else []
+    return [
+        Path(str(item)).expanduser().resolve()
+        for item in raw
+        if isinstance(item, str) and item.strip()
+    ]
+
+
+def _validate_caller_paths(
+    conn: sqlite3.Connection,
+    caller_id: str,
+    command: str,
+    cwd: Path | None,
+) -> str | None:
+    prefixes = _allowed_prefixes_for_caller(conn, caller_id)
+    if not prefixes:
+        return None
+    if cwd is not None and not any(_is_subpath(cwd, prefix) for prefix in prefixes):
+        return f"cwd outside caller governance allowlist: {cwd}"
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return "command parse failure for governance allowlist"
+    for token in tokens:
+        if not token.startswith("/"):
+            continue
+        target = Path(token).expanduser().resolve()
+        if any(_is_subpath(target, prefix) for prefix in prefixes):
+            continue
+        return f"path outside caller governance allowlist: {target}"
+    return None
 
 
 def _write_full_log(start_event_id: str, stdout: str, stderr: str) -> str:
@@ -237,7 +276,23 @@ def execute_host_command(
         return {"exit_code": 126, "stdout": "", "stderr": stderr}
 
     required = _required_approval_action(command)
-    if required is not None and not consume_approval(conn, required):
+    governance = get_agent_governance(conn, caller_id)
+    if required is not None and governance is not None:
+        can_request = bool(governance.get("can_request_privileged_change", False))
+        if not can_request:
+            stderr = "privileged host command denied for caller governance profile"
+            end_payload = {
+                "start_event_id": start_event_id,
+                "exit_code": 126,
+                "stdout": "",
+                "stderr": stderr,
+                "stdout_truncated": False,
+                "stderr_truncated": False,
+                "log_path": "",
+            }
+            _ = _emit(conn, trace_id, thread_id, "host.exec.end", end_payload)
+            return {"exit_code": 126, "stdout": "", "stderr": stderr}
+    if required is not None and not consume_approval(conn, required, trace_id=trace_id):
         stderr = f"{required} requires admin approval record"
         _ = emit_event(
             conn,
@@ -311,6 +366,27 @@ def execute_host_command(
             _emit_lockdown_triggered(conn, trace_id, thread_id, caller_id, "exec_host_failure_rate")
         _ = _emit(conn, trace_id, thread_id, "host.exec.end", end_payload)
         return {"exit_code": 2, "stdout": "", "stderr": cwd_error}
+    caller_path_error = _validate_caller_paths(conn, caller_id, command, resolved_cwd)
+    if caller_path_error is not None:
+        end_payload = {
+            "start_event_id": start_event_id,
+            "exit_code": 126,
+            "stdout": "",
+            "stderr": caller_path_error,
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+            "log_path": "",
+        }
+        locked = record_exec_host_result(
+            conn,
+            ok=False,
+            threshold_count=settings.lockdown_exec_host_fail_threshold,
+            window_minutes=settings.lockdown_exec_host_fail_window_minutes,
+        )
+        if not pre_lockdown and locked:
+            _emit_lockdown_triggered(conn, trace_id, thread_id, caller_id, "exec_host_failure_rate")
+        _ = _emit(conn, trace_id, thread_id, "host.exec.end", end_payload)
+        return {"exit_code": 126, "stdout": "", "stderr": caller_path_error}
 
     sanitized_env = _sanitize_env(env)
 

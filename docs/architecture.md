@@ -28,10 +28,12 @@
 ## Self-Update Flow
 
 1. Propose patch -> persist metadata.
-2. Validate patch format + protected paths + `git apply --check`.
-3. Test in temporary worktree (profile-dependent smoke suite).
-4. Admin approval -> apply patch.
-5. Readiness watchdog and rollback path enforce safety gates.
+2. Validate evidence contract (`file_refs`, `line_refs`, `policy_refs`, invariants).
+3. Validate patch format + protected paths + `git apply --check`.
+4. Deterministic replay check from recorded `baseline_ref`.
+5. Test in temporary worktree (profile-dependent smoke suite).
+6. Admin approval -> apply patch.
+7. Readiness watchdog and rollback path enforce safety gates.
 
 ## Web UI Architecture
 
@@ -92,7 +94,9 @@
 
 ## Related Docs
 
+- `docs/README.md`
 - `docs/codebase-tour.md`
 - `docs/configuration.md`
 - `docs/change-safety.md`
 - `docs/runbook.md`
+- `docs/api-reference.md`

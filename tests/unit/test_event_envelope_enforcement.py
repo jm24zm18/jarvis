@@ -1,0 +1,39 @@
+import json
+
+from jarvis.db.connection import get_conn
+from jarvis.events.models import EventInput
+from jarvis.events.writer import emit_event
+
+
+def test_emit_event_enforces_action_envelope_for_selfupdate_events() -> None:
+    with get_conn() as conn:
+        emit_event(
+            conn,
+            EventInput(
+                trace_id="trc_test",
+                span_id="spn_test",
+                parent_span_id=None,
+                thread_id=None,
+                event_type="self_update.validate",
+                component="selfupdate",
+                actor_type="system",
+                actor_id="selfupdate",
+                payload_json=json.dumps({"status": "ok"}),
+                payload_redacted_json=json.dumps({"status": "ok"}),
+            ),
+        )
+        row = conn.execute(
+            "SELECT payload_redacted_json FROM events ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    payload = json.loads(str(row["payload_redacted_json"]))
+    assert payload.get("status") == "ok"
+    assert "intent" in payload
+    assert "evidence" in payload
+    assert "plan" in payload
+    assert "diff" in payload
+    assert "tests" in payload
+    assert "result" in payload
+    assert str(payload.get("intent", "")).strip() != ""
+    assert str(payload.get("tests", {}).get("result", "")).strip() != ""
+    assert str(payload.get("result", {}).get("status", "")).strip() != ""

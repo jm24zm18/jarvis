@@ -32,7 +32,7 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     ws.subscribeSystem();
-  }, [ws.subscribeSystem]);
+  }, [ws]);
 
   const data = status.data;
   const lockdown = data?.system.lockdown === 1;

@@ -20,6 +20,11 @@ def _write_bundle(root: Path, agent_id: str) -> None:
             f"agent_id: {agent_id}\n"
             "allowed_tools:\n"
             "  - echo\n"
+            "risk_tier: low\n"
+            "max_actions_per_step: 4\n"
+            "allowed_paths:\n"
+            "  - /tmp\n"
+            "can_request_privileged_change: false\n"
             "---\n\n"
             f"# {agent_id.title()} Agent\n"
         ),

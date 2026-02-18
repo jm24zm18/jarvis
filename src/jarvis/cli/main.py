@@ -267,8 +267,8 @@ def build(
 ) -> None:
     """Trigger Jarvis to build, test, and fix its own repo.
 
-    Requires a running worker (make worker) since the build delegates to
-    the coder agent asynchronously.
+    Requires a running API process (`make api`) since build work is delegated
+    asynchronously to the in-process task runner.
     """
     from jarvis.cli.build import run_build
 
@@ -491,3 +491,102 @@ def maintenance_enqueue() -> None:
         queue="agent_default",
     )
     click.echo("maintenance task queued" if ok else "failed to queue maintenance task")
+
+
+@cli.group("memory")
+def memory_group() -> None:
+    """Structured memory operations."""
+
+
+@memory_group.command("review")
+@click.option("--conflicts", is_flag=True, help="Show open conflict review items.")
+@click.option("--limit", default=50, show_default=True)
+def memory_review(conflicts: bool, limit: int) -> None:
+    """Review structured memory conflict queue."""
+    if not conflicts:
+        raise click.ClickException("only --conflicts is currently supported")
+    with get_conn() as conn:
+        rows = conn.execute(
+            (
+                "SELECT id, uid, thread_id, reason, status, created_at "
+                "FROM memory_review_queue WHERE status='open' "
+                "ORDER BY created_at DESC LIMIT ?"
+            ),
+            (max(1, int(limit)),),
+        ).fetchall()
+    if not rows:
+        click.echo("no open conflict reviews")
+        return
+    for row in rows:
+        click.echo(
+            f"{row['id']} uid={row['uid']} thread={row['thread_id']} "
+            f"reason={row['reason']} status={row['status']} created_at={row['created_at']}"
+        )
+
+
+@memory_group.command("export")
+@click.option("--format", "output_format", default="jsonl", show_default=True)
+@click.option("--tier", default="", help="Optional tier filter.")
+@click.option("--thread-id", default=None, help="Optional thread filter.")
+@click.option("--output", "-o", type=click.Path(), default=None)
+@click.option("--limit", default=1000, show_default=True)
+def memory_export(
+    output_format: str,
+    tier: str,
+    thread_id: str | None,
+    output: str | None,
+    limit: int,
+) -> None:
+    """Export structured memory as JSONL."""
+    if output_format.lower() != "jsonl":
+        raise click.ClickException("only --format=jsonl is supported")
+    with get_conn() as conn:
+        if thread_id:
+            rows = conn.execute(
+                (
+                    "SELECT uid, thread_id, text, type_tag, status, tier, "
+                    "importance_score, created_at "
+                    "FROM state_items WHERE thread_id=? "
+                    + ("AND tier=? " if tier.strip() else "")
+                    + "ORDER BY created_at DESC LIMIT ?"
+                ),
+                (
+                    (thread_id, tier, max(1, int(limit)))
+                    if tier.strip()
+                    else (thread_id, max(1, int(limit)))
+                ),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                (
+                    "SELECT uid, thread_id, text, type_tag, status, tier, "
+                    "importance_score, created_at "
+                    "FROM state_items "
+                    + ("WHERE tier=? " if tier.strip() else "")
+                    + "ORDER BY created_at DESC LIMIT ?"
+                ),
+                ((tier, max(1, int(limit))) if tier.strip() else (max(1, int(limit)),)),
+            ).fetchall()
+    out = open(output, "w") if output else sys.stdout
+    try:
+        for row in rows:
+            out.write(
+                json.dumps(
+                    {
+                        "uid": str(row["uid"]),
+                        "thread_id": str(row["thread_id"]),
+                        "text": str(row["text"]),
+                        "type_tag": str(row["type_tag"]),
+                        "status": str(row["status"]),
+                        "tier": str(row["tier"]),
+                        "importance_score": float(row["importance_score"]),
+                        "created_at": str(row["created_at"]),
+                    }
+                )
+                + "\n"
+            )
+    finally:
+        if output:
+            out.close()
+    if output:
+        click.echo(f"exported to {output}")

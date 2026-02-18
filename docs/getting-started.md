@@ -87,7 +87,10 @@ Then restart API and configure repository webhook to:
 
 ## Next Docs
 
+- `docs/README.md`
 - `docs/local-development.md`
 - `docs/configuration.md`
+- `docs/cli-reference.md`
+- `docs/api-usage-guide.md`
 - `docs/github-pr-automation.md`
 - `docs/testing.md`

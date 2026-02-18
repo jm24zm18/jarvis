@@ -21,6 +21,9 @@ import type {
   ProviderConfigUpdateResult,
   GoogleOAuthStartResult,
   GoogleOAuthStatus,
+  FitnessSnapshot,
+  GovernanceSlo,
+  GovernanceSloHistoryItem,
 } from "../types";
 
 export const login = (password: string) =>
@@ -171,6 +174,18 @@ export const approvePatch = (traceId: string) =>
     body: "{}",
   });
 
+export const patchChecks = (traceId: string) =>
+  apiFetch<{ trace_id: string; items: Array<Record<string, unknown>> }>(
+    `/api/v1/selfupdate/patches/${traceId}/checks`,
+  );
+
+export const patchTimeline = (traceId: string) =>
+  apiFetch<{
+    trace_id: string;
+    transitions: Array<Record<string, unknown>>;
+    checks: Array<Record<string, unknown>>;
+  }>(`/api/v1/selfupdate/patches/${traceId}/timeline`);
+
 export const listPermissions = () =>
   apiFetch<{ items: PermissionGroup[] }>("/api/v1/permissions");
 
@@ -251,4 +266,86 @@ export const updateBug = (bugId: string, payload: Record<string, unknown>) =>
 export const deleteBug = (bugId: string) =>
   apiFetch<{ ok: boolean }>(`/api/v1/bugs/${bugId}`, {
     method: "DELETE",
+  });
+
+export const latestFitness = () =>
+  apiFetch<{ item: FitnessSnapshot | null }>("/api/v1/governance/fitness/latest");
+
+export const fitnessHistory = (limit = 12) =>
+  apiFetch<{ items: FitnessSnapshot[]; limit: number }>(
+    `/api/v1/governance/fitness/history?limit=${encodeURIComponent(String(limit))}`,
+  );
+
+export const dependencyStewardStatus = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/governance/dependency-steward");
+
+export const releaseCandidateStatus = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/governance/release-candidate");
+
+export const governanceDecisionTimeline = (params: {
+  trace_id?: string;
+  thread_id?: string;
+  limit?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params.trace_id) qs.set("trace_id", params.trace_id);
+  if (params.thread_id) qs.set("thread_id", params.thread_id);
+  if (typeof params.limit === "number") qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<Record<string, unknown>>(`/api/v1/governance/decision-timeline${suffix}`);
+};
+
+export const governancePatchLifecycle = (traceId: string) =>
+  apiFetch<Record<string, unknown>>(`/api/v1/governance/patch-lifecycle/${encodeURIComponent(traceId)}`);
+
+export const governanceLearningLoop = (windowDays = 14, refresh = true) =>
+  apiFetch<Record<string, unknown>>(
+    `/api/v1/governance/learning-loop?window_days=${encodeURIComponent(String(windowDays))}&refresh=${refresh ? "true" : "false"}`,
+  );
+
+export const governanceSlo = () =>
+  apiFetch<GovernanceSlo>("/api/v1/governance/slo");
+
+export const governanceSloHistory = (limit = 12) =>
+  apiFetch<{ items: GovernanceSloHistoryItem[]; thresholds: Record<string, unknown>; limit: number }>(
+    `/api/v1/governance/slo/history?limit=${encodeURIComponent(String(limit))}`,
+  );
+
+export const governanceRemediationFeedback = (remediationId: string, feedback: "accepted" | "rejected") =>
+  apiFetch<Record<string, unknown>>(`/api/v1/governance/remediations/${encodeURIComponent(remediationId)}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ feedback }),
+  });
+
+export const runMemoryMaintenance = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/memory/maintenance/run", {
+    method: "POST",
+    body: "{}",
+  });
+
+export const memoryConsistencyReport = (limit = 50) =>
+  apiFetch<Record<string, unknown>>(`/api/v1/memory/state/consistency/report?limit=${encodeURIComponent(String(limit))}`);
+
+export const whatsappStatus = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/status");
+
+export const whatsappCreate = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/create", {
+    method: "POST",
+    body: "{}",
+  });
+
+export const whatsappQrCode = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/qrcode");
+
+export const whatsappPairingCode = (number: string) =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/pairing-code", {
+    method: "POST",
+    body: JSON.stringify({ number }),
+  });
+
+export const whatsappDisconnect = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/disconnect", {
+    method: "POST",
+    body: "{}",
   });

@@ -1,74 +1,55 @@
-import { X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ChevronDown, ChevronRight, X } from "lucide-react";
 import type { TraceEvent } from "../../stores/chat";
+import { formatThinkingEvent, getEventKey, truncateText } from "./thinkingFormat";
 
 interface Props {
   events: TraceEvent[];
   onClose: () => void;
 }
 
-function eventColor(eventType: string): string {
-  if (eventType.includes("fallback")) return "border-amber-400 bg-amber-50 dark:bg-amber-900/20";
-  if (eventType.includes("end") || eventType.includes("success"))
-    return "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20";
-  if (eventType.includes("error") || eventType.includes("fail"))
-    return "border-red-400 bg-red-50 dark:bg-red-900/20";
-  if (eventType.includes("delegated"))
-    return "border-violet-400 bg-violet-50 dark:bg-violet-900/20";
+type FilterMode = "all" | "thoughts" | "tools" | "errors";
+
+function statusClasses(status: string): string {
+  if (status === "warning") return "border-amber-300 bg-amber-50 dark:bg-amber-900/20";
+  if (status === "success") return "border-emerald-300 bg-emerald-50 dark:bg-emerald-900/20";
+  if (status === "error") return "border-red-300 bg-red-50 dark:bg-red-900/20";
   return "border-[var(--border-strong)] bg-surface";
 }
 
-function summarizeEvent(event: TraceEvent): string {
-  const payload = event.payload;
-  if (event.event_type === "agent.thought") {
-    const iteration = Number(payload.iteration ?? 0);
-    const source = String(payload.thought_source ?? "provider_reasoning");
-    const suffix = source === "assistant_text_fallback" ? ", fallback" : "";
-    return `Thought captured (iteration ${iteration + 1}${suffix})`;
-  }
-  if (event.event_type === "model.run.start") {
-    const iteration = Number(payload.iteration ?? 0);
-    return `Thinking (iteration ${iteration + 1})`;
-  }
-  if (event.event_type === "model.run.end") {
-    const lane = String(payload.lane ?? "unknown");
-    return `Model responded (lane: ${lane})`;
-  }
-  if (event.event_type === "model.fallback") {
-    return "Primary failed, switched to fallback model";
-  }
-  if (event.event_type === "tool.call.start") {
-    return `Running tool: ${String(payload.tool ?? "unknown")}`;
-  }
-  if (event.event_type === "tool.call.end") {
-    return `Tool finished: ${String(payload.tool ?? "unknown")}`;
-  }
-  if (event.event_type === "agent.delegated") {
-    return `Delegating to ${String(payload.to_agent ?? "worker")}`;
-  }
-  return event.event_type;
+function statusDotClasses(status: string): string {
+  if (status === "warning") return "bg-amber-500";
+  if (status === "success") return "bg-emerald-500";
+  if (status === "error") return "bg-red-500";
+  return "bg-slate-500";
 }
 
-function previewText(event: TraceEvent): string {
-  const payload = event.payload;
-  if (event.event_type === "agent.thought") {
-    const text = String(payload.text ?? "").trim();
-    if (!text) return "No thought text captured.";
-    return text.length > 280 ? `${text.slice(0, 279)}...` : text;
-  }
-  if (event.event_type === "tool.call.start") {
-    const args = payload.arguments;
-    if (typeof args === "object" && args !== null) {
-      return `Arguments: ${JSON.stringify(args)}`;
-    }
-  }
-  if (event.event_type === "tool.call.end") {
-    if (payload.error) return `Error: ${String(payload.error)}`;
-    if (payload.result !== undefined) return `Result: ${JSON.stringify(payload.result)}`;
-  }
-  return "";
+function matchesFilter(event: ReturnType<typeof formatThinkingEvent>, mode: FilterMode): boolean {
+  if (mode === "all") return true;
+  if (mode === "thoughts") return event.kind === "thought";
+  if (mode === "tools") return event.kind === "tool_start" || event.kind === "tool_end";
+  return event.status === "error";
+}
+
+function filterLabel(mode: FilterMode): string {
+  if (mode === "thoughts") return "Thoughts";
+  if (mode === "tools") return "Tools";
+  if (mode === "errors") return "Errors";
+  return "All";
 }
 
 export default function ThinkingPanel({ events, onClose }: Props) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const normalized = useMemo(
+    () => events.map((event, index) => ({ key: getEventKey(event, index), raw: event, view: formatThinkingEvent(event) })),
+    [events],
+  );
+  const visibleEvents = useMemo(
+    () => normalized.filter((item) => matchesFilter(item.view, filterMode)),
+    [filterMode, normalized],
+  );
+
   return (
     <aside className="ml-3 w-80 shrink-0 overflow-hidden rounded-xl border border-[var(--border-default)] bg-surface shadow-lg transition-all">
       <div className="flex items-center justify-between border-b border-[var(--border-default)] px-4 py-3">
@@ -81,40 +62,107 @@ export default function ThinkingPanel({ events, onClose }: Props) {
           <X size={16} />
         </button>
       </div>
+      <div className="flex gap-1 border-b border-[var(--border-default)] px-3 py-2">
+        {(["all", "thoughts", "tools", "errors"] as FilterMode[]).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => setFilterMode(mode)}
+            className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+              filterMode === mode
+                ? "bg-[#13293d] text-white dark:bg-slate-200 dark:text-slate-900"
+                : "bg-mist text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+            }`}
+          >
+            {filterLabel(mode)}
+          </button>
+        ))}
+      </div>
       <div className="max-h-[60vh] space-y-0 overflow-y-auto p-3">
-        {events.length === 0 ? (
+        {visibleEvents.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-8 text-center">
             <div className="flex gap-1">
               <span className="h-2 w-2 rounded-full bg-[var(--text-muted)] pulse-glow" />
               <span className="h-2 w-2 rounded-full bg-[var(--text-muted)] pulse-glow [animation-delay:0.3s]" />
               <span className="h-2 w-2 rounded-full bg-[var(--text-muted)] pulse-glow [animation-delay:0.6s]" />
             </div>
-            <p className="text-xs text-[var(--text-muted)]">Waiting for activity...</p>
+            <p className="text-xs text-[var(--text-muted)]">
+              {events.length === 0 ? "Waiting for activity..." : "No events for this filter."}
+            </p>
           </div>
         ) : (
-          events.map((event, index) => (
-            <div key={`${event.created_at}-${index}`} className="relative flex gap-3 pb-3">
+          visibleEvents.map((item, index) => (
+            <div key={item.key} className="relative flex gap-3 pb-3">
               {/* Timeline connector */}
               <div className="flex flex-col items-center">
-                <div className="h-2.5 w-2.5 rounded-full border-2 border-[var(--text-muted)] bg-surface" />
-                {index < events.length - 1 && (
+                <div className={`h-2.5 w-2.5 rounded-full ${statusDotClasses(item.view.status)}`} />
+                {index < visibleEvents.length - 1 && (
                   <div className="w-px flex-1 bg-[var(--border-default)]" />
                 )}
               </div>
               {/* Event card */}
               <div
-                className={`flex-1 rounded-lg border px-3 py-2 ${eventColor(event.event_type)}`}
+                className={`flex-1 rounded-lg border px-2.5 py-2 ${statusClasses(item.view.status)}`}
               >
-                <div className="text-xs font-medium text-[var(--text-primary)]">
-                  {summarizeEvent(event)}
-                </div>
-                {previewText(event) ? (
-                  <div className="mt-1 whitespace-pre-wrap break-words text-[11px] text-[var(--text-primary)]">
-                    {previewText(event)}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpanded((state) => ({ ...state, [item.key]: !state[item.key] }))
+                  }
+                  className="flex w-full items-start gap-1 text-left"
+                >
+                  <div className="pt-0.5 text-[var(--text-muted)]">
+                    {expanded[item.key] ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <div className="truncate text-xs font-medium text-[var(--text-primary)]">
+                        {item.view.title}
+                      </div>
+                      <span className="rounded border border-[var(--border-default)] px-1 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">
+                        {item.view.eventType}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-[var(--text-muted)]">
+                      {new Date(item.raw.created_at).toLocaleTimeString()}
+                    </div>
+                  </div>
+                </button>
+                {item.view.preview ? (
+                  <div className="mt-1 whitespace-pre-wrap break-words pl-5 text-[11px] text-[var(--text-primary)]">
+                    {truncateText(item.view.preview, 220)}
                   </div>
                 ) : null}
-                <div className="mt-0.5 text-[11px] text-[var(--text-muted)]">
-                  {new Date(event.created_at).toLocaleTimeString()}
+                {expanded[item.key] ? (
+                  <div className="mt-2 space-y-2 border-t border-[var(--border-default)] pt-2 pl-5">
+                    {item.view.details
+                      .filter((section: { label: string; value: string; raw?: boolean }) => !section.raw)
+                      .map((section: { label: string; value: string; code?: boolean; emphasis?: string }) => (
+                        <section key={section.label}>
+                          <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                            {section.label}
+                          </div>
+                          <pre
+                            className={`mt-0.5 whitespace-pre-wrap break-words text-[11px] ${
+                              section.code ? "font-mono" : ""
+                            } ${section.emphasis === "error" ? "text-red-700 dark:text-red-300" : "text-[var(--text-primary)]"}`}
+                          >
+                            {section.value}
+                          </pre>
+                        </section>
+                      ))}
+                    <details>
+                      <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                        Raw payload
+                      </summary>
+                      <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-[var(--text-primary)]">
+                        {item.view.details.find((section: { raw?: boolean }) => section.raw)?.value ?? "{}"}
+                      </pre>
+                    </details>
+                  </div>
+                ) : null}
+                <div className="mt-0.5 text-[11px] text-[var(--text-muted)] sr-only">
+                  {new Date(item.raw.created_at).toLocaleTimeString()}
                 </div>
               </div>
             </div>

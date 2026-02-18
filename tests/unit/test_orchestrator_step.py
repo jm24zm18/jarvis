@@ -578,3 +578,95 @@ def test_run_agent_step_emits_tool_error_notification(monkeypatch) -> None:
             )
         )
     assert any(evt == "tool.call.end" and "error" in payload for evt, payload in notifications)
+
+
+def test_run_agent_step_enqueues_full_tool_memory_payload(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    captured: list[dict[str, object]] = []
+
+    def _capture_memory(**kwargs: object) -> None:
+        captured.append(dict(kwargs))
+
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", _capture_memory)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="calling tool",
+                    tool_calls=[{"name": "echo", "arguments": {"x": 1}}],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="done", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550877")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "run tool")
+        _ = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_tool_mem")
+        )
+    tool_entries = [
+        item for item in captured if item.get("metadata", {}).get("source") == "tool.call.end"
+    ]
+    assert tool_entries
+    first = tool_entries[0]
+    metadata = first["metadata"]
+    assert isinstance(metadata, dict)
+    assert "result_sha256" in metadata
+    assert "result_char_count" in metadata
+    text = str(first["text"])
+    assert '"type": "tool.call.end"' in text
+    assert '"status": "success"' in text
+
+
+def test_run_agent_step_enqueues_thought_memory_payload(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    captured: list[dict[str, object]] = []
+
+    def _capture_memory(**kwargs: object) -> None:
+        captured.append(dict(kwargs))
+
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", _capture_memory)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="answer",
+                    tool_calls=[],
+                    reasoning_text="reasoned thoughts",
+                    reasoning_parts=[{"text": "reasoned thoughts"}],
+                ),
+                "primary",
+            )
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550876")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "hello")
+        _ = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_thought_mem",
+            )
+        )
+    thought_entries = [
+        item for item in captured if item.get("metadata", {}).get("source") == "agent.thought"
+    ]
+    assert thought_entries
+    metadata = thought_entries[0]["metadata"]
+    assert isinstance(metadata, dict)
+    assert "thought_sha256" in metadata
+    assert "thought_char_count" in metadata
+    assert '"type": "agent.thought"' in str(thought_entries[0]["text"])

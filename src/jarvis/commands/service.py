@@ -12,6 +12,8 @@ from jarvis.db.queries import (
     create_approval,
     create_thread,
     get_system_state,
+    list_selfupdate_checks,
+    list_selfupdate_transitions,
     set_thread_agents,
     set_thread_verbose,
 )
@@ -23,6 +25,7 @@ from jarvis.memory.service import MemoryService
 from jarvis.onboarding.service import reset_onboarding_state, start_onboarding_prompt
 from jarvis.providers.router import ProviderRouter
 from jarvis.scheduler.service import estimate_schedule_backlog
+from jarvis.selfupdate.pipeline import read_artifact, read_state
 from jarvis.tasks import get_task_runner
 from jarvis.tasks.system import enqueue_restart
 
@@ -189,6 +192,44 @@ async def maybe_execute_command(
         payload = [dict(r) for r in rows]
         return json.dumps({"trace_id": trace_id, "events": payload})
 
+    if command == "/logs" and len(args) >= 2 and args[0] == "trace-audit":
+        trace_id = args[1]
+        event_rows = conn.execute(
+            (
+                "SELECT event_type, component, created_at, payload_redacted_json "
+                "FROM events WHERE trace_id=? ORDER BY created_at ASC"
+            ),
+            (trace_id,),
+        ).fetchall()
+        checks = list_selfupdate_checks(conn, trace_id)
+        transitions = list_selfupdate_transitions(conn, trace_id)
+        patch_base = Path(get_settings().selfupdate_patch_dir)
+        state: dict[str, object] = {}
+        artifact: dict[str, object] = {}
+        try:
+            state = read_state(trace_id, patch_base)
+        except Exception:
+            state = {}
+        try:
+            artifact = read_artifact(trace_id, patch_base)
+        except Exception:
+            artifact = {}
+        repo_index_hash = ""
+        hash_path = Path(".jarvis/repo_index.sha256")
+        if hash_path.exists():
+            repo_index_hash = hash_path.read_text().strip()
+        return json.dumps(
+            {
+                "trace_id": trace_id,
+                "repo_index_hash": repo_index_hash,
+                "events": [dict(r) for r in event_rows],
+                "checks": checks,
+                "transitions": transitions,
+                "state": state,
+                "artifact": artifact,
+            }
+        )
+
     if command == "/logs" and len(args) >= 2 and args[0] == "search":
         query = " ".join(args[1:]).strip()
         if not query:
@@ -326,6 +367,7 @@ async def maybe_execute_command(
         if not _is_admin(admin_ids, actor_external_id):
             return "admin required"
         action = args[0].strip().lower()
+        target_ref = args[1].strip() if len(args) >= 2 else ""
         allowed_actions = {
             "host.exec.sudo",
             "host.exec.systemctl",
@@ -335,7 +377,15 @@ async def maybe_execute_command(
         if action not in allowed_actions:
             return "invalid action"
         actor = actor_external_id or "admin"
-        _ = create_approval(conn, action=action, actor_id=actor)
+        _ = create_approval(
+            conn,
+            action=action,
+            actor_id=actor,
+            target_ref=target_ref if action == "selfupdate.apply" else "",
+            ttl_minutes=30,
+        )
+        if target_ref:
+            return f"approval created: {action} target={target_ref}"
         return f"approval created: {action}"
 
     return "unknown command"

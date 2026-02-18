@@ -44,7 +44,7 @@
 
 ## Controlled Restart
 
-1. Trigger `/restart` as admin.
+1. Trigger chat slash command `/restart` as admin (for example: `uv run jarvis ask "/restart"`).
 2. `system_state.restarting=1` is set.
 3. System drains in-flight in-process tasks until timeout.
 4. Restart command is executed.
@@ -54,7 +54,7 @@
 
 1. `system_state.lockdown` auto-triggers on repeated `/readyz` or rollback bursts, or can be set manually.
 2. Verify protected tools are denied by policy engine.
-3. Use `/unlock <code>` before TTL expiration to clear lockdown.
+3. Use chat slash command `/unlock <code>` before TTL expiration to clear lockdown.
 4. Rotate unlock code with `jarvis.tasks.system.rotate_unlock_code`.
 5. Manual lockdown API is admin-only: `POST /api/v1/system/lockdown`.
 
@@ -70,7 +70,8 @@
 1. Insert schedule with `cron_expr='@every:60'`.
 2. Trigger `jarvis.tasks.scheduler.scheduler_tick`.
 3. Confirm one `schedule.trigger` event and no duplicate dispatch for same `due_at`.
-4. Use `/status` for scheduler backlog fields.
+4. Use chat slash command `/status` for scheduler backlog fields.
+5. HTTP equivalent: `GET /api/v1/system/status`.
 
 ## Self-Update Check
 
@@ -94,6 +95,8 @@
 ## Related Docs
 
 - `docs/build-release.md`
+- `docs/deploy-operations.md`
+- `docs/api-usage-guide.md`
 - `docs/change-safety.md`
 - `docs/testing.md`
 - `docs/local-development.md`

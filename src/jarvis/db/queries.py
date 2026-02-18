@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 
@@ -271,6 +271,59 @@ def ensure_open_thread(conn: sqlite3.Connection, user_id: str, channel_id: str) 
     return thread_id
 
 
+def get_thread_by_whatsapp_remote(
+    conn: sqlite3.Connection, instance: str, remote_jid: str
+) -> str | None:
+    row = conn.execute(
+        "SELECT thread_id FROM whatsapp_thread_map WHERE instance=? AND remote_jid=? LIMIT 1",
+        (instance, remote_jid),
+    ).fetchone()
+    return str(row["thread_id"]) if row is not None else None
+
+
+def upsert_whatsapp_thread_map(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    instance: str,
+    remote_jid: str,
+    participant_jid: str | None = None,
+) -> None:
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO whatsapp_thread_map("
+            "thread_id, instance, remote_jid, participant_jid, created_at, updated_at"
+            ") VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(thread_id) DO UPDATE SET "
+            "instance=excluded.instance, remote_jid=excluded.remote_jid, "
+            "participant_jid=excluded.participant_jid, updated_at=excluded.updated_at"
+        ),
+        (thread_id, instance, remote_jid, participant_jid, now, now),
+    )
+
+
+def upsert_whatsapp_instance(
+    conn: sqlite3.Connection,
+    *,
+    instance: str,
+    status: str,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO whatsapp_instances("
+            "instance, status, last_seen_at, metadata_json, created_at, updated_at"
+            ") VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(instance) DO UPDATE SET "
+            "status=excluded.status, last_seen_at=excluded.last_seen_at, "
+            "metadata_json=excluded.metadata_json, updated_at=excluded.updated_at"
+        ),
+        (instance, status, now, json.dumps(metadata or {}, sort_keys=True), now, now),
+    )
+
+
 def create_thread(conn: sqlite3.Connection, user_id: str, channel_id: str) -> str:
     thread_id = new_id("thr")
     conn.execute(
@@ -360,35 +413,94 @@ def set_thread_agents(conn: sqlite3.Connection, thread_id: str, agents: list[str
 
 
 def create_approval(
-    conn: sqlite3.Connection, action: str, actor_id: str, status: str = "approved"
+    conn: sqlite3.Connection,
+    action: str,
+    actor_id: str,
+    status: str = "approved",
+    target_ref: str = "",
+    ttl_minutes: int | None = None,
 ) -> str:
     approval_id = new_id("apr")
+    expires_at = None
+    if ttl_minutes is not None:
+        ttl = max(1, int(ttl_minutes))
+        expires_at = (datetime.now(UTC) + timedelta(minutes=ttl)).isoformat()
     conn.execute(
         (
-            "INSERT INTO approvals(id, action, actor_id, status, created_at) "
-            "VALUES(?,?,?,?,?)"
+            "INSERT INTO approvals("
+            "id, action, actor_id, status, target_ref, expires_at, consumed_by_trace_id, created_at"
+            ") VALUES(?,?,?,?,?,?,?,?)"
         ),
-        (approval_id, action, actor_id, status, now_iso()),
+        (approval_id, action, actor_id, status, target_ref, expires_at, "", now_iso()),
     )
     return approval_id
 
 
-def consume_approval(conn: sqlite3.Connection, action: str) -> bool:
-    row = conn.execute(
-        (
-            "SELECT id FROM approvals "
-            "WHERE action=? AND status='approved' "
-            "ORDER BY created_at ASC LIMIT 1"
-        ),
-        (action,),
-    ).fetchone()
+def consume_approval(
+    conn: sqlite3.Connection,
+    action: str,
+    *,
+    target_ref: str = "",
+    trace_id: str = "",
+) -> bool:
+    now = now_iso()
+    if target_ref:
+        row = conn.execute(
+            (
+                "SELECT id FROM approvals "
+                "WHERE action=? AND status='approved' AND target_ref=? "
+                "AND (expires_at IS NULL OR expires_at > ?) "
+                "ORDER BY created_at ASC LIMIT 1"
+            ),
+            (action, target_ref, now),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            (
+                "SELECT id FROM approvals "
+                "WHERE action=? AND status='approved' "
+                "AND (target_ref='' OR target_ref IS NULL) "
+                "AND (expires_at IS NULL OR expires_at > ?) "
+                "ORDER BY created_at ASC LIMIT 1"
+            ),
+            (action, now),
+        ).fetchone()
     if row is None:
         return False
     conn.execute(
-        "UPDATE approvals SET status='consumed' WHERE id=?",
-        (str(row["id"]),),
+        "UPDATE approvals SET status='consumed', consumed_by_trace_id=? WHERE id=?",
+        (trace_id, str(row["id"])),
     )
     return True
+
+
+def get_agent_governance(
+    conn: sqlite3.Connection, principal_id: str
+) -> dict[str, object] | None:
+    row = conn.execute(
+        (
+            "SELECT principal_id, risk_tier, max_actions_per_step, allowed_paths_json, "
+            "can_request_privileged_change, updated_at "
+            "FROM agent_governance WHERE principal_id=? LIMIT 1"
+        ),
+        (principal_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    paths_raw = row["allowed_paths_json"]
+    try:
+        parsed_paths = json.loads(str(paths_raw)) if paths_raw is not None else []
+    except json.JSONDecodeError:
+        parsed_paths = []
+    allowed_paths = [str(v) for v in parsed_paths if isinstance(v, str)]
+    return {
+        "principal_id": str(row["principal_id"]),
+        "risk_tier": str(row["risk_tier"]),
+        "max_actions_per_step": int(row["max_actions_per_step"]),
+        "allowed_paths": allowed_paths,
+        "can_request_privileged_change": int(row["can_request_privileged_change"]) == 1,
+        "updated_at": str(row["updated_at"]),
+    }
 
 
 def get_whatsapp_outbound(
@@ -415,3 +527,398 @@ def get_channel_outbound(
     if row is None:
         return None
     return {"recipient": str(row["recipient"]), "text": str(row["text"])}
+
+
+def upsert_selfupdate_run(
+    conn: sqlite3.Connection,
+    *,
+    trace_id: str,
+    state: str,
+    baseline_ref: str,
+    repo_path: str,
+    rationale: str,
+    changed_files: list[str] | None = None,
+) -> None:
+    files_json = json.dumps(changed_files or [], sort_keys=True)
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO selfupdate_runs("
+            "trace_id, state, baseline_ref, repo_path, rationale, changed_files_json, "
+            "created_at, updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(trace_id) DO UPDATE SET "
+            "state=excluded.state, baseline_ref=excluded.baseline_ref, "
+            "repo_path=excluded.repo_path, rationale=excluded.rationale, "
+            "changed_files_json=excluded.changed_files_json, updated_at=excluded.updated_at"
+        ),
+        (trace_id, state, baseline_ref, repo_path, rationale, files_json, now, now),
+    )
+
+
+def update_selfupdate_run_state(
+    conn: sqlite3.Connection,
+    *,
+    trace_id: str,
+    state: str,
+) -> None:
+    conn.execute(
+        "UPDATE selfupdate_runs SET state=?, updated_at=? WHERE trace_id=?",
+        (state, now_iso(), trace_id),
+    )
+
+
+def insert_selfupdate_check(
+    conn: sqlite3.Connection,
+    *,
+    trace_id: str,
+    check_type: str,
+    status: str,
+    detail: str,
+    payload: dict[str, object],
+) -> str:
+    check_id = new_id("suc")
+    conn.execute(
+        (
+            "INSERT INTO selfupdate_checks("
+            "id, trace_id, check_type, status, detail, payload_json, created_at"
+            ") VALUES(?,?,?,?,?,?,?)"
+        ),
+        (check_id, trace_id, check_type, status, detail, json.dumps(payload), now_iso()),
+    )
+    return check_id
+
+
+def insert_selfupdate_transition(
+    conn: sqlite3.Connection,
+    *,
+    trace_id: str,
+    from_state: str,
+    to_state: str,
+    reason: str,
+) -> str:
+    transition_id = new_id("sut")
+    conn.execute(
+        (
+            "INSERT INTO selfupdate_transitions("
+            "id, trace_id, from_state, to_state, reason, created_at"
+            ") VALUES(?,?,?,?,?,?)"
+        ),
+        (transition_id, trace_id, from_state, to_state, reason, now_iso()),
+    )
+    return transition_id
+
+
+def list_selfupdate_checks(conn: sqlite3.Connection, trace_id: str) -> list[dict[str, object]]:
+    rows = conn.execute(
+        (
+            "SELECT id, trace_id, check_type, status, detail, payload_json, created_at "
+            "FROM selfupdate_checks WHERE trace_id=? "
+            "ORDER BY created_at DESC, id DESC"
+        ),
+        (trace_id,),
+    ).fetchall()
+    items: list[dict[str, object]] = []
+    for row in rows:
+        payload_raw = str(row["payload_json"])
+        try:
+            payload = json.loads(payload_raw)
+        except json.JSONDecodeError:
+            payload = {"raw": payload_raw}
+        items.append(
+            {
+                "id": str(row["id"]),
+                "trace_id": str(row["trace_id"]),
+                "check_type": str(row["check_type"]),
+                "status": str(row["status"]),
+                "detail": str(row["detail"]),
+                "payload": payload if isinstance(payload, dict) else {"raw": payload_raw},
+                "created_at": str(row["created_at"]),
+            }
+        )
+    return items
+
+
+def list_selfupdate_transitions(
+    conn: sqlite3.Connection, trace_id: str
+) -> list[dict[str, object]]:
+    rows = conn.execute(
+        (
+            "SELECT id, trace_id, from_state, to_state, reason, created_at "
+            "FROM selfupdate_transitions WHERE trace_id=? "
+            "ORDER BY created_at ASC, id ASC"
+        ),
+        (trace_id,),
+    ).fetchall()
+    return [
+        {
+            "id": str(row["id"]),
+            "trace_id": str(row["trace_id"]),
+            "from_state": str(row["from_state"]),
+            "to_state": str(row["to_state"]),
+            "reason": str(row["reason"]),
+            "created_at": str(row["created_at"]),
+        }
+        for row in rows
+    ]
+
+
+def insert_system_fitness_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    period_start: str,
+    period_end: str,
+    metrics: dict[str, object],
+) -> str:
+    snapshot_id = new_id("fit")
+    conn.execute(
+        (
+            "INSERT INTO system_fitness_snapshots("
+            "id, period_start, period_end, metrics_json, created_at"
+            ") VALUES(?,?,?,?,?)"
+        ),
+        (snapshot_id, period_start, period_end, json.dumps(metrics, sort_keys=True), now_iso()),
+    )
+    return snapshot_id
+
+
+def latest_system_fitness_snapshot(conn: sqlite3.Connection) -> dict[str, object] | None:
+    row = conn.execute(
+        "SELECT id, period_start, period_end, metrics_json, created_at "
+        "FROM system_fitness_snapshots ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    raw_metrics = str(row["metrics_json"])
+    try:
+        metrics = json.loads(raw_metrics)
+    except json.JSONDecodeError:
+        metrics = {}
+    return {
+        "id": str(row["id"]),
+        "period_start": str(row["period_start"]),
+        "period_end": str(row["period_end"]),
+        "metrics": metrics if isinstance(metrics, dict) else {},
+        "created_at": str(row["created_at"]),
+    }
+
+
+def list_system_fitness_snapshots(
+    conn: sqlite3.Connection, *, limit: int = 12
+) -> list[dict[str, object]]:
+    rows = conn.execute(
+        (
+            "SELECT id, period_start, period_end, metrics_json, created_at "
+            "FROM system_fitness_snapshots ORDER BY created_at DESC LIMIT ?"
+        ),
+        (max(1, min(200, int(limit))),),
+    ).fetchall()
+    items: list[dict[str, object]] = []
+    for row in rows:
+        raw_metrics = str(row["metrics_json"])
+        try:
+            metrics = json.loads(raw_metrics)
+        except json.JSONDecodeError:
+            metrics = {}
+        items.append(
+            {
+                "id": str(row["id"]),
+                "period_start": str(row["period_start"]),
+                "period_end": str(row["period_end"]),
+                "metrics": metrics if isinstance(metrics, dict) else {},
+                "created_at": str(row["created_at"]),
+            }
+        )
+    return items
+
+
+def ensure_selfupdate_fitness_gate_config(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute(
+            (
+                "INSERT OR IGNORE INTO selfupdate_fitness_gate_config("
+                "id, max_snapshot_age_minutes, min_build_success_rate, "
+                "max_regression_frequency, max_rollback_frequency, updated_at"
+                ") VALUES('singleton', 180, 0.80, 0.40, 3, ?)"
+            ),
+            (now_iso(),),
+        )
+    except sqlite3.OperationalError:
+        # Table may not exist before migration is applied.
+        return
+
+
+def get_selfupdate_fitness_gate_config(conn: sqlite3.Connection) -> dict[str, object] | None:
+    ensure_selfupdate_fitness_gate_config(conn)
+    try:
+        row = conn.execute(
+            "SELECT max_snapshot_age_minutes, min_build_success_rate, "
+            "max_regression_frequency, max_rollback_frequency, updated_at "
+            "FROM selfupdate_fitness_gate_config WHERE id='singleton' LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None:
+        return None
+    return {
+        "max_snapshot_age_minutes": int(row["max_snapshot_age_minutes"]),
+        "min_build_success_rate": float(row["min_build_success_rate"]),
+        "max_regression_frequency": float(row["max_regression_frequency"]),
+        "max_rollback_frequency": int(row["max_rollback_frequency"]),
+        "updated_at": str(row["updated_at"]),
+    }
+
+
+def insert_governance_agent_run(
+    conn: sqlite3.Connection,
+    *,
+    run_type: str,
+    status: str,
+    summary: str,
+    payload: dict[str, object],
+    trace_id: str = "",
+) -> str:
+    run_id = new_id("gov")
+    conn.execute(
+        (
+            "INSERT INTO governance_agent_runs("
+            "id, run_type, status, summary, payload_json, trace_id, created_at"
+            ") VALUES(?,?,?,?,?,?,?)"
+        ),
+        (
+            run_id,
+            run_type,
+            status,
+            summary[:500],
+            json.dumps(payload, sort_keys=True),
+            trace_id,
+            now_iso(),
+        ),
+    )
+    return run_id
+
+
+def ensure_system_guardrails(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        (
+            "INSERT OR IGNORE INTO system_guardrails("
+            "id, max_patch_attempts_per_day, max_prs_per_day, max_files_per_patch, "
+            "max_risk_score, updated_at"
+            ") VALUES('singleton', 20, 10, 60, 8, ?)"
+        ),
+        (now_iso(),),
+    )
+
+
+def get_system_guardrails(conn: sqlite3.Connection) -> dict[str, int]:
+    ensure_system_guardrails(conn)
+    row = conn.execute(
+        "SELECT max_patch_attempts_per_day, max_prs_per_day, max_files_per_patch, "
+        "max_risk_score FROM system_guardrails WHERE id='singleton'"
+    ).fetchone()
+    assert row is not None
+    return {
+        "max_patch_attempts_per_day": int(row["max_patch_attempts_per_day"]),
+        "max_prs_per_day": int(row["max_prs_per_day"]),
+        "max_files_per_patch": int(row["max_files_per_patch"]),
+        "max_risk_score": int(row["max_risk_score"]),
+    }
+
+
+def insert_guardrail_trip(
+    conn: sqlite3.Connection,
+    *,
+    guardrail_key: str,
+    actual_value: int,
+    threshold_value: int,
+    trace_id: str = "",
+    detail: dict[str, object] | None = None,
+) -> str:
+    trip_id = new_id("grd")
+    conn.execute(
+        (
+            "INSERT INTO guardrail_trips("
+            "id, guardrail_key, actual_value, threshold_value, trace_id, detail_json, created_at"
+            ") VALUES(?,?,?,?,?,?,?)"
+        ),
+        (
+            trip_id,
+            guardrail_key,
+            int(actual_value),
+            int(threshold_value),
+            trace_id,
+            json.dumps(detail or {}, sort_keys=True),
+            now_iso(),
+        ),
+    )
+    return trip_id
+
+
+def list_failure_remediations(
+    conn: sqlite3.Connection, pattern_id: str, *, limit: int = 5
+) -> list[dict[str, object]]:
+    rows = conn.execute(
+        (
+            "SELECT id, pattern_id, remediation, verification_test, confidence, created_at "
+            "FROM failure_pattern_remediations WHERE pattern_id=? "
+            "ORDER BY created_at DESC LIMIT ?"
+        ),
+        (pattern_id, max(1, min(20, int(limit)))),
+    ).fetchall()
+    return [
+        {
+            "id": str(row["id"]),
+            "pattern_id": str(row["pattern_id"]),
+            "remediation": str(row["remediation"]),
+            "verification_test": str(row["verification_test"]),
+            "confidence": str(row["confidence"]),
+            "created_at": str(row["created_at"]),
+        }
+        for row in rows
+    ]
+
+
+def create_failure_remediation_feedback(
+    conn: sqlite3.Connection,
+    *,
+    remediation_id: str,
+    actor_id: str,
+    feedback: str,
+) -> str:
+    entry_id = new_id("frf")
+    conn.execute(
+        (
+            "INSERT INTO failure_remediation_feedback("
+            "id, remediation_id, actor_id, feedback, created_at"
+            ") VALUES(?,?,?,?,?)"
+        ),
+        (entry_id, remediation_id, actor_id, feedback, now_iso()),
+    )
+    return entry_id
+
+
+def remediation_feedback_stats(
+    conn: sqlite3.Connection, remediation_id: str
+) -> dict[str, int]:
+    rows = conn.execute(
+        (
+            "SELECT feedback, COUNT(*) AS n FROM failure_remediation_feedback "
+            "WHERE remediation_id=? GROUP BY feedback"
+        ),
+        (remediation_id,),
+    ).fetchall()
+    stats = {"accepted": 0, "rejected": 0}
+    for row in rows:
+        key = str(row["feedback"]).strip().lower()
+        if key in stats:
+            stats[key] = int(row["n"])
+    return stats
+
+
+def update_remediation_confidence(
+    conn: sqlite3.Connection, remediation_id: str, confidence: str
+) -> None:
+    conn.execute(
+        "UPDATE failure_pattern_remediations SET confidence=? WHERE id=?",
+        (confidence, remediation_id),
+    )

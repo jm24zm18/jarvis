@@ -20,8 +20,14 @@ Current tuning in `src/jarvis/db/connection.py`:
 4. Replace SQLite-specific SQL patterns with portable equivalents.
 5. Run dual-write or staged cutover in non-production, then production.
 
-## Worker/runtime impact
-- Celery `--pool=prefork` is substantially more viable after SQLite removal, since worker processes no longer contend on a single file-backed DB lock domain.
+## Runtime impact
+- Multi-process API/task runtimes become more viable after SQLite removal, because processes no longer contend on a single file-backed lock domain.
 
 ## Trigger to prioritize migration
 Begin migration when single-process API/worker throughput or write-lock contention becomes a recurring production bottleneck.
+
+## Related Docs
+
+- `docs/architecture.md`
+- `docs/change-safety.md`
+- `docs/deploy-operations.md`

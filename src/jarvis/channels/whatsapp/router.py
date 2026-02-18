@@ -1,13 +1,14 @@
 """WhatsApp webhook routes."""
 
+from __future__ import annotations
+
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 
+from jarvis.channels.registry import get_channel
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
@@ -15,8 +16,10 @@ from jarvis.db.queries import (
     ensure_open_thread,
     ensure_user,
     get_system_state,
+    get_thread_by_whatsapp_remote,
     insert_message,
     record_external_message,
+    upsert_whatsapp_thread_map,
 )
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
@@ -24,7 +27,6 @@ from jarvis.ids import new_id
 from jarvis.tasks import get_task_runner
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
-_limiter = Limiter(key_func=get_remote_address)
 
 
 def _safe_send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
@@ -46,23 +48,30 @@ async def verify(request: Request) -> Response:
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="verification failed")
 
 
-def _extract_messages(payload: dict[str, Any]) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = []
-    for entry in payload.get("entry", []):
-        for change in entry.get("changes", []):
-            for msg in change.get("value", {}).get("messages", []):
-                text = msg.get("text", {}).get("body", "")
-                sender = msg.get("from", "unknown")
-                msg_id = msg.get("id", "")
-                if text and msg_id:
-                    messages.append({"id": msg_id, "from": sender, "text": text})
-    return messages
-
-
 @router.post("")
-async def inbound(payload: dict[str, Any]) -> JSONResponse:
+async def inbound(
+    payload: dict[str, Any],
+    x_whatsapp_secret: str | None = Header(default=None),
+) -> JSONResponse:
+    settings = get_settings()
+    required_secret = settings.whatsapp_webhook_secret.strip()
+    if required_secret and x_whatsapp_secret != required_secret:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid webhook secret",
+        )
+
+    adapter = get_channel("whatsapp")
+    if adapter is None:
+        return JSONResponse(
+            status_code=500,
+            content={"accepted": False, "error": "adapter_missing"},
+        )
+
     trace_id = new_id("trc")
     degraded = False
+    instance = settings.whatsapp_instance.strip() or "personal"
+
     with get_conn() as conn:
         state = get_system_state(conn)
         if state["restarting"] == 1:
@@ -84,14 +93,53 @@ async def inbound(payload: dict[str, Any]) -> JSONResponse:
             ),
         )
 
-        for msg in _extract_messages(payload):
-            if not record_external_message(conn, "whatsapp", msg["id"], trace_id):
+        for msg in adapter.parse_inbound(payload):
+            if not record_external_message(conn, "whatsapp", msg.external_msg_id, trace_id):
                 continue
-            user_id = ensure_user(conn, msg["from"])
-            channel_id = ensure_channel(conn, user_id, "whatsapp")
-            thread_id = ensure_open_thread(conn, user_id, channel_id)
-            _ = insert_message(conn, thread_id, "user", msg["text"])
 
+            user_id = ensure_user(conn, msg.sender_id)
+            channel_id = ensure_channel(conn, user_id, "whatsapp")
+
+            thread_id: str
+            remote_jid = str(msg.thread_key or "").strip()
+            if remote_jid:
+                mapped = get_thread_by_whatsapp_remote(conn, instance, remote_jid)
+                if mapped:
+                    thread_id = mapped
+                else:
+                    thread_id = ensure_open_thread(conn, user_id, channel_id)
+                    upsert_whatsapp_thread_map(
+                        conn,
+                        thread_id=thread_id,
+                        instance=instance,
+                        remote_jid=remote_jid,
+                        participant_jid=str(msg.group_context.get("participant") or "") or None,
+                    )
+            else:
+                thread_id = ensure_open_thread(conn, user_id, channel_id)
+
+            text = (msg.text or "").strip()
+            if msg.message_type == "reaction":
+                emoji = str(msg.reaction.get("emoji") or "")
+                target = ""
+                reaction_key = msg.reaction.get("key")
+                if isinstance(reaction_key, dict):
+                    target = str(reaction_key.get("id") or "")
+                text = f"[reaction] {emoji} {target}".strip()
+            elif msg.message_type in {"image", "video", "document", "audio", "sticker"}:
+                prefix = f"[{msg.message_type}]"
+                text = f"{prefix} {text}".strip() if text else prefix
+            elif msg.message_type == "unknown" and not text:
+                text = "[unsupported message]"
+
+            _ = insert_message(conn, thread_id, "user", text)
+
+            event_payload = {
+                "text": text,
+                "message_type": msg.message_type,
+                "mentions": msg.mentions,
+                "group_context": msg.group_context,
+            }
             emit_event(
                 conn,
                 EventInput(
@@ -103,14 +151,24 @@ async def inbound(payload: dict[str, Any]) -> JSONResponse:
                     component="channels.whatsapp",
                     actor_type="user",
                     actor_id=user_id,
-                    payload_json=json.dumps({"text": msg["text"]}),
-                    payload_redacted_json=json.dumps(redact_payload({"text": msg["text"]})),
+                    payload_json=json.dumps(event_payload),
+                    payload_redacted_json=json.dumps(redact_payload(event_payload)),
                 ),
             )
 
             index_ok = _safe_send_task(
                 "jarvis.tasks.memory.index_event",
-                {"trace_id": trace_id, "thread_id": thread_id, "text": msg["text"]},
+                {
+                    "trace_id": trace_id,
+                    "thread_id": thread_id,
+                    "text": text,
+                    "metadata": {
+                        "channel": "whatsapp",
+                        "message_type": msg.message_type,
+                        "mentions": msg.mentions,
+                        "group_context": msg.group_context,
+                    },
+                },
                 "tools_io",
             )
             step_ok = _safe_send_task(

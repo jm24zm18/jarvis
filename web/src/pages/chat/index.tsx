@@ -256,7 +256,7 @@ export default function ChatPage() {
     if (!threadId) return;
     ws.subscribe(threadId);
     return () => ws.unsubscribe(threadId);
-  }, [threadId, ws.subscribe, ws.unsubscribe]);
+  }, [threadId, ws]);
 
   useEffect(() => {
     if (!threadId) {

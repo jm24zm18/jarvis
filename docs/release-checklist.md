@@ -10,6 +10,7 @@ Use this checklist for each staging->production release candidate.
 
 ## Prerequisites
 - [ ] `make test-gates` passed on candidate commit.
+- [ ] `make docs-check` passed on candidate commit.
 - [ ] Staging deploy succeeded (`deploy/install-systemd.sh` or equivalent process).
 - [ ] `GET /healthz` returns `{"ok": true}`.
 - [ ] CI workflow (`.github/workflows/ci.yml`) is green for:
@@ -71,3 +72,10 @@ Restore evidence:
 Approver:
 - Name:
 - Timestamp (UTC):
+
+## Related Docs
+
+- `docs/build-release.md`
+- `docs/deploy-operations.md`
+- `docs/runbook.md`
+- `docs/change-safety.md`
