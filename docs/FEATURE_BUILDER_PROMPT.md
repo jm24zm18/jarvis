@@ -62,7 +62,7 @@ Required safety checks:
   - docs/configuration references
 - DB changes must include migration updates in `src/jarvis/db/migrations/` and tests.
 - Auth/RBAC changes must preserve ownership/admin boundaries and update integration tests.
-- Task/queue changes must preserve Celery routing expectations.
+- Task/queue changes must preserve in-process task runner routing and concurrency expectations.
 
 Definition of done:
 - Feature works as requested.
@@ -82,4 +82,3 @@ Now implement the requested feature with this workflow.
 
 - Use for any non-trivial feature or refactor.
 - Pair with `docs/DOCS_AGENT_PROMPT.md` after merges to keep docs current.
-

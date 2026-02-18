@@ -16,8 +16,6 @@ Source of truth: `src/jarvis/config.py`.
 |---|---|---|---|
 | `APP_ENV` | str | `dev` | Runtime environment (`dev`/`prod`). |
 | `APP_DB` | str | `/tmp/jarvis.db` | SQLite DB path. |
-| `BROKER_URL` | str | `amqp://guest:guest@localhost:5672//` | Celery broker URL. |
-| `RESULT_BACKEND` | str | `rpc://` | Celery result backend. |
 | `LOG_LEVEL` | str | `INFO` | Logging level. |
 | `TRACE_SAMPLE_RATE` | float | `1.0` | Event trace sampling fraction. |
 
