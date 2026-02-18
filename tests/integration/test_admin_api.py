@@ -218,3 +218,16 @@ def test_admin_endpoints_basic_coverage(tmp_path: Path) -> None:
         client.post("/api/v1/channels/whatsapp/create", headers=headers, json={}).status_code
         == 200
     )
+    assert client.get("/api/v1/channels/whatsapp/qrcode", headers=headers).status_code == 200
+    assert (
+        client.post(
+            "/api/v1/channels/whatsapp/pairing-code",
+            headers=headers,
+            json={"number": "15555550123"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post("/api/v1/channels/whatsapp/disconnect", headers=headers, json={}).status_code
+        == 200
+    )

@@ -42,6 +42,16 @@
 3. Verify chat route `/chat` and admin routes `/admin/*`
 4. Validate API CORS origins (`WEB_CORS_ORIGINS`) if browser requests fail
 
+### Web Install Recovery
+
+1. Run `make web-install` (uses resilient wrapper + retry path).
+2. If it fails, inspect `/tmp/jarvis-web-install.log`.
+3. If npm emitted a debug log path, inspect that file as well.
+4. Apply targeted remediation:
+   - `npm cache clean --force`
+   - `cd web && npm install --cache /tmp/npm-cache --prefer-offline=false`
+   - retry in a non-restricted shell if network/DNS egress is blocked.
+
 ## Controlled Restart
 
 1. Trigger chat slash command `/restart` as admin (for example: `uv run jarvis ask "/restart"`).
@@ -65,6 +75,27 @@
 3. Non-admin users are ownership-scoped to their own resources.
 4. Validate boundaries: `uv run pytest tests/integration/test_authorization.py -v`.
 
+## Memory Governance Ops
+
+1. Open `/admin/memory` to review:
+   - conflict review queue
+   - tier/archive stats
+   - failure lookup
+   - graph traversal preview
+   - consistency reports (thread/time filters)
+2. API equivalents:
+   - `GET /api/v1/memory/state/review/conflicts`
+   - `POST /api/v1/memory/state/review/{uid}/resolve`
+   - `GET /api/v1/memory/state/stats`
+   - `GET /api/v1/memory/state/failures`
+   - `GET /api/v1/memory/state/graph/{uid}`
+   - `GET /api/v1/memory/state/consistency/report?thread_id=...&from_ts=...&to_ts=...`
+3. Monitor `/metrics` memory KPI fields:
+   - `memory_items_count`
+   - `memory_avg_tokens_saved`
+   - `memory_reconciliation_rate`
+   - `memory_hallucination_incidents`
+
 ## Secret Rotation and Scan
 
 1. Rotate compromised or leaked local credentials at the provider:
@@ -85,6 +116,17 @@
 3. Confirm one `schedule.trigger` event and no duplicate dispatch for same `due_at`.
 4. Use chat slash command `/status` for scheduler backlog fields.
 5. HTTP equivalent: `GET /api/v1/system/status`.
+
+## Local Setup Smoke Validation
+
+1. Run `make setup-smoke`.
+2. This validates:
+   - local toolchain availability (`python3`, `uv`, `docker`, `node`, `npm`)
+   - host-port preflight for dependency services
+   - DB migrations
+   - API import/bootstrap sanity
+   - web dependency bootstrap
+3. If it fails, fix the failing step and rerun until it passes.
 
 ## Self-Update Check
 

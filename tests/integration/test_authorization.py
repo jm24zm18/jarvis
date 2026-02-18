@@ -283,6 +283,37 @@ def test_non_admin_cannot_run_memory_maintenance() -> None:
     assert response.status_code == 403
 
 
+def test_non_admin_cannot_manage_whatsapp_channels() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+    headers = _headers(alice["token"])
+
+    assert client.get("/api/v1/channels/whatsapp/status", headers=headers).status_code == 403
+    assert (
+        client.post("/api/v1/channels/whatsapp/create", headers=headers, json={}).status_code
+        == 403
+    )
+    assert client.get("/api/v1/channels/whatsapp/qrcode", headers=headers).status_code == 403
+    assert (
+        client.post(
+            "/api/v1/channels/whatsapp/pairing-code",
+            headers=headers,
+            json={"number": "15555550123"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/api/v1/channels/whatsapp/disconnect",
+            headers=headers,
+            json={},
+        ).status_code
+        == 403
+    )
+
+
 def test_user_memory_search_scoped() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()

@@ -6,6 +6,11 @@ import type {
   DispatchItem,
   EventItem,
   MemoryItem,
+  MemoryConsistencyReportItem,
+  MemoryFailureItem,
+  MemoryReviewItem,
+  MemoryGraph,
+  MemoryStateStats,
   MemoryStats,
   MessageItem,
   PatchDetail,
@@ -323,8 +328,49 @@ export const runMemoryMaintenance = () =>
     body: "{}",
   });
 
-export const memoryConsistencyReport = (limit = 50) =>
-  apiFetch<Record<string, unknown>>(`/api/v1/memory/state/consistency/report?limit=${encodeURIComponent(String(limit))}`);
+export const memoryConsistencyReport = (params?: {
+  limit?: number;
+  thread_id?: string;
+  from_ts?: string;
+  to_ts?: string;
+}) => {
+  const qs = new URLSearchParams();
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  if (params?.thread_id) qs.set("thread_id", params.thread_id);
+  if (params?.from_ts) qs.set("from_ts", params.from_ts);
+  if (params?.to_ts) qs.set("to_ts", params.to_ts);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ items: MemoryConsistencyReportItem[]; avg_consistency: number }>(
+    `/api/v1/memory/state/consistency/report${suffix}`,
+  );
+};
+
+export const memoryStateFailures = (params?: { similar_to?: string; k?: number }) => {
+  const qs = new URLSearchParams();
+  if (params?.similar_to) qs.set("similar_to", params.similar_to);
+  if (typeof params?.k === "number") qs.set("k", String(params.k));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ items: MemoryFailureItem[] }>(`/api/v1/memory/state/failures${suffix}`);
+};
+
+export const memoryReviewConflicts = (limit = 50) =>
+  apiFetch<{ items: MemoryReviewItem[] }>(
+    `/api/v1/memory/state/review/conflicts?limit=${encodeURIComponent(String(limit))}`,
+  );
+
+export const resolveMemoryReview = (uid: string, resolution: string) =>
+  apiFetch<{ ok: boolean; uid: string }>(`/api/v1/memory/state/review/${encodeURIComponent(uid)}/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ resolution }),
+  });
+
+export const memoryStateGraph = (uid: string, depth = 2) =>
+  apiFetch<MemoryGraph>(
+    `/api/v1/memory/state/graph/${encodeURIComponent(uid)}?depth=${encodeURIComponent(String(depth))}`,
+  );
+
+export const memoryStateStats = () =>
+  apiFetch<MemoryStateStats>("/api/v1/memory/state/stats");
 
 export const whatsappStatus = () =>
   apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/status");

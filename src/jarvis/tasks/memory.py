@@ -1,7 +1,9 @@
 """Memory/indexing Celery tasks."""
 # ruff: noqa: E501
 
+import json
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
@@ -383,18 +385,88 @@ def sync_failure_capsules() -> dict[str, int]:
     if int(settings.memory_failure_bridge_enabled) != 1:
         return {"linked": 0}
     linked = 0
+    deduped = 0
+    skipped_invalid = 0
     with get_conn() as conn:
         rows = conn.execute(
-            
-                "SELECT fc.id, fc.trace_id, fc.phase, fc.error_summary, fc.created_at "
-                "FROM failure_capsules fc "
-                "LEFT JOIN failure_state_links fsl ON fsl.failure_capsule_id=fc.id "
-                "WHERE fsl.failure_capsule_id IS NULL "
-                "ORDER BY fc.created_at DESC LIMIT 200"
-            
+            "SELECT fc.id, fc.trace_id, fc.phase, fc.error_summary, fc.error_details_json, fc.created_at "
+            "FROM failure_capsules fc "
+            "LEFT JOIN failure_state_links fsl ON fsl.failure_capsule_id=fc.id "
+            "WHERE fsl.failure_capsule_id IS NULL "
+            "ORDER BY fc.created_at DESC LIMIT 200"
         ).fetchall()
         for row in rows:
-            uid = f"f_{str(row['id'])[-12:]}"
+            trace_id = str(row["trace_id"]).strip()
+            phase = str(row["phase"]).strip() or "unknown"
+            summary = str(row["error_summary"]).strip()
+            if not trace_id or not summary:
+                skipped_invalid += 1
+                continue
+
+            linked_thread = conn.execute(
+                (
+                    "SELECT thread_id FROM events "
+                    "WHERE trace_id=? AND thread_id IS NOT NULL AND thread_id!='' "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                (trace_id,),
+            ).fetchone()
+            if linked_thread is None:
+                skipped_invalid += 1
+                continue
+            thread_id = str(linked_thread["thread_id"])
+
+            summary_norm = " ".join(summary.lower().split())
+            summary_hash = sha256(summary_norm.encode("utf-8")).hexdigest()[:16]
+            dedupe_key = f"{trace_id}|{phase}|{summary_hash}"
+            uid = f"f_{sha256(dedupe_key.encode('utf-8')).hexdigest()[:12]}"
+
+            details: dict[str, object] = {}
+            raw_details = row["error_details_json"]
+            if isinstance(raw_details, str):
+                try:
+                    parsed = json.loads(raw_details)
+                    if isinstance(parsed, dict):
+                        details = parsed
+                except json.JSONDecodeError:
+                    details = {}
+
+            error_kind = str(
+                details.get("error_kind")
+                or details.get("kind")
+                or details.get("failure_kind")
+                or ""
+            ).strip().lower()
+            provider = str(
+                details.get("provider")
+                or details.get("provider_name")
+                or details.get("model_provider")
+                or ""
+            ).strip().lower()
+            timeout = bool(details.get("timeout") or "timeout" in summary_norm)
+            dns_failure = bool(
+                details.get("dns_failure")
+                or details.get("dns_resolution") == "failed"
+                or "dns" in summary_norm
+            )
+            retryable = bool(details.get("retryable"))
+
+            http_status: int | None = None
+            raw_http_status = details.get("http_status")
+            if isinstance(raw_http_status, int):
+                http_status = raw_http_status
+            elif isinstance(raw_http_status, str) and raw_http_status.isdigit():
+                http_status = int(raw_http_status)
+
+            topic_tags = ["failure", f"phase:{phase}"]
+            if error_kind:
+                topic_tags.append(f"kind:{error_kind}")
+            if provider:
+                topic_tags.append(f"provider:{provider}")
+            if timeout:
+                topic_tags.append("timeout")
+            if dns_failure:
+                topic_tags.append("dns_failure")
             conn.execute(
                 (
                     "INSERT INTO state_items("
@@ -407,12 +479,25 @@ def sync_failure_capsules() -> dict[str, int]:
                 ),
                 (
                     uid,
-                    str(row["trace_id"]),
-                    str(row["error_summary"]),
+                    thread_id,
+                    summary,
                     "open",
                     "failure",
-                    '[\"failure\"]',
-                    "[]",
+                    json.dumps(topic_tags, sort_keys=True),
+                    json.dumps(
+                        {
+                            "trace_id": trace_id,
+                            "phase": phase,
+                            "summary_hash": summary_hash,
+                            "error_kind": error_kind or None,
+                            "provider": provider or None,
+                            "http_status": http_status,
+                            "timeout": timeout,
+                            "dns_failure": dns_failure,
+                            "retryable": retryable,
+                        },
+                        sort_keys=True,
+                    ),
                     "medium",
                     None,
                     None,
@@ -430,16 +515,54 @@ def sync_failure_capsules() -> dict[str, int]:
                     None,
                 ),
             )
+            state_row = conn.execute(
+                "SELECT 1 AS present FROM state_items WHERE uid=? AND thread_id=? LIMIT 1",
+                (uid, thread_id),
+            ).fetchone()
+            if state_row is not None:
+                existing_links = conn.execute(
+                    "SELECT COUNT(*) AS n FROM failure_state_links WHERE state_uid=?",
+                    (uid,),
+                ).fetchone()
+                if existing_links is not None and int(existing_links["n"]) > 0:
+                    deduped += 1
             conn.execute(
                 (
                     "INSERT OR IGNORE INTO failure_state_links("
                     "failure_capsule_id, state_uid, thread_id, agent_id, created_at"
                     ") VALUES(?,?,?,?,?)"
                 ),
-                (str(row["id"]), uid, str(row["trace_id"]), "main", now_iso()),
+                (str(row["id"]), uid, thread_id, "main", now_iso()),
             )
             linked += 1
-    return {"linked": linked}
+        summary_payload = {
+            "linked": linked,
+            "deduped": deduped,
+            "skipped_invalid": skipped_invalid,
+        }
+        conn.execute(
+            (
+                "INSERT INTO events("
+                "id, trace_id, span_id, parent_span_id, thread_id, event_type, component, "
+                "actor_type, actor_id, payload_json, payload_redacted_json, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                new_id("evt"),
+                new_id("trc"),
+                new_id("spn"),
+                None,
+                None,
+                "memory.failure_bridge.sync",
+                "memory",
+                "system",
+                "memory_maintenance",
+                json.dumps(summary_payload, sort_keys=True),
+                json.dumps(summary_payload, sort_keys=True),
+                now_iso(),
+            ),
+        )
+    return {"linked": linked, "deduped": deduped, "skipped_invalid": skipped_invalid}
 
 
 def evaluate_consistency() -> dict[str, object]:
@@ -464,7 +587,18 @@ def evaluate_consistency() -> dict[str, object]:
                     int(report["total_items"]),
                     int(report["conflicted_items"]),
                     float(report["consistency_score"]),
-                    "{}",
+                    json.dumps(
+                        {
+                            "conflict_ratio": (
+                                0.0
+                                if int(report["total_items"]) == 0
+                                else float(report["conflicted_items"]) / float(report["total_items"])
+                            ),
+                            "sample_size": int(report["sample_size"]),
+                            "computed_by": "tasks.memory.evaluate_consistency",
+                        },
+                        sort_keys=True,
+                    ),
                     now_iso(),
                 ),
             )

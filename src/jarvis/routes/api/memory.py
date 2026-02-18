@@ -274,6 +274,39 @@ def state_review_conflicts(
     }
 
 
+@router.get("/state/stats")
+def state_stats(
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    del ctx
+    with get_conn() as conn:
+        tiers = conn.execute(
+            "SELECT tier, COUNT(*) AS n FROM state_items "
+            "GROUP BY tier ORDER BY n DESC, tier ASC"
+        ).fetchall()
+        archive_count = 0
+        has_archive = (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state_items_archive'"
+            ).fetchone()
+            is not None
+        )
+        if has_archive:
+            archive_row = conn.execute("SELECT COUNT(*) AS n FROM state_items_archive").fetchone()
+            archive_count = int(archive_row["n"]) if archive_row is not None else 0
+        open_conflicts = conn.execute(
+            "SELECT COUNT(*) AS n FROM memory_review_queue WHERE status='open'"
+        ).fetchone()
+    return {
+        "tiers": [
+            {"tier": str(row["tier"]), "count": int(row["n"])}
+            for row in tiers
+        ],
+        "archive_items": archive_count,
+        "open_conflicts": int(open_conflicts["n"]) if open_conflicts is not None else 0,
+    }
+
+
 @router.post("/state/review/{uid}/resolve")
 def state_review_resolve(
     uid: str,
@@ -364,16 +397,31 @@ def memory_export(
 def state_consistency_report(
     ctx: UserContext = Depends(require_admin),  # noqa: B008
     limit: int = Query(default=50, ge=1, le=500),
+    thread_id: str | None = None,
+    from_ts: str | None = None,
+    to_ts: str | None = None,
 ) -> dict[str, object]:
     del ctx
+    clauses: list[str] = []
+    params: list[object] = []
+    if thread_id and thread_id.strip():
+        clauses.append("thread_id=?")
+        params.append(thread_id.strip())
+    if from_ts and from_ts.strip():
+        clauses.append("created_at>=?")
+        params.append(from_ts.strip())
+    if to_ts and to_ts.strip():
+        clauses.append("created_at<=?")
+        params.append(to_ts.strip())
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     with get_conn() as conn:
         rows = conn.execute(
             (
                 "SELECT id, thread_id, sample_size, total_items, conflicted_items, "
                 "consistency_score, details_json, created_at "
-                "FROM memory_consistency_reports ORDER BY created_at DESC LIMIT ?"
+                f"FROM memory_consistency_reports {where} ORDER BY created_at DESC LIMIT ?"
             ),
-            (limit,),
+            tuple([*params, limit]),
         ).fetchall()
     items: list[dict[str, object]] = [
         {

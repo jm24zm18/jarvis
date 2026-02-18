@@ -1,7 +1,7 @@
 .PHONY: dev api test test-gates lint typecheck migrate setup doctor \
        web-install web-build web-dev web-lint web-typecheck web-test \
        hooks validate-agents test-migrations security docs-generate docs-check \
-       preflight-dev-ports
+       preflight-dev-ports setup-smoke
 
 dev: preflight-dev-ports
 	docker compose up -d
@@ -54,7 +54,7 @@ security:
 	uv run pip-audit
 
 web-install:
-	cd web && npm install
+	python3 scripts/web_install.py
 
 web-build:
 	cd web && npm run build
@@ -76,3 +76,6 @@ docs-generate:
 
 docs-check:
 	uv run python scripts/docs_check.py
+
+setup-smoke:
+	python3 scripts/new_user_smoke.py

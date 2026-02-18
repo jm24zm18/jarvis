@@ -135,11 +135,12 @@ def check_http_service(name: str, url: str, path: str = "/") -> CheckResult:
             fix_fn=None if ok else _service_fix_fn(name),
         )
     except Exception as exc:
+        kind, hint = _classify_http_error(exc, url)
         return CheckResult(
             name=f"{name} reachable",
             passed=False,
-            message=str(exc),
-            fix_hint=f"Ensure {name} is running at {url}.",
+            message=f"[{kind}] {exc}",
+            fix_hint=hint,
             fix_fn=_service_fix_fn(name),
         )
 
@@ -271,6 +272,56 @@ def check_task_runner() -> CheckResult:
             message=str(exc),
             fix_hint="Check task runner imports and configuration.",
         )
+
+
+def _classify_http_error(exc: Exception, base_url: str) -> tuple[str, str]:
+    text = str(exc).lower()
+    service_hint = f"Ensure the service is running and reachable at {base_url}."
+
+    if isinstance(exc, (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout)):
+        return (
+            "timeout",
+            f"Connection timed out. {service_hint} Check firewall/proxy/sandbox egress and retry.",
+        )
+
+    if isinstance(exc, httpx.ConnectError):
+        dns_markers = (
+            "temporary failure in name resolution",
+            "name or service not known",
+            "nodename nor servname provided",
+            "getaddrinfo",
+            "enotfound",
+            "eai_again",
+        )
+        if any(marker in text for marker in dns_markers):
+            return (
+                "dns_resolution",
+                f"DNS lookup failed for {base_url}. Verify network/DNS access in this environment.",
+            )
+        if "connection refused" in text or "actively refused" in text:
+            return (
+                "connection_refused",
+                f"Service refused connection. {service_hint}",
+            )
+        if "network is unreachable" in text or "no route to host" in text:
+            return (
+                "network_unreachable",
+                "Network route is unavailable (possibly sandbox/egress restriction). "
+                "Validate environment network policy and host routing.",
+            )
+        return (
+            "connect_error",
+            f"Unable to establish TCP connection. {service_hint}",
+        )
+
+    if isinstance(exc, httpx.NetworkError):
+        return (
+            "network_error",
+            f"Network error while contacting {base_url}. Check sandbox/network/proxy configuration.",
+        )
+
+    return ("unknown_error", f"Unexpected error. {service_hint}")
+
 
 def _service_fix_fn(name: str) -> Callable[[], bool] | None:
     mapping = {

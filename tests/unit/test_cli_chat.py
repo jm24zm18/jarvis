@@ -85,6 +85,6 @@ def test_ask_json_fail_fast_payload(monkeypatch) -> None:
     assert result.exit_code != 0
     payload = json.loads(result.output.strip())
     assert payload["ok"] is False
-    assert payload["error"]["code"] == "agent_unavailable"
-    assert "ConnectError" in payload["error"]["message"]
+    assert payload["error"]["code"] == "dns_resolution"
+    assert "dns" in payload["error"]["message"].lower()
     assert "Traceback" not in payload["error"]["message"]

@@ -1,5 +1,6 @@
 import os
 
+import pytest
 from fastapi.testclient import TestClient
 
 from jarvis.config import get_settings
@@ -201,3 +202,86 @@ def test_inbound_accepts_evolution_payload(monkeypatch) -> None:
     response = client.post("/webhooks/whatsapp", json=payload)
     assert response.status_code == 200
     assert response.json()["accepted"] is True
+
+
+@pytest.mark.parametrize(
+    ("message_payload", "expected_text_prefix"),
+    [
+        ({"extendedTextMessage": {"text": "hello extended"}}, "hello extended"),
+        ({"imageMessage": {"caption": "look", "url": "https://cdn.example/image.jpg"}}, "[image]"),
+        ({"videoMessage": {"caption": "vid", "url": "https://cdn.example/video.mp4"}}, "[video]"),
+        (
+            {"documentMessage": {"caption": "doc", "url": "https://cdn.example/doc.pdf"}},
+            "[document]",
+        ),
+        ({"audioMessage": {"seconds": 4, "url": "https://cdn.example/audio.ogg"}}, "[audio]"),
+        ({"stickerMessage": {"url": "https://cdn.example/sticker.webp"}}, "[sticker]"),
+    ],
+)
+def test_inbound_accepts_evolution_message_variants(
+    monkeypatch, message_payload: dict[str, object], expected_text_prefix: str
+) -> None:
+    from jarvis.channels.whatsapp import router as whatsapp_router
+
+    payload = {
+        "event": "messages.upsert",
+        "data": {
+            "key": {
+                "id": f"BAE5VARIANT{expected_text_prefix[:3]}",
+                "remoteJid": "15555550201@s.whatsapp.net",
+                "participant": "15555550201@s.whatsapp.net",
+            },
+            "message": message_payload,
+        },
+    }
+
+    class _Runner:
+        def send_task(self, *_args, **_kwargs) -> bool:
+            return True
+
+    monkeypatch.setattr(whatsapp_router, "get_task_runner", lambda: _Runner())
+    client = TestClient(app)
+    response = client.post("/webhooks/whatsapp", json=payload)
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT content FROM messages WHERE role='user' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    assert str(row["content"]).startswith(expected_text_prefix)
+
+
+def test_inbound_accepts_evolution_group_payload(monkeypatch) -> None:
+    from jarvis.channels.whatsapp import router as whatsapp_router
+
+    payload = {
+        "event": "messages.upsert",
+        "data": {
+            "key": {
+                "id": "BAE5GROUP1",
+                "remoteJid": "120363000000000000@g.us",
+                "participant": "15555550333@s.whatsapp.net",
+            },
+            "message": {"conversation": "group hello"},
+        },
+    }
+
+    class _Runner:
+        def send_task(self, *_args, **_kwargs) -> bool:
+            return True
+
+    monkeypatch.setattr(whatsapp_router, "get_task_runner", lambda: _Runner())
+    client = TestClient(app)
+    response = client.post("/webhooks/whatsapp", json=payload)
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True
+
+    with get_conn() as conn:
+        event_row = conn.execute(
+            "SELECT payload_redacted_json FROM events "
+            "WHERE event_type='channel.inbound' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    assert event_row is not None
+    assert "\"is_group\": true" in str(event_row["payload_redacted_json"]).lower()

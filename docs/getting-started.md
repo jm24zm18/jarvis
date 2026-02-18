@@ -13,6 +13,7 @@
 cp .env.example .env
 uv sync
 make migrate
+make setup-smoke
 ```
 
 Verify:
@@ -23,6 +24,7 @@ make migrate
 ```
 
 Expected: Python 3.12 and successful migration run.
+`make setup-smoke` should pass for a deterministic API + web bootstrap baseline.
 
 ## 2. Start Dependencies
 

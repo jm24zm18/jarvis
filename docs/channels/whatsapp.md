@@ -26,4 +26,5 @@ If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path f
 
 - Set `WHATSAPP_WEBHOOK_SECRET` and send as `X-WhatsApp-Secret` header.
 - Pairing and lifecycle APIs are admin-only and rate-limited.
-- QR payloads and pairing codes should not be logged.
+- QR payloads and pairing codes are redacted in event payloads/logs (`qrcode`, `qr_code`, `pairing_code`, `code` keys).
+- Keep Evolution webhook payload compatibility tests for `messages.upsert` variants (text, extended text, reaction, media, group context).

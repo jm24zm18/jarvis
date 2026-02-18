@@ -60,6 +60,7 @@ Auth levels:
 | `GET` | `/api/v1/memory/state/review/conflicts` | `admin` | `state_review_conflicts_api_v1_memory_state_review_conflicts_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/memory/state/review/{uid}/resolve` | `admin` | `state_review_resolve_api_v1_memory_state_review__uid__resolve_post` | `application/json` | `200, 422` |
 | `GET` | `/api/v1/memory/state/search` | `auth` | `state_search_api_v1_memory_state_search_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/memory/state/stats` | `admin` | `state_stats_api_v1_memory_state_stats_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/memory/stats` | `auth` | `memory_stats_api_v1_memory_stats_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/permissions` | `admin` | `get_permissions_api_v1_permissions_get` | `-` | `200, 422` |
 | `DELETE` | `/api/v1/permissions/{principal_id}/{tool_name}` | `admin` | `delete_permission_api_v1_permissions__principal_id___tool_name__delete` | `-` | `200, 422` |
@@ -112,12 +113,12 @@ Auth levels:
 
 - `title`: `Jarvis Agent Framework`
 - `version`: `0.1.0`
-- `path_count`: `79`
+- `path_count`: `80`
 
 ```json
 {
   "title": "Jarvis Agent Framework",
   "version": "0.1.0",
-  "path_count": 79
+  "path_count": 80
 }
 ```

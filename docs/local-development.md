@@ -15,11 +15,15 @@
 ```bash
 make api
 make web-dev
+make setup-smoke
 ```
 
 - API reloads with `uvicorn --reload`.
 - Web UI reloads via Vite HMR.
 - Periodic tasks run in-process inside the API lifespan.
+- `make setup-smoke` validates a reproducible local bootstrap path:
+  toolchain checks, dev port preflight, migrations, API import bootstrap,
+  and web dependency install.
 
 ## Common Workflows
 
@@ -89,6 +93,41 @@ make web-dev
 - Run diagnostics: `uv run jarvis doctor --fix`
 - Check API health: `GET /readyz`, `GET /metrics`
 - Validate compose services: `docker compose ps`
+
+### `make web-install` failures
+
+- `make web-install` now retries and writes deterministic logs to:
+  - wrapper log: `/tmp/jarvis-web-install.log`
+  - npm debug log path (if emitted by npm)
+- Typical remediation sequence:
+  1. `npm cache clean --force`
+  2. `cd web && npm install --cache /tmp/npm-cache --prefer-offline=false`
+  3. Retry in a non-restricted/networked shell if DNS/egress is blocked.
+
+### Port conflict troubleshooting and alternate host-port profile
+
+- Detect current listeners:
+  - `ss -ltn '( sport = :11434 or sport = :30000 or sport = :8080 )'`
+- If needed, run dependencies on alternate host ports with `docker compose` overrides.
+  Example `docker-compose.override.yml`:
+
+```yaml
+services:
+  ollama:
+    ports:
+      - "21434:11434"
+  sglang:
+    ports:
+      - "31000:30000"
+  searxng:
+    ports:
+      - "18080:8080"
+```
+
+- When using alternate ports, update `.env` accordingly:
+  - `OLLAMA_BASE_URL=http://localhost:21434`
+  - `SGLANG_BASE_URL=http://localhost:31000/v1`
+  - `SEARXNG_BASE_URL=http://localhost:18080`
 
 ### Secret Hygiene Quick Checks
 

@@ -201,6 +201,12 @@
     },
     {
       "recipe": [
+        "python3 scripts/new_user_smoke.py"
+      ],
+      "target": "setup-smoke"
+    },
+    {
+      "recipe": [
         "uv run pytest tests"
       ],
       "target": "test"
@@ -250,7 +256,7 @@
     },
     {
       "recipe": [
-        "cd web && npm install"
+        "python3 scripts/web_install.py"
       ],
       "target": "web-install"
     },
@@ -278,7 +284,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-18T06:12:14.674475+00:00",
+  "generated_at": "2026-02-18T14:47:10.907941+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",

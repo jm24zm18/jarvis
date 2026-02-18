@@ -172,11 +172,11 @@ Dependencies: M3
 | BK-044 | Self-Coding + Release Loop | Guard orchestrator/state-extractor error paths to prevent long traceback/timeouts after provider failure | done | P0 | planner | `uv run pytest -q tests/unit/test_orchestrator_step.py -k "provider or degraded or fallback"` passes; degraded assistant message + `model.run.error` event emitted on provider failure |
 | BK-045 | Governance + Safety | Deflake and unhang `test_non_admin_cannot_toggle_lockdown` via lifecycle/teardown instrumentation and fix | done | P0 | tester | `WEB_AUTH_SETUP_PASSWORD=secret uv run pytest -q tests/integration/test_authorization.py::test_non_admin_cannot_toggle_lockdown` and login flow tests complete deterministically |
 | BK-046 | Foundation + Observability | Add `make dev` host-port preflight (`11434`, `30000`, `8080`) with actionable remediation output | done | P0 | release_ops | `python3 scripts/dev_preflight_ports.py` fails fast on occupied ports and prints remediation commands |
-| BK-047 | Documentation + Ops Hardening | Document Docker/local port-conflict troubleshooting and optional alternate-port profile | not_started | P1 | release_ops | updates in `docs/local-development.md` and `docs/runbook.md`; `make docs-check` |
-| BK-048 | Documentation + Ops Hardening | Harden `make web-install` path with deterministic npm diagnostics/retry guidance and fallback commands | not_started | P1 | web_builder | repeated `make web-install` failures emit actionable guidance and logs; docs include fallback |
+| BK-047 | Documentation + Ops Hardening | Document Docker/local port-conflict troubleshooting and optional alternate-port profile | partial | P1 | release_ops | docs updates landed in `docs/local-development.md` and `docs/runbook.md`; pending `make docs-check` evidence in packet bundle |
+| BK-048 | Documentation + Ops Hardening | Harden `make web-install` path with deterministic npm diagnostics/retry guidance and fallback commands | partial | P1 | web_builder | resilient installer wrapper (`scripts/web_install.py`) + `make web-install` wiring landed; pending repeated-failure evidence capture + docs gate |
 | BK-049 | Documentation + Ops Hardening | Update quick-start docs to require `make web-install` before web dev/build/typecheck/lint commands | done | P0 | release_ops | `README.md` and `docs/getting-started.md` include explicit sequencing; `make docs-check` passes |
-| BK-050 | Foundation + Observability | Improve CLI/doctor environment diagnostics to distinguish sandbox/network/provider outage classes | not_started | P1 | api_guardian | `uv run jarvis doctor` and CLI error text identify environment-class root causes with remediation hints |
-| BK-051 | Foundation + Observability | Add reproducible new-user setup smoke target covering API + web bootstrap path | not_started | P1 | tester | smoke target fails fast on missing prerequisites and passes on clean setup; CI/local docs updated |
+| BK-050 | Foundation + Observability | Improve CLI/doctor environment diagnostics to distinguish sandbox/network/provider outage classes | partial | P1 | api_guardian | doctor HTTP checks now classify `dns_resolution`/`timeout`/network classes and CLI JSON errors map to outage classes; pending targeted evidence run |
+| BK-051 | Foundation + Observability | Add reproducible new-user setup smoke target covering API + web bootstrap path | partial | P1 | tester | `make setup-smoke` + `scripts/new_user_smoke.py` landed with API/web bootstrap checks; pending CI/local evidence attachment |
 | BK-052 | Self-Coding + Release Loop | Add regression tests for provider-unavailable and DNS-failure UX in CLI/API flows | done | P0 | tester | CLI/orchestrator failure-mode tests pass and enforce structured fast-fail behavior (`ok=false`, failure kind metadata, degraded response persistence) |
 
 ## Execution Packets
@@ -210,7 +210,9 @@ Dependencies: M3
 4. Remaining evidence runs: `pip-audit`, `osv-scanner`, npm audit/lockfile checks, `gitleaks`, and `trufflehog`.
 
 #### Immediate Next Steps (remaining work)
-1. Unblock npm toolchain (`BK-048` prerequisite): stabilize `make web-install` / `npm install` failure mode (`Exit handler never called!`) and capture deterministic remediation steps.
+1. Collect deterministic failure/success evidence for BK-048 and BK-051:
+   - repeat `make web-install` under failure and success conditions; attach `/tmp/jarvis-web-install.log` and npm debug-log path when present
+   - run `make setup-smoke` on a clean setup profile and attach pass/fail outputs
 2. Finish npm dependency remediation path for `BK-040`: update `web/package-lock.json` to clear `ajv`/`esbuild` findings, then run `cd web && npm audit --json`.
 3. Finish scanner evidence for `BK-040`: run `osv-scanner --lockfile=uv.lock` and `osv-scanner --lockfile=web/package-lock.json` (tool currently unavailable in this environment).
 4. Finish ops follow-through for `BK-042`: execute local credential rotation checklist (Google/GitHub/webhook secrets) and attach evidence notes.
@@ -221,6 +223,10 @@ Dependencies: M3
    - `cd web && npm audit --json`
    - `gitleaks detect --source . --no-git --redact`
    - `trufflehog filesystem . --only-verified`
+
+#### Remaining tasks discovered during implementation
+1. Add targeted unit tests for `scripts/web_install.py` classification paths to keep remediation guidance deterministic.
+2. Evaluate adding a CI job for `make setup-smoke --skip-web-install` (or equivalent split target) to prevent onboarding regressions without introducing flaky external network dependency.
 
 ### Packet 1C (completed, beta stabilization): Core reliability + onboarding unblock
 1. Finished BK-043, BK-044, BK-045, BK-046, BK-049, BK-052.
@@ -242,6 +248,27 @@ Dependencies: M3
 2. Complete admin UX for pairing and memory governance visibility.
 3. Run governance/RBAC regression suite before merge.
 
+### Packet 3A (in progress): Memory + WhatsApp hardening tranche
+1. Landed memory KPI wiring on `/metrics` (`memory_items_count`, `memory_avg_tokens_saved`, `memory_reconciliation_rate`, `memory_hallucination_incidents`).
+2. Hardened `sync_failure_capsules` with typed detail mapping, deterministic dedupe key (`trace_id+phase+summary_hash`), and trace-thread linkage validation.
+3. Extended memory state API/UI surfaces:
+   - consistency report thread/time filters
+   - state stats endpoint (`/api/v1/memory/state/stats`)
+   - admin memory sections for conflicts, tier/archive stats, failure lookup, graph preview.
+4. Expanded WhatsApp hardening coverage:
+   - admin channel lifecycle endpoint coverage (`status/create/qrcode/pairing-code/disconnect`)
+   - non-admin authorization regression checks
+   - webhook payload variants (extended text, media classes, group payload)
+   - QR/pairing redaction key coverage in event writer.
+
+#### Remaining tasks discovered during implementation (2026-02-18)
+1. Add a structured persisted source for `memory_avg_tokens_saved` (currently derived from reconciliation `detail_json` when present).
+2. Add frontend component-level tests for `/admin/memory` review/resolve and filtered consistency workflows.
+3. Add explicit log-capture assertions for QR/pairing leakage prevention beyond payload redaction unit tests.
+4. Resolve pre-existing repo-wide lint failures blocking `make lint` (outside this packet scope; e.g. `src/jarvis/cli/checks.py`).
+5. Resolve pre-existing repo-wide mypy failures blocking `make typecheck` (outside this packet scope; e.g. `src/jarvis/routes/api/governance.py`, `src/jarvis/commands/service.py`, `src/jarvis/orchestrator/step.py`).
+6. Run and attach full `make test-gates` evidence once items 4-5 are cleared.
+
 ## Testing and Acceptance Gates
 
 Global gates before marking backlog item `done`:
@@ -258,6 +285,7 @@ Supplemental targeted checks for this plan:
 - `uv run pytest tests/integration/test_memory_api_state_surfaces.py -v`
 - `uv run pytest tests/unit/test_memory_policy.py -v`
 - `osv-scanner --lockfile=uv.lock`
+
 - `osv-scanner --lockfile=web/package-lock.json`
 - `UV_CACHE_DIR=/tmp/uv-cache XDG_CACHE_HOME=/tmp/.cache uv run pip-audit --cache-dir /tmp/pip-audit-cache`
 - `cd web && npm audit --json`

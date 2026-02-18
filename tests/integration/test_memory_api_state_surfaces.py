@@ -28,8 +28,9 @@ def _seed_state_item(conn, uid: str, thread_id: str, text: str, *, conflict: int
         (
             "INSERT INTO state_items("
             "uid, thread_id, text, status, type_tag, topic_tags_json, refs_json, confidence, "
-            "replaced_by, supersession_evidence, conflict, pinned, source, created_at, last_seen_at, "
-            "updated_at, tier, importance_score, access_count, conflict_count, agent_id, last_accessed_at"
+            "replaced_by, supersession_evidence, conflict, pinned, source, created_at, "
+            "last_seen_at, updated_at, tier, importance_score, access_count, conflict_count, "
+            "agent_id, last_accessed_at"
             ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         ),
         (
@@ -211,6 +212,12 @@ def test_non_admin_cannot_access_admin_memory_state_surfaces() -> None:
         ).status_code
         == 403
     )
+    assert (
+        client.get(
+            "/api/v1/memory/state/stats", headers=_headers(alice_token)
+        ).status_code
+        == 403
+    )
 
 
 def test_admin_memory_state_review_and_failures_routes() -> None:
@@ -295,3 +302,26 @@ def test_admin_memory_state_review_and_failures_routes() -> None:
     )
     assert consistency.status_code == 200
     assert any(item["id"] == "mcr_1" for item in consistency.json()["items"])
+
+    filtered_thread = client.get(
+        "/api/v1/memory/state/consistency/report",
+        headers=_headers(admin_token),
+        params={"thread_id": thread_id},
+    )
+    assert filtered_thread.status_code == 200
+    assert all(item["thread_id"] == thread_id for item in filtered_thread.json()["items"])
+
+    filtered_window = client.get(
+        "/api/v1/memory/state/consistency/report",
+        headers=_headers(admin_token),
+        params={"from_ts": now},
+    )
+    assert filtered_window.status_code == 200
+    assert any(item["id"] == "mcr_1" for item in filtered_window.json()["items"])
+
+    stats = client.get("/api/v1/memory/state/stats", headers=_headers(admin_token))
+    assert stats.status_code == 200
+    payload = stats.json()
+    assert "tiers" in payload
+    assert "archive_items" in payload
+    assert "open_conflicts" in payload

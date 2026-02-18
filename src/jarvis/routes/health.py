@@ -1,5 +1,7 @@
 """Health and readiness routes."""
 
+import json
+
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -36,13 +38,76 @@ async def metrics() -> JSONResponse:
         msg_count = conn.execute("SELECT COUNT(*) AS cnt FROM messages").fetchone()
         thread_count = conn.execute("SELECT COUNT(*) AS cnt FROM threads").fetchone()
         event_count = conn.execute("SELECT COUNT(*) AS cnt FROM events").fetchone()
+        memory_items_count = conn.execute("SELECT COUNT(*) AS cnt FROM memory_items").fetchone()
+        recon_rows = conn.execute(
+            "SELECT updated_count, superseded_count, deduped_count, pruned_count, detail_json "
+            "FROM state_reconciliation_runs "
+            "WHERE created_at >= datetime('now', '-7 day')"
+        ).fetchall()
+        failure_rows = conn.execute(
+            "SELECT error_summary, error_details_json FROM failure_capsules"
+        ).fetchall()
 
     db_stats = {
         "messages_total": int(msg_count["cnt"]) if msg_count else 0,
         "threads_total": int(thread_count["cnt"]) if thread_count else 0,
         "events_total": int(event_count["cnt"]) if event_count else 0,
+        "memory_items_count": int(memory_items_count["cnt"]) if memory_items_count else 0,
     }
-    return JSONResponse(content={**_metrics, **db_stats})
+    runs = len(recon_rows)
+    runs_with_changes = 0
+    tokens_saved_values: list[float] = []
+    for row in recon_rows:
+        changes = (
+            int(row["updated_count"])
+            + int(row["superseded_count"])
+            + int(row["deduped_count"])
+            + int(row["pruned_count"])
+        )
+        if changes > 0:
+            runs_with_changes += 1
+        raw_detail = row["detail_json"]
+        if not isinstance(raw_detail, str) or not raw_detail:
+            continue
+        try:
+            details = json.loads(raw_detail)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(details, dict):
+            raw_tokens = details.get("tokens_saved")
+            if isinstance(raw_tokens, int | float):
+                tokens_saved_values.append(float(raw_tokens))
+            elif isinstance(raw_tokens, str):
+                try:
+                    tokens_saved_values.append(float(raw_tokens))
+                except ValueError:
+                    pass
+    hallucination_incidents = 0
+    for row in failure_rows:
+        summary = str(row["error_summary"]).lower()
+        if "hallucinat" in summary:
+            hallucination_incidents += 1
+            continue
+        raw_detail = row["error_details_json"]
+        if not isinstance(raw_detail, str) or not raw_detail:
+            continue
+        try:
+            details = json.loads(raw_detail)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(details, dict):
+            continue
+        kind = str(details.get("error_kind") or details.get("kind") or "").lower()
+        if "hallucinat" in kind:
+            hallucination_incidents += 1
+    kpi_stats = {
+        "memory_avg_tokens_saved": (
+            sum(tokens_saved_values) / len(tokens_saved_values) if tokens_saved_values else 0.0
+        ),
+        "memory_reconciliation_rate": (runs_with_changes / runs) if runs > 0 else 1.0,
+        "memory_hallucination_incidents": hallucination_incidents,
+    }
+    return JSONResponse(content={**_metrics, **db_stats, **kpi_stats})
 
 
 @router.get("/healthz")

@@ -17,6 +17,10 @@ SENSITIVE_KEYS = {
     "api_key",
     "authorization",
     "phone",
+    "qrcode",
+    "qr_code",
+    "pairing_code",
+    "code",
 }
 
 

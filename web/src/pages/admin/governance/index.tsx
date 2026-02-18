@@ -9,6 +9,7 @@ import {
   governanceSlo,
   governanceSloHistory,
   latestFitness,
+  memoryConsistencyReport,
   releaseCandidateStatus,
 } from "../../../api/endpoints";
 import Header from "../../../components/layout/Header";
@@ -30,6 +31,10 @@ export default function AdminGovernancePage() {
   const timeline = useQuery({
     queryKey: ["governance-decision-timeline"],
     queryFn: () => governanceDecisionTimeline({ limit: 25 }),
+  });
+  const memoryConsistency = useQuery({
+    queryKey: ["governance-memory-consistency"],
+    queryFn: () => memoryConsistencyReport({ limit: 20 }),
   });
   const learning = useQuery({
     queryKey: ["governance-learning-loop"],
@@ -81,7 +86,7 @@ export default function AdminGovernancePage() {
         </div>
       </Card>
 
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Story Pass Rate</p>
           <p className="mt-2 font-display text-3xl text-[var(--text-primary)]">{(storyPassRate * 100).toFixed(1)}%</p>
@@ -93,6 +98,12 @@ export default function AdminGovernancePage() {
         <Card>
           <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Failure Recurrence</p>
           <p className="mt-2 font-display text-3xl text-[var(--text-primary)]">{(recurrenceRate * 100).toFixed(1)}%</p>
+        </Card>
+        <Card>
+          <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Memory Consistency</p>
+          <p className="mt-2 font-display text-3xl text-[var(--text-primary)]">
+            {(Number(memoryConsistency.data?.avg_consistency ?? 1) * 100).toFixed(1)}%
+          </p>
         </Card>
       </div>
 

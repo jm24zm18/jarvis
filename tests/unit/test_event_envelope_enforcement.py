@@ -2,7 +2,7 @@ import json
 
 from jarvis.db.connection import get_conn
 from jarvis.events.models import EventInput
-from jarvis.events.writer import emit_event
+from jarvis.events.writer import emit_event, redact_payload
 
 
 def test_emit_event_enforces_action_envelope_for_selfupdate_events() -> None:
@@ -37,3 +37,19 @@ def test_emit_event_enforces_action_envelope_for_selfupdate_events() -> None:
     assert str(payload.get("intent", "")).strip() != ""
     assert str(payload.get("tests", {}).get("result", "")).strip() != ""
     assert str(payload.get("result", {}).get("status", "")).strip() != ""
+
+
+def test_redact_payload_masks_whatsapp_pairing_sensitive_fields() -> None:
+    payload = {
+        "qrcode": "data:image/png;base64,SECRET_QR",
+        "code": "123-456",
+        "pairing_code": "999999",
+        "nested": {"qr_code": "ABC", "phone": "+15551234567"},
+    }
+    redacted = redact_payload(payload)
+    assert redacted["qrcode"] == "[REDACTED]"
+    assert redacted["code"] == "[REDACTED]"
+    assert redacted["pairing_code"] == "[REDACTED]"
+    assert isinstance(redacted["nested"], dict)
+    assert redacted["nested"]["qr_code"] == "[REDACTED]"
+    assert redacted["nested"]["phone"] == "[REDACTED]"

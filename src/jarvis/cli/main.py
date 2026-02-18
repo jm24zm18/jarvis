@@ -44,6 +44,31 @@ def doctor(json_output: bool, fix: bool) -> None:
     run_doctor(json_output=json_output, fix=fix)
 
 
+def _classify_cli_error(message: str) -> tuple[str, str]:
+    text = message.lower()
+    if any(token in text for token in ("name resolution", "enotfound", "eai_again", "getaddrinfo")):
+        return (
+            "dns_resolution",
+            "Provider DNS lookup failed. Verify network/DNS access in this environment.",
+        )
+    if "connection refused" in text:
+        return (
+            "connection_refused",
+            "Provider/API refused the connection. Verify service is running and URL is correct.",
+        )
+    if "network is unreachable" in text or "no route to host" in text:
+        return (
+            "network_unreachable",
+            "Network route unavailable (possible sandbox/egress restriction).",
+        )
+    if "timed out" in text or "timeout" in text:
+        return (
+            "timeout",
+            "Request timed out. Verify service health and connectivity.",
+        )
+    return ("agent_unavailable", message)
+
+
 @cli.command("gemini-login")
 @click.option(
     "--token-path",
@@ -104,12 +129,14 @@ def ask(
     except click.ClickException as exc:
         if not json_output:
             raise
-        click.echo(format_json_error(target_thread, "agent_unavailable", str(exc)))
+        code, hint = _classify_cli_error(str(exc))
+        click.echo(format_json_error(target_thread, code, hint))
         raise click.exceptions.Exit(1) from exc
     except Exception as exc:
         if not json_output:
             raise click.ClickException(str(exc)) from exc
-        click.echo(format_json_error(target_thread, "agent_unavailable", str(exc)))
+        code, hint = _classify_cli_error(str(exc))
+        click.echo(format_json_error(target_thread, code, hint))
         raise click.exceptions.Exit(1) from exc
     click.echo(format_reply(reply, json_output=json_output))
 

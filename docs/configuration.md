@@ -188,6 +188,15 @@ Source of truth: `src/jarvis/config.py`.
 - `APP_DB` must be an absolute path.
 - If `BIND_HOST=0.0.0.0` in prod, runtime emits a security warning.
 
+## Runtime Metrics
+
+`GET /metrics` exposes JSON counters/gauges including memory lifecycle KPIs:
+
+- `memory_items_count`: current `memory_items` row count.
+- `memory_avg_tokens_saved`: average `tokens_saved` extracted from reconciliation `detail_json` when present.
+- `memory_reconciliation_rate`: fraction of reconciliation runs with non-zero updates/supersessions/dedupes/prunes (7-day window).
+- `memory_hallucination_incidents`: failure capsule count tagged/detected as hallucination.
+
 ## Related Docs
 
 - `docs/README.md`
