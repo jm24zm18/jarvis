@@ -7,6 +7,8 @@
 - Ollama: `11434`
 - SearXNG: `8080`
 - SGLang: `30000`
+- `make dev` runs a host-port preflight first and fails early with remediation hints if
+  any of these ports are occupied.
 
 ## Core Runtime Commands
 
@@ -87,6 +89,22 @@ make web-dev
 - Run diagnostics: `uv run jarvis doctor --fix`
 - Check API health: `GET /readyz`, `GET /metrics`
 - Validate compose services: `docker compose ps`
+
+### Secret Hygiene Quick Checks
+
+Run before pushing changes that touch auth/provider/webhook config:
+
+```bash
+gitleaks detect --source . --no-git --redact
+trufflehog filesystem . --only-verified
+```
+
+If a local credential is exposed:
+
+1. Rotate the credential at the provider first (Google OAuth, GitHub token, webhook secret, etc.).
+2. Remove stale local values from `.env` and any local token cache files.
+3. Re-run the secret scans above and confirm clean output.
+4. Restart local services and verify auth/provider flows with new credentials.
 
 ## Related Docs
 

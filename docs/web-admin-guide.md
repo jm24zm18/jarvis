@@ -26,8 +26,8 @@ Unknown routes redirect to `/chat` after auth.
 
 ## Auth Model
 
-- `Protected` wrapper requires token and validates session via `GET /api/v1/auth/me`.
-- Missing/invalid token redirects to `/login`.
+- `Protected` wrapper validates session via `GET /api/v1/auth/me` using an HTTP-only session cookie.
+- Missing/invalid session redirects to `/login`.
 - Session role is `user` or `admin`.
 
 ## RBAC and Ownership
@@ -38,13 +38,16 @@ Unknown routes redirect to `/chat` after auth.
 
 ## WebSocket Model
 
-Endpoint: `/ws?token=<token>`
+Endpoint: `/ws`
+
+- Auth is cookie-backed (`jarvis_session`) or bearer header for compatibility paths.
+- Query-string token auth (`/ws?token=...`) is rejected.
 
 Client actions:
 
 - `subscribe` with `thread_id`
 - `unsubscribe` with `thread_id`
-- `subscribe_system`
+- `subscribe_system` (admin only)
 
 Event envelope includes `type`, `thread_id`, `created_at`, plus payload fields.
 

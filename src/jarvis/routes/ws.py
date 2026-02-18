@@ -7,6 +7,7 @@ from collections import defaultdict
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
+from jarvis.auth.dependencies import _extract_bearer
 from jarvis.auth.service import validate_token
 from jarvis.db.connection import get_conn
 
@@ -81,7 +82,12 @@ hub = WebSocketHub()
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
-    token = websocket.query_params.get("token", "")
+    if websocket.query_params.get("token"):
+        await websocket.close(code=1008)
+        return
+    token = _extract_bearer(websocket.headers.get("authorization")) or websocket.cookies.get(
+        "jarvis_session", ""
+    )
     with get_conn() as conn:
         auth_data = validate_token(conn, token)
     if auth_data is None:
@@ -117,6 +123,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     await hub.unsubscribe(websocket, thread_id)
                     await websocket.send_json({"type": "unsubscribed", "thread_id": thread_id})
             elif action == "subscribe_system":
+                if role != "admin":
+                    await websocket.send_json({"type": "error", "detail": "forbidden"})
+                    continue
                 await hub.subscribe_system(websocket)
                 await websocket.send_json({"type": "subscribed.system"})
             else:

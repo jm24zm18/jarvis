@@ -49,11 +49,53 @@ Tier flow: `working -> episodic -> semantic/procedural`, with low-importance sta
 | WhatsApp Channel + Admin UX | 0 | 1 | 6 |
 | Documentation + Ops Hardening | 0 | 1 | 3 |
 
+## Security Audit Update (2026-02-18)
+
+Source: `docs/security-audit-2026-02-18.md` (dev @ `b9a4e1447282ec8a0d67fdd22e8591b7c2b7adc4`)
+
+Scanner execution status (local run):
+- Installed local scanner toolchain under `/tmp/sec-tools/bin`:
+  - `semgrep 1.152.0`
+  - `gitleaks 8.30.0`
+  - `trivy 0.69.1`
+  - `osv-scanner 2.3.3`
+  - `trufflehog 3.93.3`
+- Results:
+  - `semgrep` (python + react/javascript): 0 findings.
+  - `trufflehog filesystem --only-verified`: 0 verified secrets.
+  - `gitleaks`: 6 `generic-api-key` hits; triage = mostly false positives plus one local untracked `.env` secret hit.
+  - `osv-scanner --lockfile=uv.lock`: 1 High vuln (`starlette 0.47.3`, fixed in `0.49.1`).
+  - `osv-scanner --lockfile=web/package-lock.json`: 2 Medium vulns (`ajv 6.12.6`, `esbuild 0.21.5`).
+  - `pip-audit`: confirms Starlette vulnerability/fix path.
+  - `npm audit --json`: 12 moderate vulns (dev dependency graph).
+  - `trivy fs --scanners misconfig`: 0 findings in this runtime.
+
+High-priority audit findings to action:
+1. Non-admin `subscribe_system` authorization gap in WebSocket path.
+2. Session token exposure risk (query-string WS token + `localStorage` persistence).
+3. Missing webhook replay protection.
+4. CI action pinning gap (`@main` mutable ref) and CI least-privilege permissions tightening.
+5. Dependency lockfile remediation required (`starlette`, `ajv`, `esbuild`).
+
 Status normalization:
 - Source `implemented`/`done` => `done`
 - Source `partial`/`in_progress`/`blocked` => `partial`
 - Source unchecked TODO / planned-only without evidence => `not_started`
 - Duplicate conflict rule applied conservatively (`partial` over `done`; `not_started` only used over `partial` when no evidence exists).
+
+## Beta Full-Pass Update (2026-02-18)
+
+Source: `docs/reports/beta-2026-02-18-full-pass.md`
+
+Findings incorporated into this plan:
+1. `jarvis ask --json` can hang on provider DNS/transport failures and time out without a deterministic terminal payload.
+2. `make dev` startup fails on occupied host ports (`11434`, `30000`) without preflight detection/remediation guidance.
+3. `tests/integration/test_authorization.py::test_non_admin_cannot_toggle_lockdown` hangs and requires external timeout.
+4. `make web-install` has a reproducible npm failure mode (`Exit handler never called!`) with weak diagnostics/recovery guidance.
+5. Quick-start documentation omits explicit web dependency bootstrap before web targets.
+
+Stabilization directive:
+- Prioritize reliability/onboarding fixes ahead of feature expansion until core user path + local setup path are deterministic.
 
 ## Unified Milestones
 
@@ -120,6 +162,22 @@ Dependencies: M3
 | BK-034 | Governance + Safety | Dependency steward hardening (CVE severity, compatibility bundle, rollback-ready PR context) | partial | P1 | dependency_steward | `uv run pytest tests/unit/test_governance_tasks.py -v` |
 | BK-035 | Governance + Safety | Release-candidate hardening (changelog artifact + runbook evidence) | partial | P1 | release_candidate | `uv run pytest tests/unit/test_governance_tasks.py -v` |
 | BK-036 | Memory Intelligence + Retrieval | Memory admin UI completion (conflicts, tier/archive stats, failure lookup, graph preview) | partial | P1 | web_builder | admin memory page sections visible and populated |
+| BK-037 | Governance + Safety | Enforce admin-only WS system subscription (`subscribe_system`) and add regression tests | done | P0 | security_reviewer | `uv run pytest tests/integration/test_authorization.py -k websocket -v` |
+| BK-038 | Governance + Safety | Web auth hardening: remove WS query-token transport + replace persistent browser token storage model | done | P0 | api_guardian | `uv run pytest tests/integration/test_websocket.py -v`; `uv run pytest tests/integration/test_authorization.py -k websocket -v`; manual login/session regression |
+| BK-039 | Governance + Safety | Webhook replay defense (delivery-id/nonce + bounded replay window) | done | P0 | security_reviewer | `uv run pytest tests/integration/test_web_api.py -k github_webhook -v` with replay negatives |
+| BK-040 | Documentation + Ops Hardening | Dependency vuln remediation from audit (`starlette`, `ajv`, `esbuild`) and lockfile refresh | partial | P0 | dependency_steward | Python lock upgraded (`fastapi==0.120.4`, `starlette==0.49.3`) and `pip-audit` clean; npm lockfile/audit blocked by reproducible local npm failure (`Exit handler never called!`) |
+| BK-041 | Documentation + Ops Hardening | CI supply-chain hardening: pin third-party GitHub actions to SHAs and add top-level CI permissions | done | P0 | release_ops | workflow CI pass + branch-policy/release workflow validation |
+| BK-042 | Documentation + Ops Hardening | Secret hygiene follow-up: rotate local exposed OAuth credentials and add pre-commit secret scan command docs | partial | P1 | release_ops | `docs/runbook.md`/`docs/local-development.md` updated with rotation+scan checklist; pending environment-specific local credential rotation execution |
+| BK-043 | Self-Coding + Release Loop | Fail-fast `jarvis ask --json` path on provider transport/DNS errors with bounded fallback budget + deterministic error payload | done | P0 | api_guardian | `uv run pytest -q tests/unit/test_cli_chat.py -k "ask_json"` passes with structured `ok=false` envelope and non-zero exit |
+| BK-044 | Self-Coding + Release Loop | Guard orchestrator/state-extractor error paths to prevent long traceback/timeouts after provider failure | done | P0 | planner | `uv run pytest -q tests/unit/test_orchestrator_step.py -k "provider or degraded or fallback"` passes; degraded assistant message + `model.run.error` event emitted on provider failure |
+| BK-045 | Governance + Safety | Deflake and unhang `test_non_admin_cannot_toggle_lockdown` via lifecycle/teardown instrumentation and fix | done | P0 | tester | `WEB_AUTH_SETUP_PASSWORD=secret uv run pytest -q tests/integration/test_authorization.py::test_non_admin_cannot_toggle_lockdown` and login flow tests complete deterministically |
+| BK-046 | Foundation + Observability | Add `make dev` host-port preflight (`11434`, `30000`, `8080`) with actionable remediation output | done | P0 | release_ops | `python3 scripts/dev_preflight_ports.py` fails fast on occupied ports and prints remediation commands |
+| BK-047 | Documentation + Ops Hardening | Document Docker/local port-conflict troubleshooting and optional alternate-port profile | not_started | P1 | release_ops | updates in `docs/local-development.md` and `docs/runbook.md`; `make docs-check` |
+| BK-048 | Documentation + Ops Hardening | Harden `make web-install` path with deterministic npm diagnostics/retry guidance and fallback commands | not_started | P1 | web_builder | repeated `make web-install` failures emit actionable guidance and logs; docs include fallback |
+| BK-049 | Documentation + Ops Hardening | Update quick-start docs to require `make web-install` before web dev/build/typecheck/lint commands | done | P0 | release_ops | `README.md` and `docs/getting-started.md` include explicit sequencing; `make docs-check` passes |
+| BK-050 | Foundation + Observability | Improve CLI/doctor environment diagnostics to distinguish sandbox/network/provider outage classes | not_started | P1 | api_guardian | `uv run jarvis doctor` and CLI error text identify environment-class root causes with remediation hints |
+| BK-051 | Foundation + Observability | Add reproducible new-user setup smoke target covering API + web bootstrap path | not_started | P1 | tester | smoke target fails fast on missing prerequisites and passes on clean setup; CI/local docs updated |
+| BK-052 | Self-Coding + Release Loop | Add regression tests for provider-unavailable and DNS-failure UX in CLI/API flows | done | P0 | tester | CLI/orchestrator failure-mode tests pass and enforce structured fast-fail behavior (`ok=false`, failure kind metadata, degraded response persistence) |
 
 ## Execution Packets
 
@@ -134,6 +192,45 @@ Dependencies: M3
 1. Finish BK-001, BK-002, BK-022, BK-027, BK-033.
 2. Add/lock core tests for evidence, memory policy events, webhook auth.
 3. Validate end-to-end inbound path: WhatsApp webhook -> orchestrator -> memory store with auditable events.
+
+### Packet 1A (completed, security fast-follow): Audit remediation tranche
+1. Finished BK-037, BK-039, BK-041.
+2. Landed WS system-subscription authz fix + webhook replay guard + CI action pinning/permissions.
+3. Targeted validation passed:
+   - `uv run pytest tests/integration/test_authorization.py -k websocket -v`
+   - `uv run pytest tests/integration/test_websocket.py -v`
+   - `uv run pytest tests/integration/test_web_api.py -k github_webhook -v`
+   - `make docs-check`
+4. Full gate note: `make lint` and `make typecheck` remain blocked by pre-existing unrelated failures outside Packet 1A scope.
+
+### Packet 1B (in progress, security fast-follow): Token and dependency hardening
+1. BK-038 completed (cookie-backed web auth/session flow, WS query-token rejection, regression tests).
+2. BK-040 partially completed (Python lock remediated to `fastapi==0.120.4` + `starlette==0.49.3` and `pip-audit` clear); npm remediation still blocked by local npm installer failure.
+3. BK-042 partially completed (secret scan + rotation docs/checklists added); local credential rotation execution remains operator-dependent.
+4. Remaining evidence runs: `pip-audit`, `osv-scanner`, npm audit/lockfile checks, `gitleaks`, and `trufflehog`.
+
+#### Immediate Next Steps (remaining work)
+1. Unblock npm toolchain (`BK-048` prerequisite): stabilize `make web-install` / `npm install` failure mode (`Exit handler never called!`) and capture deterministic remediation steps.
+2. Finish npm dependency remediation path for `BK-040`: update `web/package-lock.json` to clear `ajv`/`esbuild` findings, then run `cd web && npm audit --json`.
+3. Finish scanner evidence for `BK-040`: run `osv-scanner --lockfile=uv.lock` and `osv-scanner --lockfile=web/package-lock.json` (tool currently unavailable in this environment).
+4. Finish ops follow-through for `BK-042`: execute local credential rotation checklist (Google/GitHub/webhook secrets) and attach evidence notes.
+5. Re-run and attach packet evidence bundle:
+   - `uv run pip-audit`
+   - `osv-scanner --lockfile=uv.lock`
+   - `osv-scanner --lockfile=web/package-lock.json`
+   - `cd web && npm audit --json`
+   - `gitleaks detect --source . --no-git --redact`
+   - `trufflehog filesystem . --only-verified`
+
+### Packet 1C (completed, beta stabilization): Core reliability + onboarding unblock
+1. Finished BK-043, BK-044, BK-045, BK-046, BK-049, BK-052.
+2. Landed deterministic CLI fail-fast JSON envelope, orchestrator provider-failure terminal handling, auth/web TestClient lifecycle stabilization, and `make dev` port preflight.
+3. Validation evidence:
+   - `WEB_AUTH_SETUP_PASSWORD=secret uv run pytest -q tests/integration/test_authorization.py::test_non_admin_cannot_toggle_lockdown tests/integration/test_authorization.py::test_lockdown_route_is_reachable_after_successful_login tests/integration/test_web_api.py::test_web_auth_login_me_logout_flow`
+   - `uv run pytest -q tests/unit/test_orchestrator_step.py -k "provider or degraded or fallback"`
+   - `uv run pytest -q tests/unit/test_cli_chat.py -k "ask_json"`
+   - `make docs-check`
+4. Remaining Packet 1C tasks discovered during implementation: none.
 
 ### Packet 2 (next): M2 memory reliability + self-update enforcement
 1. Finish BK-006, BK-007, BK-016, BK-017, BK-021.
@@ -160,6 +257,10 @@ Supplemental targeted checks for this plan:
 - `uv run pytest tests/unit/test_memory_service.py -v`
 - `uv run pytest tests/integration/test_memory_api_state_surfaces.py -v`
 - `uv run pytest tests/unit/test_memory_policy.py -v`
+- `osv-scanner --lockfile=uv.lock`
+- `osv-scanner --lockfile=web/package-lock.json`
+- `UV_CACHE_DIR=/tmp/uv-cache XDG_CACHE_HOME=/tmp/.cache uv run pip-audit --cache-dir /tmp/pip-audit-cache`
+- `cd web && npm audit --json`
 
 ## Rollout and Rollback
 
@@ -195,6 +296,7 @@ Rollback policy:
 | BK-015, BK-019 | `docs/memory-roadmap.md` (importance formula, tier/archive flow, delivery order) |
 | BK-016..BK-021, BK-036 | `docs/memory-roadmap-todo.md` (not implemented, hardening gaps, tests needed, operational follow-ups) |
 | BK-017, BK-029, BK-036 and packet sequencing emphasis | `docs/evolution-whatsapp-memory-execution-plan.md` (workstreams, file-level plan, rollout strategy, risk controls) |
+| BK-043..BK-052 | `docs/reports/beta-2026-02-18-full-pass.md` (reproducible reliability/setup/documentation defects + ranked stabilization priorities) |
 
 ## Appendix
 
@@ -204,6 +306,7 @@ Rollback policy:
 - `docs/memory-roadmap.md`
 - `docs/memory-roadmap-todo.md`
 - `docs/evolution-whatsapp-memory-execution-plan.md`
+- `docs/reports/beta-2026-02-18-full-pass.md`
 
 ### Deferred/Excluded items
 - No source items were discarded. Items were merged/deduplicated into normalized backlog IDs.

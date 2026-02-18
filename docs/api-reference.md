@@ -92,7 +92,7 @@ Auth levels:
 | `GET` | `/api/v1/threads/{thread_id}/onboarding` | `auth` | `get_thread_onboarding_status_api_v1_threads__thread_id__onboarding_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/threads/{thread_id}/onboarding/start` | `auth` | `start_thread_onboarding_api_v1_threads__thread_id__onboarding_start_post` | `-` | `200, 422` |
 | `GET` | `/api/v1/traces/{trace_id}` | `auth` | `get_trace_api_v1_traces__trace_id__get` | `-` | `200, 422` |
-| `POST` | `/api/v1/webhooks/github` | `public` | `github_webhook_api_v1_webhooks_github_post` | `-` | `200, 422` |
+| `POST` | `/api/v1/webhooks/github` | `public` | `github_webhook_api_v1_webhooks_github_post` | `-` | `200, 400, 401, 409, 422` |
 | `POST` | `/api/v1/webhooks/trigger/{hook_id}` | `public` | `trigger_webhook_api_v1_webhooks_trigger__hook_id__post` | `-` | `200, 422` |
 | `GET` | `/api/v1/webhooks/triggers` | `auth` | `list_triggers_api_v1_webhooks_triggers_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/webhooks/triggers` | `auth` | `create_trigger_api_v1_webhooks_triggers_post` | `application/json` | `200, 422` |

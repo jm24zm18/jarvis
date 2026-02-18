@@ -27,7 +27,7 @@ import type {
 } from "../types";
 
 export const login = (password: string) =>
-  apiFetch<{ token: string; user_id: string }>("/api/v1/auth/login", {
+  apiFetch<{ session_id: string; user_id: string; role: string }>("/api/v1/auth/login", {
     method: "POST",
     body: JSON.stringify({ password }),
   });

@@ -3,6 +3,7 @@ import hmac
 import json
 import os
 
+import pytest
 from fastapi.testclient import TestClient
 
 from jarvis.config import get_settings
@@ -10,6 +11,22 @@ from jarvis.db.connection import get_conn
 from jarvis.db.queries import insert_message, now_iso
 from jarvis.ids import new_id
 from jarvis.main import app
+
+_MANAGED_CLIENTS: list[TestClient] = []
+
+
+def _managed_client() -> TestClient:
+    client = TestClient(app)
+    client.__enter__()
+    _MANAGED_CLIENTS.append(client)
+    return client
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_managed_clients():
+    yield
+    while _MANAGED_CLIENTS:
+        _MANAGED_CLIENTS.pop().__exit__(None, None, None)
 
 
 def _login(client: TestClient) -> str:
@@ -23,7 +40,7 @@ def _login(client: TestClient) -> str:
 def test_web_auth_login_me_logout_flow() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
 
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -56,7 +73,7 @@ def test_provider_config_get_and_update(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.routes.api.auth._save_env_values", fake_save_env_values)
     monkeypatch.setattr("jarvis.routes.api.auth.enqueue_settings_reload", lambda: True)
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -98,7 +115,7 @@ def test_web_thread_and_message_flow(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.routes.api.messages._send_task", fake_send_task)
     monkeypatch.setattr("jarvis.routes.api.messages.is_onboarding_active", lambda *_a, **_k: False)
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -143,7 +160,7 @@ def test_web_message_routes_to_onboarding_when_requested(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.routes.api.messages._send_task", fake_send_task)
     monkeypatch.setattr("jarvis.routes.api.messages.is_onboarding_active", lambda *_a, **_k: True)
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -186,7 +203,7 @@ def test_web_message_onboarding_enqueue_failure_still_persists_user_message(monk
     monkeypatch.setattr("jarvis.routes.api.messages._send_task", fake_send_task)
     monkeypatch.setattr("jarvis.routes.api.messages.is_onboarding_active", lambda *_a, **_k: True)
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -219,7 +236,7 @@ def test_web_messages_hide_non_main_assistant_history() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -287,7 +304,7 @@ def test_trace_endpoint_supports_redacted_and_raw_views() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -337,7 +354,7 @@ def test_get_thread_onboarding_status() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -365,7 +382,7 @@ def test_start_thread_onboarding_inserts_assistant_prompt(monkeypatch) -> None:
     )
     monkeypatch.setattr("jarvis.routes.api.messages.get_assistant_name", lambda: "Jarvis")
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -396,17 +413,101 @@ def test_start_thread_onboarding_inserts_assistant_prompt(monkeypatch) -> None:
 def test_github_webhook_rejects_bad_signature() -> None:
     os.environ["GITHUB_WEBHOOK_SECRET"] = "shh"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     payload = {"action": "opened"}
     response = client.post(
         "/api/v1/webhooks/github",
         json=payload,
         headers={
             "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-bad-signature",
             "X-Hub-Signature-256": "sha256=bad",
         },
     )
     assert response.status_code == 401
+
+
+def test_github_webhook_requires_delivery_id() -> None:
+    os.environ["GITHUB_WEBHOOK_SECRET"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    payload = {
+        "action": "opened",
+        "repository": {"name": "jarvis", "owner": {"login": "justin"}},
+        "pull_request": {"number": 13, "base": {"ref": "dev"}},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+    response = client.post(
+        "/api/v1/webhooks/github",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": f"sha256={sig}",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "missing github delivery id"
+
+
+def test_github_webhook_rejects_replayed_delivery() -> None:
+    os.environ["GITHUB_WEBHOOK_SECRET"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    payload = {
+        "action": "opened",
+        "repository": {"name": "jarvis", "owner": {"login": "justin"}},
+        "pull_request": {"number": 14, "base": {"ref": "dev"}},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+    headers = {
+        "Content-Type": "application/json",
+        "X-GitHub-Event": "pull_request",
+        "X-GitHub-Delivery": "delivery-replay",
+        "X-Hub-Signature-256": f"sha256={sig}",
+    }
+    first = client.post("/api/v1/webhooks/github", content=body, headers=headers)
+    second = client.post("/api/v1/webhooks/github", content=body, headers=headers)
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["detail"] == "replay detected"
+
+
+def test_github_webhook_accepts_distinct_delivery_ids() -> None:
+    os.environ["GITHUB_WEBHOOK_SECRET"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    payload = {
+        "action": "opened",
+        "repository": {"name": "jarvis", "owner": {"login": "justin"}},
+        "pull_request": {"number": 15, "base": {"ref": "dev"}},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+    response_a = client.post(
+        "/api/v1/webhooks/github",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-unique-a",
+            "X-Hub-Signature-256": f"sha256={sig}",
+        },
+    )
+    response_b = client.post(
+        "/api/v1/webhooks/github",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-unique-b",
+            "X-Hub-Signature-256": f"sha256={sig}",
+        },
+    )
+    assert response_a.status_code == 200
+    assert response_b.status_code == 200
 
 
 def test_github_webhook_enqueues_summary_task(monkeypatch) -> None:
@@ -420,7 +521,7 @@ def test_github_webhook_enqueues_summary_task(monkeypatch) -> None:
 
     monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
 
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "opened",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -434,6 +535,7 @@ def test_github_webhook_enqueues_summary_task(monkeypatch) -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-enqueue-summary",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )
@@ -456,7 +558,7 @@ def test_github_webhook_degraded_on_enqueue_error(monkeypatch) -> None:
 
     monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
 
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "opened",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -470,6 +572,7 @@ def test_github_webhook_degraded_on_enqueue_error(monkeypatch) -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-degraded-summary",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )
@@ -489,7 +592,7 @@ def test_github_issue_comment_chat_trigger_enqueues_task(monkeypatch) -> None:
         return True
 
     monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "created",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -507,6 +610,7 @@ def test_github_issue_comment_chat_trigger_enqueues_task(monkeypatch) -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-issue-comment-review",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )
@@ -532,7 +636,7 @@ def test_github_issue_comment_mention_uses_chat_mode(monkeypatch) -> None:
         return True
 
     monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "created",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -550,6 +654,7 @@ def test_github_issue_comment_mention_uses_chat_mode(monkeypatch) -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-issue-comment-chat",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )
@@ -570,7 +675,7 @@ def test_github_issue_comment_help_enqueues_help_mode(monkeypatch) -> None:
         return True
 
     monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "created",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -588,6 +693,7 @@ def test_github_issue_comment_help_enqueues_help_mode(monkeypatch) -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-issue-comment-help",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )
@@ -601,7 +707,7 @@ def test_github_issue_comment_without_trigger_is_ignored() -> None:
     os.environ["GITHUB_WEBHOOK_SECRET"] = "secret"
     os.environ["GITHUB_BOT_LOGIN"] = "jarvis"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "created",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -619,6 +725,7 @@ def test_github_issue_comment_without_trigger_is_ignored() -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-issue-comment-ignored",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )

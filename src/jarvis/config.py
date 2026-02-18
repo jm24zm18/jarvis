@@ -183,6 +183,10 @@ class Settings(BaseSettings):
     maintenance_workdir: str = Field(alias="MAINTENANCE_WORKDIR", default="")
     github_token: str = Field(alias="GITHUB_TOKEN", default="")
     github_webhook_secret: str = Field(alias="GITHUB_WEBHOOK_SECRET", default="")
+    webhook_replay_window_minutes: int = Field(
+        alias="WEBHOOK_REPLAY_WINDOW_MINUTES",
+        default=15,
+    )
     github_api_base_url: str = Field(alias="GITHUB_API_BASE_URL", default="https://api.github.com")
     github_repo_allowlist: str = Field(alias="GITHUB_REPO_ALLOWLIST", default="")
     github_bot_login: str = Field(alias="GITHUB_BOT_LOGIN", default="jarvis")

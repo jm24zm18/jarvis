@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import click
 from click.testing import CliRunner
 
 from jarvis.cli.main import cli
@@ -30,6 +31,7 @@ def test_ask_json_output(monkeypatch) -> None:
     result = runner.invoke(cli, ["ask", "hi", "--user-id", "cli:test", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.output.strip())
+    assert payload["ok"] is True
     assert payload["assistant"] == "hello from main"
     assert str(payload["thread_id"]).startswith("thr_")
 
@@ -71,3 +73,18 @@ def test_chat_interactive_loop(monkeypatch) -> None:
     result = runner.invoke(cli, ["chat", "--user-id", "cli:test"], input="hello\n/quit\n")
     assert result.exit_code == 0
     assert "assistant > hello from main" in result.output
+
+
+def test_ask_json_fail_fast_payload(monkeypatch) -> None:
+    def _raise_send_and_wait(**_kwargs: object) -> object:
+        raise click.ClickException("ConnectError: temporary failure in name resolution")
+
+    monkeypatch.setattr("jarvis.cli.main.send_and_wait", _raise_send_and_wait)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ask", "hi", "--user-id", "cli:test", "--json"])
+    assert result.exit_code != 0
+    payload = json.loads(result.output.strip())
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "agent_unavailable"
+    assert "ConnectError" in payload["error"]["message"]
+    assert "Traceback" not in payload["error"]["message"]

@@ -98,6 +98,7 @@ uv run jarvis skill list
 - Do not commit real credentials into docs or `.env.example`.
 - Keep `AGENTS.md` and `CLAUDE.md` operationally consistent.
 - Documentation updates are mandatory: any behavior, API, schema, config, tooling, or operational workflow change MUST update corresponding docs in the same PR before handoff.
+- Always update `docs/PLAN.md` with any missing tasks discovered during work and any remaining tasks before handoff.
 - Git flow policy:
   - Agent changes must be done on a dedicated work branch.
   - Agent PRs target `dev` (never `master` directly).

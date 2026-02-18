@@ -29,6 +29,7 @@ make api
 
 ## Web UI
 
+- One-time dependency bootstrap: `make web-install`
 - Dev server: `make web-dev` (Vite, default `http://localhost:5173`)
 - Build static assets: `make web-build`
 - Built assets in `web/dist` are served by FastAPI when present.

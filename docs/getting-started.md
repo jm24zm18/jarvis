@@ -59,10 +59,13 @@ uv run jarvis chat
 ## 5. Optional Web UI
 
 ```bash
+make web-install
 make web-dev
 ```
 
 Open `http://localhost:5173`.
+Run `make web-install` once before the first `make web-dev`, `make web-build`,
+`make web-typecheck`, or `make web-lint`.
 
 ## 6. Optional GitHub Integration
 

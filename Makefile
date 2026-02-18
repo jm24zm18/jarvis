@@ -1,9 +1,13 @@
 .PHONY: dev api test test-gates lint typecheck migrate setup doctor \
        web-install web-build web-dev web-lint web-typecheck web-test \
-       hooks validate-agents test-migrations security docs-generate docs-check
+       hooks validate-agents test-migrations security docs-generate docs-check \
+       preflight-dev-ports
 
-dev:
+dev: preflight-dev-ports
 	docker compose up -d
+
+preflight-dev-ports:
+	python3 scripts/dev_preflight_ports.py
 
 api:
 	uv run uvicorn jarvis.main:app --reload --app-dir src

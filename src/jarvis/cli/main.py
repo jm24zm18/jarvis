@@ -9,7 +9,13 @@ from pathlib import Path
 
 import click
 
-from jarvis.cli.chat import default_cli_user, format_reply, resolve_thread, send_and_wait
+from jarvis.cli.chat import (
+    default_cli_user,
+    format_json_error,
+    format_reply,
+    resolve_thread,
+    send_and_wait,
+)
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.memory.skills import SkillsService
@@ -87,13 +93,24 @@ def ask(
     if poll_interval_s <= 0:
         raise click.ClickException("--poll-interval-s must be > 0")
     target_thread = resolve_thread(user_id, thread_id=thread_id, new_thread=new_thread)
-    reply = send_and_wait(
-        thread_id=target_thread,
-        message=message,
-        enqueue=enqueue,
-        timeout_s=timeout_s,
-        poll_interval_s=poll_interval_s,
-    )
+    try:
+        reply = send_and_wait(
+            thread_id=target_thread,
+            message=message,
+            enqueue=enqueue,
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
+        )
+    except click.ClickException as exc:
+        if not json_output:
+            raise
+        click.echo(format_json_error(target_thread, "agent_unavailable", str(exc)))
+        raise click.exceptions.Exit(1) from exc
+    except Exception as exc:
+        if not json_output:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(format_json_error(target_thread, "agent_unavailable", str(exc)))
+        raise click.exceptions.Exit(1) from exc
     click.echo(format_reply(reply, json_output=json_output))
 
 

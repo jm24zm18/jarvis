@@ -19,6 +19,7 @@ from jarvis.agents.types import AgentBundle
 from jarvis.commands.service import maybe_execute_command
 from jarvis.config import get_settings
 from jarvis.db.queries import get_system_state, insert_message
+from jarvis.errors import ProviderError
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
@@ -159,6 +160,21 @@ def _extract_primary_failure_fields(primary_error: str) -> dict[str, object]:
         kind = "model_not_found"
     elif "invalid argument" in lower:
         kind = "invalid_argument"
+    elif (
+        "temporary failure in name resolution" in lower
+        or "name or service not known" in lower
+        or "nodename nor servname provided" in lower
+        or "getaddrinfo failed" in lower
+    ):
+        kind = "dns_resolution"
+    elif (
+        "connecterror" in lower
+        or "connection refused" in lower
+        or "failed to establish a new connection" in lower
+        or "connection reset" in lower
+        or "network is unreachable" in lower
+    ):
+        kind = "transport_unavailable"
 
     status_code: int | None = None
     status_match = re.search(r"\b([1-5]\d{2})\b", text)
@@ -528,8 +544,37 @@ async def run_agent_step(
                     payload_redacted_json=json.dumps(redact_payload(extraction_payload)),
                 ),
             )
-        except Exception:
-            logger.exception("Structured state extraction failed for thread %s", thread_id)
+        except Exception as exc:
+            extraction_failure_payload = {
+                "thread_id": thread_id,
+                "actor_id": actor_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            extraction_failure_payload.update(
+                _extract_primary_failure_fields(extraction_failure_payload["error"])
+            )
+            logger.warning(
+                "Structured state extraction failed thread=%s error=%s",
+                thread_id,
+                extraction_failure_payload["error"],
+            )
+            if notify_fn is not None:
+                notify_fn("state.extraction.failed", extraction_failure_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="state.extraction.failed",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(extraction_failure_payload),
+                    payload_redacted_json=json.dumps(redact_payload(extraction_failure_payload)),
+                ),
+            )
     active_state_items = state_store.get_active_items(
         conn, thread_id, limit=max(1, int(settings.state_max_active_items))
     )
@@ -698,11 +743,38 @@ async def run_agent_step(
                 ),
             ),
         )
-        model_resp, lane, primary_error = await router.generate(
-            convo,
-            tools=tool_schemas,
-            priority="normal" if actor_id == "main" else "low",
-        )
+        try:
+            model_resp, lane, primary_error = await router.generate(
+                convo,
+                tools=tool_schemas,
+                priority="normal" if actor_id == "main" else "low",
+            )
+        except ProviderError as exc:
+            run_error_payload: dict[str, object] = {
+                "iteration": step_idx,
+                "error": str(exc),
+            }
+            run_error_payload.update(_extract_primary_failure_fields(str(exc)))
+            if notify_fn is not None:
+                notify_fn("model.run.error", run_error_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="model.run.error",
+                    component="orchestrator",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(run_error_payload),
+                    payload_redacted_json=json.dumps(redact_payload(run_error_payload)),
+                ),
+            )
+            final_text = DEGRADED_RESPONSE
+            lane = "degraded"
+            break
         run_end_payload: dict[str, object] = {"iteration": step_idx, "lane": lane}
         if primary_error:
             run_end_payload["primary_error"] = primary_error[:500]
@@ -976,11 +1048,39 @@ async def run_agent_step(
                     payload_redacted_json=json.dumps(redact_payload(start_payload)),
                 ),
             )
-            retry_resp, retry_lane, retry_primary_error = await router.generate(
-                convo,
-                tools=None,
-                priority="normal" if actor_id == "main" else "low",
-            )
+            try:
+                retry_resp, retry_lane, retry_primary_error = await router.generate(
+                    convo,
+                    tools=None,
+                    priority="normal" if actor_id == "main" else "low",
+                )
+            except ProviderError as exc:
+                retry_error_payload: dict[str, object] = {
+                    "iteration": synthetic_iteration,
+                    "fallback_only": True,
+                    "error": str(exc),
+                }
+                retry_error_payload.update(_extract_primary_failure_fields(str(exc)))
+                if notify_fn is not None:
+                    notify_fn("model.run.error", retry_error_payload)
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id,
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="model.run.error",
+                        component="orchestrator",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(retry_error_payload),
+                        payload_redacted_json=json.dumps(redact_payload(retry_error_payload)),
+                    ),
+                )
+                final_text = DEGRADED_RESPONSE
+                lane = "degraded"
+                break
             run_end_payload = {
                 "iteration": synthetic_iteration,
                 "lane": retry_lane,

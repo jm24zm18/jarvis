@@ -65,6 +65,19 @@
 3. Non-admin users are ownership-scoped to their own resources.
 4. Validate boundaries: `uv run pytest tests/integration/test_authorization.py -v`.
 
+## Secret Rotation and Scan
+
+1. Rotate compromised or leaked local credentials at the provider:
+   - Google OAuth client secret / refresh token
+   - GitHub token / webhook secret
+   - Any third-party API key in `.env`
+2. Update local `.env` and token cache files with new values.
+3. Run local verification scans:
+   - `gitleaks detect --source . --no-git --redact`
+   - `trufflehog filesystem . --only-verified`
+4. Confirm no findings and restart API/web services.
+5. Re-run critical auth checks (`/api/v1/auth/login`, `/api/v1/auth/me`, WebSocket `/ws`).
+
 ## Scheduler Check
 
 1. Insert schedule with `cron_expr='@every:60'`.

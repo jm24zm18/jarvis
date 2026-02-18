@@ -182,6 +182,12 @@
     },
     {
       "recipe": [
+        "python3 scripts/dev_preflight_ports.py"
+      ],
+      "target": "preflight-dev-ports"
+    },
+    {
+      "recipe": [
         "uv run bandit -r src/jarvis -c pyproject.toml -ll",
         "uv run pip-audit"
       ],
@@ -272,7 +278,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-18T05:13:25.930261+00:00",
+  "generated_at": "2026-02-18T06:12:14.674475+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -464,6 +470,10 @@
     {
       "file": "src/jarvis/db/migrations/050_memory_consistency_reports.sql",
       "number": 50
+    },
+    {
+      "file": "src/jarvis/db/migrations/051_webhook_replay_guard.sql",
+      "number": 51
     }
   ],
   "protected_modules": [

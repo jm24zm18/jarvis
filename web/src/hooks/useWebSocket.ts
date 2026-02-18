@@ -12,10 +12,10 @@ export function useWebSocket(onEvent: (payload: Record<string, unknown>) => void
   onEventRef.current = onEvent;
   const backoffRef = useRef(1000);
   const reconnectTimerRef = useRef<number | null>(null);
-  const token = useAuthStore((s) => s.token);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   useEffect(() => {
-    if (!token) {
+    if (!isAuthenticated) {
       socketRef.current?.close();
       socketRef.current = null;
       queueRef.current = [];
@@ -27,7 +27,7 @@ export function useWebSocket(onEvent: (payload: Record<string, unknown>) => void
     function connect() {
       if (disposed) return;
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${proto}://${window.location.host}/ws?token=${encodeURIComponent(token)}`);
+      const ws = new WebSocket(`${proto}://${window.location.host}/ws`);
       socketRef.current = ws;
 
       ws.onopen = () => {
@@ -85,7 +85,7 @@ export function useWebSocket(onEvent: (payload: Record<string, unknown>) => void
       socketRef.current = null;
       queueRef.current = [];
     };
-  }, [token]);
+  }, [isAuthenticated]);
 
   const sendOrQueue = useCallback((payload: string) => {
     const ws = socketRef.current;

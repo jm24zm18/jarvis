@@ -103,6 +103,7 @@ deploy/                # systemd + healthcheck/rollback/restore scripts
 - Run at least `make lint`, `make typecheck`, and focused tests before finalizing.
 - Run docs drift checks (`make docs-generate`, `make docs-check`) when changing docs or public interfaces.
 - Documentation updates are mandatory: any behavior, API, schema, config, tooling, or operational workflow change MUST update corresponding docs in the same PR before handoff.
+- Always update `docs/PLAN.md` with any missing tasks discovered during work and any remaining tasks before handoff.
 - Keep `AGENTS.md` and this file aligned on operational facts.
 - Git flow policy:
   - Use a dedicated branch for implementation work.

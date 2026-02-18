@@ -12,6 +12,7 @@ from jarvis.db.queries import (
     ensure_user,
     insert_message,
 )
+from jarvis.errors import ProviderError
 from jarvis.memory.skills import SkillsService
 from jarvis.orchestrator.step import (
     DEGRADED_RESPONSE,
@@ -73,6 +74,23 @@ class _SequenceRouter:
         self.calls += 1
         response, lane = self._responses[idx]
         return response, lane, None
+
+
+class _FailingProviderRouter:
+    async def generate(
+        self,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, object]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        priority: str = "normal",
+    ) -> tuple[ModelResponse, str, str | None]:
+        del messages, tools, temperature, max_tokens, priority
+        raise ProviderError(
+            "all providers failed: primary=ConnectError: temporary failure in name resolution, "
+            "fallback=ConnectError: [Errno -2] Name or service not known",
+            retryable=False,
+        )
 
 
 def test_run_agent_step_model_path_with_tool_loop(monkeypatch) -> None:
@@ -494,6 +512,50 @@ def test_extract_primary_failure_fields_parses_retry_and_request_id() -> None:
     assert payload["primary_status_code"] == 429
     assert payload["primary_retry_seconds"] == 2
     assert payload["primary_request_id"] == "req_abc123"
+
+
+def test_extract_primary_failure_fields_classifies_dns_and_transport() -> None:
+    dns_payload = _extract_primary_failure_fields(
+        "ConnectError: temporary failure in name resolution"
+    )
+    transport_payload = _extract_primary_failure_fields(
+        "ConnectError: failed to establish a new connection: connection refused"
+    )
+    assert dns_payload["primary_failure_kind"] == "dns_resolution"
+    assert transport_payload["primary_failure_kind"] == "transport_unavailable"
+
+
+def test_run_agent_step_provider_failure_writes_degraded_message_and_error_event(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    runtime = _FakeRuntime()
+    router = _FailingProviderRouter()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550135")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "hello")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_12")
+        )
+        message_row = conn.execute(
+            "SELECT content FROM messages WHERE id=?",
+            (message_id,),
+        ).fetchone()
+        event_row = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='model.run.error' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_step_12",),
+        ).fetchone()
+    assert message_row is not None
+    assert message_row["content"] == DEGRADED_RESPONSE
+    assert event_row is not None
+    payload = json.loads(str(event_row["payload_json"]))
+    assert payload["primary_failure_kind"] == "dns_resolution"
 
 
 def test_load_agent_context_falls_back_to_files(monkeypatch, tmp_path) -> None:
