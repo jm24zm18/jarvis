@@ -25,6 +25,8 @@ make migrate
 
 Expected: Python 3.12 and successful migration run.
 `make setup-smoke` should pass for a deterministic API + web bootstrap baseline.
+If dependency services are already running and occupying `11434`/`30000`/`8080`,
+use `make setup-smoke-running` to skip the dev-port preflight step.
 
 ## 2. Start Dependencies
 

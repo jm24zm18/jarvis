@@ -49,7 +49,8 @@ def send_channel_message(
     """Generic outbound task — dispatches through the channel registry."""
     adapter = get_channel(channel_type)
     if adapter is None:
-        logger.warning("No adapter registered for channel_type=%s", channel_type)
+        if channel_type != "cli":
+            logger.warning("No adapter registered for channel_type=%s", channel_type)
         return {"thread_id": thread_id, "message_id": message_id, "status": "skipped"}
 
     trace_id = new_id("trc")

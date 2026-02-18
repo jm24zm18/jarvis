@@ -247,8 +247,8 @@ def run_memory_maintenance() -> dict[str, object]:
             (
                 "INSERT INTO state_reconciliation_runs("
                 "id, scope, stale_before, updated_count, superseded_count, deduped_count, "
-                "pruned_count, detail_json, created_at"
-                ") VALUES(?,?,?,?,?,?,?,?,?)"
+                "pruned_count, tokens_saved, detail_json, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?)"
             ),
             (
                 new_id("rec"),
@@ -258,6 +258,7 @@ def run_memory_maintenance() -> dict[str, object]:
                 0,
                 summary["deduped_memory_items"],
                 summary["pruned_memory_items"] + summary["pruned_state_items"],
+                0.0,
                 "{}",
                 now_iso(),
             ),

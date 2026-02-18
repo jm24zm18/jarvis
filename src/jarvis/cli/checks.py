@@ -278,7 +278,7 @@ def _classify_http_error(exc: Exception, base_url: str) -> tuple[str, str]:
     text = str(exc).lower()
     service_hint = f"Ensure the service is running and reachable at {base_url}."
 
-    if isinstance(exc, (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout)):
+    if isinstance(exc, httpx.ConnectTimeout | httpx.ReadTimeout | httpx.WriteTimeout):
         return (
             "timeout",
             f"Connection timed out. {service_hint} Check firewall/proxy/sandbox egress and retry.",
@@ -317,7 +317,10 @@ def _classify_http_error(exc: Exception, base_url: str) -> tuple[str, str]:
     if isinstance(exc, httpx.NetworkError):
         return (
             "network_error",
-            f"Network error while contacting {base_url}. Check sandbox/network/proxy configuration.",
+            (
+                f"Network error while contacting {base_url}. "
+                "Check sandbox/network/proxy configuration."
+            ),
         )
 
     return ("unknown_error", f"Unexpected error. {service_hint}")

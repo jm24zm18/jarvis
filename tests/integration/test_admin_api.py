@@ -231,3 +231,66 @@ def test_admin_endpoints_basic_coverage(tmp_path: Path) -> None:
         client.post("/api/v1/channels/whatsapp/disconnect", headers=headers, json={}).status_code
         == 200
     )
+
+
+def test_whatsapp_status_reports_callback_health(monkeypatch) -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = TestClient(app)
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    class _FakeEvolutionClient:
+        enabled = True
+        instance = "personal"
+        webhook_enabled = True
+        webhook_url = "http://localhost:8000/webhooks/whatsapp"
+        webhook_by_events = True
+        webhook_events = ["messages.upsert"]
+
+        async def status(self) -> tuple[int, dict[str, object]]:
+            return 200, {"state": "open"}
+
+        async def configure_webhook(self) -> tuple[int, dict[str, object]]:
+            return 200, {"configured": True}
+
+    monkeypatch.setattr("jarvis.routes.api.channels.EvolutionClient", _FakeEvolutionClient)
+
+    response = client.get("/api/v1/channels/whatsapp/status", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["callback"]["enabled"] is True
+    assert payload["callback"]["configured"] is True
+    assert payload["callback"]["events"] == ["messages.upsert"]
+
+
+def test_whatsapp_create_includes_callback_result(monkeypatch) -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = TestClient(app)
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    class _FakeEvolutionClient:
+        enabled = True
+        instance = "personal"
+        webhook_enabled = True
+        webhook_url = "http://localhost:8000/webhooks/whatsapp"
+        webhook_by_events = True
+        webhook_events = ["messages.upsert"]
+
+        async def create_instance(self) -> tuple[int, dict[str, object]]:
+            return 201, {"state": "created"}
+
+        async def configure_webhook(self) -> tuple[int, dict[str, object]]:
+            return 200, {"configured": True}
+
+    monkeypatch.setattr("jarvis.routes.api.channels.EvolutionClient", _FakeEvolutionClient)
+
+    response = client.post("/api/v1/channels/whatsapp/create", headers=headers, json={})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["callback"]["enabled"] is True
+    assert payload["callback"]["configured"] is True

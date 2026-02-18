@@ -204,12 +204,12 @@ async def maybe_execute_command(
         checks = list_selfupdate_checks(conn, trace_id)
         transitions = list_selfupdate_transitions(conn, trace_id)
         patch_base = Path(get_settings().selfupdate_patch_dir)
-        state: dict[str, object] = {}
+        trace_state: dict[str, str] = {}
         artifact: dict[str, object] = {}
         try:
-            state = read_state(trace_id, patch_base)
+            trace_state = read_state(trace_id, patch_base)
         except Exception:
-            state = {}
+            trace_state = {}
         try:
             artifact = read_artifact(trace_id, patch_base)
         except Exception:
@@ -225,7 +225,7 @@ async def maybe_execute_command(
                 "events": [dict(r) for r in event_rows],
                 "checks": checks,
                 "transitions": transitions,
-                "state": state,
+                "state": trace_state,
                 "artifact": artifact,
             }
         )
@@ -353,8 +353,8 @@ async def maybe_execute_command(
     if command == "/restart":
         if not _is_admin(admin_ids, actor_external_id):
             return "admin required"
-        state = get_system_state(conn)
-        if state["lockdown"] == 1:
+        system_state = get_system_state(conn)
+        if system_state["lockdown"] == 1:
             return "restart blocked during lockdown"
         conn.execute(
             "UPDATE system_state SET restarting=1, updated_at=datetime('now') WHERE id='singleton'"

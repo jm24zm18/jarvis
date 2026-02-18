@@ -53,10 +53,10 @@ def test_metrics_include_memory_kpis() -> None:
             (
                 "INSERT INTO state_reconciliation_runs("
                 "id, scope, stale_before, updated_count, superseded_count, deduped_count, "
-                "pruned_count, detail_json, created_at"
-                ") VALUES(?,?,?,?,?,?,?,?,?)"
+                "pruned_count, tokens_saved, detail_json, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?)"
             ),
-            ("rec_metrics_1", "global", now, 1, 0, 0, 0, '{"tokens_saved": 42}', now),
+            ("rec_metrics_1", "global", now, 1, 0, 0, 0, 42.0, "{}", now),
         )
         conn.execute(
             (

@@ -545,13 +545,13 @@ async def run_agent_step(
                 ),
             )
         except Exception as exc:
-            extraction_failure_payload = {
+            extraction_failure_payload: dict[str, object] = {
                 "thread_id": thread_id,
                 "actor_id": actor_id,
                 "error": f"{type(exc).__name__}: {exc}",
             }
             extraction_failure_payload.update(
-                _extract_primary_failure_fields(extraction_failure_payload["error"])
+                _extract_primary_failure_fields(str(extraction_failure_payload["error"]))
             )
             logger.warning(
                 "Structured state extraction failed thread=%s error=%s",

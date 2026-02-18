@@ -45,6 +45,7 @@ _PLACEHOLDER_VALUES = {
     "your-client-secret",
 }
 _ALLOWED_PRIMARY_PROVIDERS = {"gemini", "sglang"}
+_MAX_EXTERNAL_ID_LENGTH = 256
 _GEMINI_CLI_MODEL_FILE_CANDIDATES = (
     "node_modules/@google/gemini-cli-core/dist/src/config/models.js",
     "node_modules/@google/gemini-cli-core/dist/config/models.js",
@@ -233,6 +234,11 @@ def login(payload: dict[str, str], request: Request, response: Response) -> dict
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
     external_id = str(payload.get("external_id", "web_admin")).strip() or "web_admin"
+    if len(external_id) > _MAX_EXTERNAL_ID_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"external_id must be at most {_MAX_EXTERNAL_ID_LENGTH} characters",
+        )
     with get_conn() as conn:
         user_id = ensure_user(conn, external_id)
         admin_count_row = conn.execute(

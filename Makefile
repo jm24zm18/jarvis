@@ -1,7 +1,7 @@
 .PHONY: dev api test test-gates lint typecheck migrate setup doctor \
        web-install web-build web-dev web-lint web-typecheck web-test \
-       hooks validate-agents test-migrations security docs-generate docs-check \
-       preflight-dev-ports setup-smoke
+       hooks validate-agents test-migrations security secret-scan docs-generate docs-check \
+       preflight-dev-ports setup-smoke setup-smoke-running
 
 dev: preflight-dev-ports
 	docker compose up -d
@@ -53,6 +53,10 @@ security:
 	uv run bandit -r src/jarvis -c pyproject.toml -ll
 	uv run pip-audit
 
+secret-scan:
+	@if [ -x /tmp/sec-tools/bin/gitleaks ]; then /tmp/sec-tools/bin/gitleaks detect --source . --no-git --redact; else gitleaks detect --source . --no-git --redact; fi
+	@if [ -x /tmp/sec-tools/bin/trufflehog ]; then /tmp/sec-tools/bin/trufflehog filesystem . --only-verified; else trufflehog filesystem . --only-verified; fi
+
 web-install:
 	python3 scripts/web_install.py
 
@@ -79,3 +83,6 @@ docs-check:
 
 setup-smoke:
 	python3 scripts/new_user_smoke.py
+
+setup-smoke-running:
+	python3 scripts/new_user_smoke.py --skip-dev-preflight

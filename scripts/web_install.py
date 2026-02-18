@@ -52,6 +52,14 @@ def _classify_failure(output: str) -> tuple[str, list[str]]:
                 "Increase npm timeouts: npm config set fetch-retries 5 && npm config set fetch-timeout 120000",
             ],
         )
+    if "connect eperm" in text or ("errno eperm" in text and "syscall connect" in text):
+        return (
+            "network_blocked_or_sandboxed",
+            [
+                "Retry in a non-restricted shell with outbound network access.",
+                "Verify local firewall/sandbox settings allow npm registry traffic.",
+            ],
+        )
     if "eacces" in text or "permission denied" in text:
         return (
             "filesystem_permission",
@@ -94,7 +102,7 @@ def _classify_failure(output: str) -> tuple[str, list[str]]:
 
 
 def _extract_npm_debug_log(output: str) -> str | None:
-    match = re.search(r"(/[^\\s]*-debug-0\\.log)", output)
+    match = re.search(r"(/\S*-debug-0\.log)", output)
     if match:
         return match.group(1)
     return None

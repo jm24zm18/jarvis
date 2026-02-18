@@ -10,6 +10,7 @@ Human-oriented guide for common API workflows. For complete endpoint inventory, 
 
 Web UI uses an HTTP-only `jarvis_session` cookie for authenticated requests.
 Bearer headers remain supported for compatibility and CLI/test flows.
+`external_id` in login payload is bounded to 256 characters; oversized values are rejected.
 
 ## Thread and Message Flow
 

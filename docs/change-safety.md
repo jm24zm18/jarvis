@@ -46,6 +46,8 @@ curl -s http://127.0.0.1:8000/readyz
 
 - If auth/ownership logic changes, add integration tests for both `user` and `admin` paths.
 - If migration changes behavior, document expected compatibility in `docs/architecture.md`.
+- For auth identity inputs, enforce limits at both API and DB layers (request validation +
+  migration-level guards) to prevent bypass paths.
 
 ## Related Docs
 

@@ -77,10 +77,17 @@ class WhatsAppAdapter:
         event = str(payload.get("event") or "")
         if event != "messages.upsert":
             return []
-        data = payload.get("data", {})
-        if not isinstance(data, dict):
-            return []
+        records = self._evolution_records(payload.get("data"))
+        messages: list[InboundMessage] = []
+        for data in records:
+            parsed = self._parse_evolution_record(payload, data)
+            if parsed is not None:
+                messages.append(parsed)
+        return messages
 
+    def _parse_evolution_record(
+        self, payload: dict[str, Any], data: dict[str, Any]
+    ) -> InboundMessage | None:
         key = data.get("key", {}) if isinstance(data.get("key"), dict) else {}
         message = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
         msg_id = str(key.get("id") or data.get("id") or "")
@@ -89,7 +96,7 @@ class WhatsAppAdapter:
         sender = participant or remote_jid or "unknown"
         thread_key = remote_jid or sender
         if not msg_id:
-            return []
+            return None
 
         mentions = self._extract_mentions(message)
         group_context = {
@@ -100,54 +107,48 @@ class WhatsAppAdapter:
 
         if "conversation" in message:
             text = str(message.get("conversation") or "")
-            return [
-                InboundMessage(
-                    external_msg_id=msg_id,
-                    sender_id=sender,
-                    text=text,
-                    message_type="text",
-                    mentions=mentions,
-                    group_context=group_context,
-                    thread_key=thread_key,
-                    raw=payload,
-                )
-            ]
+            return InboundMessage(
+                external_msg_id=msg_id,
+                sender_id=sender,
+                text=text,
+                message_type="text",
+                mentions=mentions,
+                group_context=group_context,
+                thread_key=thread_key,
+                raw=payload,
+            )
 
         extended = message.get("extendedTextMessage")
         if isinstance(extended, dict):
             text = str(extended.get("text") or "")
-            return [
-                InboundMessage(
-                    external_msg_id=msg_id,
-                    sender_id=sender,
-                    text=text,
-                    message_type="text",
-                    mentions=mentions,
-                    group_context=group_context,
-                    thread_key=thread_key,
-                    raw=payload,
-                )
-            ]
+            return InboundMessage(
+                external_msg_id=msg_id,
+                sender_id=sender,
+                text=text,
+                message_type="text",
+                mentions=mentions,
+                group_context=group_context,
+                thread_key=thread_key,
+                raw=payload,
+            )
 
         reaction = message.get("reactionMessage")
         if isinstance(reaction, dict):
             reaction_text = str(reaction.get("text") or "")
-            return [
-                InboundMessage(
-                    external_msg_id=msg_id,
-                    sender_id=sender,
-                    text="",
-                    message_type="reaction",
-                    reaction={
-                        "emoji": reaction_text,
-                        "key": reaction.get("key") if isinstance(reaction.get("key"), dict) else {},
-                    },
-                    mentions=mentions,
-                    group_context=group_context,
-                    thread_key=thread_key,
-                    raw=payload,
-                )
-            ]
+            return InboundMessage(
+                external_msg_id=msg_id,
+                sender_id=sender,
+                text="",
+                message_type="reaction",
+                reaction={
+                    "emoji": reaction_text,
+                    "key": reaction.get("key") if isinstance(reaction.get("key"), dict) else {},
+                },
+                mentions=mentions,
+                group_context=group_context,
+                thread_key=thread_key,
+                raw=payload,
+            )
 
         media_candidates: list[tuple[str, str]] = [
             ("audioMessage", "audio"),
@@ -162,38 +163,45 @@ class WhatsAppAdapter:
                 continue
             caption = str(media_node.get("caption") or "")
             media_url = str(media_node.get("url") or "")
-            return [
-                InboundMessage(
-                    external_msg_id=msg_id,
-                    sender_id=sender,
-                    text=caption,
-                    media_url=media_url or None,
-                    message_type=media_type,
-                    media={
-                        "type": media_type,
-                        "url": media_url,
-                        "mime_type": str(media_node.get("mimetype") or ""),
-                        "seconds": media_node.get("seconds"),
-                    },
-                    mentions=mentions,
-                    group_context=group_context,
-                    thread_key=thread_key,
-                    raw=payload,
-                )
-            ]
-
-        return [
-            InboundMessage(
+            return InboundMessage(
                 external_msg_id=msg_id,
                 sender_id=sender,
-                text="",
-                message_type="unknown",
+                text=caption,
+                media_url=media_url or None,
+                message_type=media_type,
+                media={
+                    "type": media_type,
+                    "url": media_url,
+                    "mime_type": str(media_node.get("mimetype") or ""),
+                    "seconds": media_node.get("seconds"),
+                },
                 mentions=mentions,
                 group_context=group_context,
                 thread_key=thread_key,
                 raw=payload,
             )
-        ]
+
+        return InboundMessage(
+            external_msg_id=msg_id,
+            sender_id=sender,
+            text="",
+            message_type="unknown",
+            mentions=mentions,
+            group_context=group_context,
+            thread_key=thread_key,
+            raw=payload,
+        )
+
+    @staticmethod
+    def _evolution_records(data: object) -> list[dict[str, Any]]:
+        if isinstance(data, dict):
+            records = data.get("messages")
+            if isinstance(records, list):
+                return [item for item in records if isinstance(item, dict)]
+            return [data]
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        return []
 
     @staticmethod
     def _extract_mentions(message: dict[str, Any]) -> list[str]:

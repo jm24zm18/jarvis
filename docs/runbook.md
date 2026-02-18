@@ -104,8 +104,7 @@
    - Any third-party API key in `.env`
 2. Update local `.env` and token cache files with new values.
 3. Run local verification scans:
-   - `gitleaks detect --source . --no-git --redact`
-   - `trufflehog filesystem . --only-verified`
+   - `make secret-scan`
 4. Confirm no findings and restart API/web services.
 5. Re-run critical auth checks (`/api/v1/auth/login`, `/api/v1/auth/me`, WebSocket `/ws`).
 
@@ -126,7 +125,9 @@
    - DB migrations
    - API import/bootstrap sanity
    - web dependency bootstrap
-3. If it fails, fix the failing step and rerun until it passes.
+3. If dependency ports are intentionally occupied by already-running local services,
+   run `make setup-smoke-running` (skips dev port preflight only).
+4. If it fails, fix the failing step and rerun until it passes.
 
 ## Self-Update Check
 

@@ -49,6 +49,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     evolution = EvolutionClient()
     if evolution.enabled and int(settings.whatsapp_auto_create_on_startup) == 1:
         status_code, payload = await evolution.create_instance()
+        callback_status_code: int | None = None
+        callback_payload: dict[str, object] = {}
+        callback_ok = False
+        callback_error = ""
+        if evolution.webhook_enabled:
+            callback_status_code, callback_payload = await evolution.configure_webhook()
+            callback_ok = callback_status_code < 400
+            if not callback_ok:
+                callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
         with get_conn() as conn:
             evo_state = str(
                 payload.get("instance", {}).get("state")
@@ -59,7 +68,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 conn,
                 instance=evolution.instance,
                 status=evo_state,
-                metadata={"status_code": status_code, **payload},
+                metadata={
+                    "status_code": status_code,
+                    "payload": payload,
+                    "callback_status_code": callback_status_code,
+                    "callback_payload": callback_payload,
+                },
+                callback_url=evolution.webhook_url,
+                callback_by_events=evolution.webhook_by_events,
+                callback_events=evolution.webhook_events,
+                callback_configured=callback_ok,
+                callback_last_error=callback_error,
             )
     if ensure_main_agent_seed(Path("agents")):
         logger.info("Seeded default main agent bundle files at startup")

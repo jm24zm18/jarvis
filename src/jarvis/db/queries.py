@@ -309,19 +309,84 @@ def upsert_whatsapp_instance(
     instance: str,
     status: str,
     metadata: dict[str, object] | None = None,
+    callback_url: str = "",
+    callback_by_events: bool = False,
+    callback_events: list[str] | None = None,
+    callback_configured: bool = False,
+    callback_last_error: str = "",
 ) -> None:
     now = now_iso()
+    callback_events_json = json.dumps(callback_events or [], sort_keys=True)
     conn.execute(
         (
             "INSERT INTO whatsapp_instances("
-            "instance, status, last_seen_at, metadata_json, created_at, updated_at"
-            ") VALUES(?,?,?,?,?,?) "
+            "instance, status, last_seen_at, metadata_json, "
+            "callback_url, callback_by_events, callback_events_json, "
+            "callback_configured, callback_last_error, created_at, updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(instance) DO UPDATE SET "
             "status=excluded.status, last_seen_at=excluded.last_seen_at, "
-            "metadata_json=excluded.metadata_json, updated_at=excluded.updated_at"
+            "metadata_json=excluded.metadata_json, "
+            "callback_url=excluded.callback_url, "
+            "callback_by_events=excluded.callback_by_events, "
+            "callback_events_json=excluded.callback_events_json, "
+            "callback_configured=excluded.callback_configured, "
+            "callback_last_error=excluded.callback_last_error, "
+            "updated_at=excluded.updated_at"
         ),
-        (instance, status, now, json.dumps(metadata or {}, sort_keys=True), now, now),
+        (
+            instance,
+            status,
+            now,
+            json.dumps(metadata or {}, sort_keys=True),
+            callback_url.strip(),
+            1 if callback_by_events else 0,
+            callback_events_json,
+            1 if callback_configured else 0,
+            callback_last_error[:400],
+            now,
+            now,
+        ),
     )
+
+
+def get_whatsapp_instance(conn: sqlite3.Connection, instance: str) -> dict[str, object] | None:
+    row = conn.execute(
+        (
+            "SELECT instance, status, last_seen_at, metadata_json, callback_url, "
+            "callback_by_events, callback_events_json, callback_configured, "
+            "callback_last_error, created_at, updated_at "
+            "FROM whatsapp_instances WHERE instance=? LIMIT 1"
+        ),
+        (instance,),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        metadata = json.loads(str(row["metadata_json"]))
+    except json.JSONDecodeError:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    try:
+        callback_events = json.loads(str(row["callback_events_json"]))
+    except json.JSONDecodeError:
+        callback_events = []
+    if not isinstance(callback_events, list):
+        callback_events = []
+    return {
+        "instance": str(row["instance"]),
+        "status": str(row["status"]),
+        "last_seen_at": str(row["last_seen_at"]) if row["last_seen_at"] is not None else "",
+        "metadata": metadata,
+        "callback_url": str(row["callback_url"]),
+        "callback_by_events": int(row["callback_by_events"]) == 1,
+        "callback_events": [str(item) for item in callback_events if isinstance(item, str)],
+        "callback_configured": int(row["callback_configured"]) == 1,
+        "callback_last_error": str(row["callback_last_error"]),
+        "created_at": str(row["created_at"]),
+        "updated_at": str(row["updated_at"]),
+    }
 
 
 def create_thread(conn: sqlite3.Connection, user_id: str, channel_id: str) -> str:
@@ -922,3 +987,134 @@ def update_remediation_confidence(
         "UPDATE failure_pattern_remediations SET confidence=? WHERE id=?",
         (confidence, remediation_id),
     )
+
+
+def get_evolution_item(conn: sqlite3.Connection, item_id: str) -> dict[str, object] | None:
+    row = conn.execute(
+        (
+            "SELECT id, trace_id, thread_id, status, evidence_refs_json, result_json, "
+            "updated_by, created_at, updated_at "
+            "FROM evolution_items WHERE id=? LIMIT 1"
+        ),
+        (item_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        evidence_refs = json.loads(str(row["evidence_refs_json"]))
+    except json.JSONDecodeError:
+        evidence_refs = []
+    if not isinstance(evidence_refs, list):
+        evidence_refs = []
+    try:
+        result = json.loads(str(row["result_json"]))
+    except json.JSONDecodeError:
+        result = {}
+    if not isinstance(result, dict):
+        result = {}
+    return {
+        "id": str(row["id"]),
+        "trace_id": str(row["trace_id"]),
+        "thread_id": str(row["thread_id"]) if row["thread_id"] is not None else "",
+        "status": str(row["status"]),
+        "evidence_refs": [str(item) for item in evidence_refs if isinstance(item, str)],
+        "result": result,
+        "updated_by": str(row["updated_by"]),
+        "created_at": str(row["created_at"]),
+        "updated_at": str(row["updated_at"]),
+    }
+
+
+def upsert_evolution_item(
+    conn: sqlite3.Connection,
+    *,
+    item_id: str,
+    trace_id: str,
+    thread_id: str | None,
+    status: str,
+    evidence_refs: list[str],
+    result: dict[str, object],
+    updated_by: str,
+) -> None:
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO evolution_items("
+            "id, trace_id, thread_id, status, evidence_refs_json, result_json, "
+            "updated_by, created_at, updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "trace_id=excluded.trace_id, thread_id=excluded.thread_id, status=excluded.status, "
+            "evidence_refs_json=excluded.evidence_refs_json, result_json=excluded.result_json, "
+            "updated_by=excluded.updated_by, updated_at=excluded.updated_at"
+        ),
+        (
+            item_id,
+            trace_id,
+            thread_id,
+            status,
+            json.dumps(evidence_refs, sort_keys=True),
+            json.dumps(result, sort_keys=True),
+            updated_by,
+            now,
+            now,
+        ),
+    )
+
+
+def list_evolution_items(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    trace_id: str | None = None,
+    thread_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    filters: list[str] = []
+    params: list[object] = []
+    if status:
+        filters.append("status=?")
+        params.append(status)
+    if trace_id:
+        filters.append("trace_id=?")
+        params.append(trace_id)
+    if thread_id:
+        filters.append("thread_id=?")
+        params.append(thread_id)
+    where = f"WHERE {' AND '.join(filters)}" if filters else ""
+    rows = conn.execute(
+        (
+            "SELECT id, trace_id, thread_id, status, evidence_refs_json, result_json, "
+            "updated_by, created_at, updated_at "
+            f"FROM evolution_items {where} ORDER BY updated_at DESC LIMIT ?"
+        ),
+        (*params, max(1, min(1000, int(limit)))),
+    ).fetchall()
+    items: list[dict[str, object]] = []
+    for row in rows:
+        try:
+            evidence_refs = json.loads(str(row["evidence_refs_json"]))
+        except json.JSONDecodeError:
+            evidence_refs = []
+        if not isinstance(evidence_refs, list):
+            evidence_refs = []
+        try:
+            result = json.loads(str(row["result_json"]))
+        except json.JSONDecodeError:
+            result = {}
+        if not isinstance(result, dict):
+            result = {}
+        items.append(
+            {
+                "id": str(row["id"]),
+                "trace_id": str(row["trace_id"]),
+                "thread_id": str(row["thread_id"]) if row["thread_id"] is not None else "",
+                "status": str(row["status"]),
+                "evidence_refs": [str(item) for item in evidence_refs if isinstance(item, str)],
+                "result": result,
+                "updated_by": str(row["updated_by"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+            }
+        )
+    return items

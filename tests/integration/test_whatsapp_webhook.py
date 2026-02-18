@@ -174,6 +174,7 @@ def test_inbound_rejects_invalid_secret(monkeypatch) -> None:
     client = TestClient(app)
     response = client.post("/webhooks/whatsapp", json=PAYLOAD)
     assert response.status_code == 401
+    assert response.json() == {"accepted": False, "error": "invalid_webhook_secret"}
     os.environ["WHATSAPP_WEBHOOK_SECRET"] = ""
     get_settings.cache_clear()
 
@@ -285,3 +286,25 @@ def test_inbound_accepts_evolution_group_payload(monkeypatch) -> None:
         ).fetchone()
     assert event_row is not None
     assert "\"is_group\": true" in str(event_row["payload_redacted_json"]).lower()
+
+
+def test_inbound_ignores_non_upsert_evolution_event() -> None:
+    payload = {
+        "event": "connection.update",
+        "data": {"state": "open"},
+    }
+    with get_conn() as conn:
+        before_messages = int(conn.execute("SELECT COUNT(*) AS c FROM messages").fetchone()["c"])
+        before_events = int(conn.execute("SELECT COUNT(*) AS c FROM events").fetchone()["c"])
+
+    client = TestClient(app)
+    response = client.post("/webhooks/whatsapp", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {"accepted": True, "degraded": False, "ignored": True}
+
+    with get_conn() as conn:
+        after_messages = int(conn.execute("SELECT COUNT(*) AS c FROM messages").fetchone()["c"])
+        after_events = int(conn.execute("SELECT COUNT(*) AS c FROM events").fetchone()["c"])
+
+    assert after_messages == before_messages
+    assert after_events == before_events

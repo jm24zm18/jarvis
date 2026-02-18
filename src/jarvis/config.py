@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     whatsapp_webhook_secret: str = Field(alias="WHATSAPP_WEBHOOK_SECRET", default="")
     evolution_api_url: str = Field(alias="EVOLUTION_API_URL", default="")
     evolution_api_key: str = Field(alias="EVOLUTION_API_KEY", default="")
+    evolution_webhook_url: str = Field(alias="EVOLUTION_WEBHOOK_URL", default="")
+    evolution_webhook_by_events: int = Field(alias="EVOLUTION_WEBHOOK_BY_EVENTS", default=1)
+    evolution_webhook_events: str = Field(
+        alias="EVOLUTION_WEBHOOK_EVENTS",
+        default="messages.upsert",
+    )
 
     google_oauth_client_id: str = Field(alias="GOOGLE_OAUTH_CLIENT_ID", default="")
     google_oauth_client_secret: str = Field(alias="GOOGLE_OAUTH_CLIENT_SECRET", default="")

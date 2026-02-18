@@ -11,7 +11,7 @@ from jarvis.auth.dependencies import UserContext, require_admin
 from jarvis.channels.whatsapp.evolution_client import EvolutionClient
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
-from jarvis.db.queries import upsert_whatsapp_instance
+from jarvis.db.queries import get_whatsapp_instance, upsert_whatsapp_instance
 
 router = APIRouter(prefix="/channels", tags=["api-channels"])
 _limiter = Limiter(key_func=get_remote_address)
@@ -34,18 +34,48 @@ def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
         }
     status_code, payload = asyncio.run(client.status())
     evo_state = str(payload.get("instance", {}).get("state") or payload.get("state") or "unknown")
+    callback_status_code: int | None = None
+    callback_payload: dict[str, object] = {}
+    callback_ok = False
+    callback_error = ""
+    if client.webhook_enabled:
+        callback_status_code, callback_payload = asyncio.run(client.configure_webhook())
+        callback_ok = callback_status_code < 400
+        if not callback_ok:
+            callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
     with get_conn() as conn:
         upsert_whatsapp_instance(
             conn,
             instance=client.instance,
             status=evo_state,
-            metadata=payload,
+            metadata={
+                "status_code": status_code,
+                "payload": payload,
+                "callback_status_code": callback_status_code,
+                "callback_payload": callback_payload,
+            },
+            callback_url=client.webhook_url,
+            callback_by_events=client.webhook_by_events,
+            callback_events=client.webhook_events,
+            callback_configured=callback_ok,
+            callback_last_error=callback_error,
         )
+        db_state = get_whatsapp_instance(conn, client.instance)
     return {
         "enabled": True,
         "instance": client.instance,
         "status_code": status_code,
         "payload": payload,
+        "callback": {
+            "enabled": client.webhook_enabled,
+            "url": client.webhook_url,
+            "by_events": client.webhook_by_events,
+            "events": client.webhook_events,
+            "status_code": callback_status_code,
+            "configured": callback_ok,
+            "error": callback_error,
+        },
+        "instance_state": db_state or {},
     }
 
 
@@ -60,15 +90,44 @@ def whatsapp_create(
     if not client.enabled:
         return {"ok": False, "error": "evolution_api_disabled"}
     status_code, payload = asyncio.run(client.create_instance())
+    callback_status_code: int | None = None
+    callback_payload: dict[str, object] = {}
+    callback_ok = False
+    callback_error = ""
+    if client.webhook_enabled:
+        callback_status_code, callback_payload = asyncio.run(client.configure_webhook())
+        callback_ok = callback_status_code < 400
+        if not callback_ok:
+            callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
     evo_state = str(payload.get("instance", {}).get("state") or payload.get("state") or "created")
     with get_conn() as conn:
         upsert_whatsapp_instance(
             conn,
             instance=client.instance,
             status=evo_state,
-            metadata=payload,
+            metadata={
+                "status_code": status_code,
+                "payload": payload,
+                "callback_status_code": callback_status_code,
+                "callback_payload": callback_payload,
+            },
+            callback_url=client.webhook_url,
+            callback_by_events=client.webhook_by_events,
+            callback_events=client.webhook_events,
+            callback_configured=callback_ok,
+            callback_last_error=callback_error,
         )
-    return {"ok": status_code < 400, "status_code": status_code, "payload": payload}
+    return {
+        "ok": status_code < 400,
+        "status_code": status_code,
+        "payload": payload,
+        "callback": {
+            "enabled": client.webhook_enabled,
+            "status_code": callback_status_code,
+            "configured": callback_ok,
+            "error": callback_error,
+        },
+    }
 
 
 @router.get("/whatsapp/qrcode")
@@ -117,5 +176,10 @@ def whatsapp_disconnect(
             instance=client.instance,
             status="disconnected",
             metadata=payload,
+            callback_url=client.webhook_url,
+            callback_by_events=client.webhook_by_events,
+            callback_events=client.webhook_events,
+            callback_configured=False,
+            callback_last_error="disconnected",
         )
     return {"ok": status_code < 400, "status_code": status_code, "payload": payload}

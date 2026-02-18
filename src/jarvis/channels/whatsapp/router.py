@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 from typing import Any
 
@@ -55,10 +56,13 @@ async def inbound(
 ) -> JSONResponse:
     settings = get_settings()
     required_secret = settings.whatsapp_webhook_secret.strip()
-    if required_secret and x_whatsapp_secret != required_secret:
-        raise HTTPException(
+    provided_secret = str(x_whatsapp_secret or "").strip()
+    if required_secret and (
+        not provided_secret or not hmac.compare_digest(provided_secret, required_secret)
+    ):
+        return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid webhook secret",
+            content={"accepted": False, "error": "invalid_webhook_secret"},
         )
 
     adapter = get_channel("whatsapp")
@@ -66,6 +70,12 @@ async def inbound(
         return JSONResponse(
             status_code=500,
             content={"accepted": False, "error": "adapter_missing"},
+        )
+    messages = adapter.parse_inbound(payload)
+    if not messages:
+        return JSONResponse(
+            status_code=200,
+            content={"accepted": True, "degraded": False, "ignored": True},
         )
 
     trace_id = new_id("trc")
@@ -93,7 +103,7 @@ async def inbound(
             ),
         )
 
-        for msg in adapter.parse_inbound(payload):
+        for msg in messages:
             if not record_external_message(conn, "whatsapp", msg.external_msg_id, trace_id):
                 continue
 

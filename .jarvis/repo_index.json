@@ -188,6 +188,13 @@
     },
     {
       "recipe": [
+        "@if [ -x /tmp/sec-tools/bin/gitleaks ]; then /tmp/sec-tools/bin/gitleaks detect --source . --no-git --redact; else gitleaks detect --source . --no-git --redact; fi",
+        "@if [ -x /tmp/sec-tools/bin/trufflehog ]; then /tmp/sec-tools/bin/trufflehog filesystem . --only-verified; else trufflehog filesystem . --only-verified; fi"
+      ],
+      "target": "secret-scan"
+    },
+    {
+      "recipe": [
         "uv run bandit -r src/jarvis -c pyproject.toml -ll",
         "uv run pip-audit"
       ],
@@ -204,6 +211,12 @@
         "python3 scripts/new_user_smoke.py"
       ],
       "target": "setup-smoke"
+    },
+    {
+      "recipe": [
+        "python3 scripts/new_user_smoke.py --skip-dev-preflight"
+      ],
+      "target": "setup-smoke-running"
     },
     {
       "recipe": [
@@ -284,7 +297,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-18T14:47:10.907941+00:00",
+  "generated_at": "2026-02-18T23:11:02.453452+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -480,6 +493,22 @@
     {
       "file": "src/jarvis/db/migrations/051_webhook_replay_guard.sql",
       "number": 51
+    },
+    {
+      "file": "src/jarvis/db/migrations/052_users_external_id_guard.sql",
+      "number": 52
+    },
+    {
+      "file": "src/jarvis/db/migrations/053_state_reconciliation_tokens_saved.sql",
+      "number": 53
+    },
+    {
+      "file": "src/jarvis/db/migrations/054_evolution_instance_contract.sql",
+      "number": 54
+    },
+    {
+      "file": "src/jarvis/db/migrations/055_evolution_items.sql",
+      "number": 55
     }
   ],
   "protected_modules": [

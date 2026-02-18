@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -35,6 +36,15 @@ def _login(client: TestClient) -> str:
     payload = response.json()
     assert "token" in payload
     return str(payload["token"])
+
+
+def _login_payload(client: TestClient, external_id: str = "web_admin") -> dict[str, object]:
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"password": "secret", "external_id": external_id},
+    )
+    assert response.status_code == 200
+    return dict(response.json())
 
 
 def test_web_auth_login_me_logout_flow() -> None:
@@ -74,8 +84,14 @@ def test_provider_config_get_and_update(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.routes.api.auth.enqueue_settings_reload", lambda: True)
 
     client = _managed_client()
-    token = _login(client)
-    headers = {"Authorization": f"Bearer {token}"}
+    first_login = _login_payload(client, "bootstrap-admin")
+    bootstrap_user_id = str(first_login["user_id"])
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET role='admin' WHERE id=?", (bootstrap_user_id,))
+
+    admin_login = _login_payload(client, "bootstrap-admin")
+    assert admin_login["role"] == "admin"
+    headers = {"Authorization": f"Bearer {admin_login['token']}"}
 
     before = client.get("/api/v1/auth/providers/config", headers=headers)
     assert before.status_code == 200
@@ -100,6 +116,53 @@ def test_provider_config_get_and_update(monkeypatch) -> None:
     assert saved["GEMINI_MODEL"] == "gemini-2.5-pro"
     assert saved["SGLANG_MODEL"] == "openai/gpt-oss-20b"
     get_settings.cache_clear()
+
+
+def test_provider_config_requires_admin() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.get("/api/v1/auth/providers/config", headers=headers)
+    assert response.status_code == 403
+
+
+def test_login_rejects_oversized_external_id() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"password": "secret", "external_id": "x" * 257},
+    )
+    assert response.status_code == 422
+    assert "external_id" in str(response.json().get("detail", "")).lower()
+
+
+def test_login_accepts_max_sized_external_id() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"password": "secret", "external_id": "x" * 256},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["user_id"].startswith("usr_")
+
+
+def test_users_external_id_db_guard_rejects_oversized_value() -> None:
+    with get_conn() as conn:
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO users(id, external_id, created_at) VALUES(?,?,?)",
+                (new_id("usr"), "x" * 257, now_iso()),
+            )
 
 
 def test_web_thread_and_message_flow(monkeypatch) -> None:
@@ -732,3 +795,153 @@ def test_github_issue_comment_without_trigger_is_ignored() -> None:
     assert response.status_code == 200
     assert response.json()["accepted"] is True
     assert response.json()["ignored"] is True
+
+
+def test_evolution_items_require_admin() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    listing = client.get("/api/v1/governance/evolution/items", headers=headers)
+    assert listing.status_code == 403
+    update = client.post(
+        "/api/v1/governance/evolution/items/evo_1/status",
+        headers=headers,
+        json={
+            "status": "started",
+            "trace_id": "trc_evo_1",
+            "evidence_refs": ["docs/PLAN.md:1"],
+            "result": {"status": "in_progress"},
+        },
+    )
+    assert update.status_code == 403
+
+
+def test_evolution_items_status_flow_and_timeline() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+
+    first_login = _login_payload(client, "evo-admin")
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET role='admin' WHERE id=?", (str(first_login["user_id"]),))
+    admin = _login_payload(client, "evo-admin")
+    headers = {"Authorization": f"Bearer {admin['token']}"}
+
+    start = client.post(
+        "/api/v1/governance/evolution/items/evo_item_1/status",
+        headers=headers,
+        json={
+            "status": "started",
+            "trace_id": "trc_evo_item_1",
+            "thread_id": "",
+            "evidence_refs": ["docs/PLAN.md:150"],
+            "result": {"status": "started"},
+        },
+    )
+    assert start.status_code == 200
+    assert start.json()["ok"] is True
+    assert start.json()["transition"]["to_status"] == "started"
+
+    verify = client.post(
+        "/api/v1/governance/evolution/items/evo_item_1/status",
+        headers=headers,
+        json={
+            "status": "verified",
+            "trace_id": "trc_evo_item_1",
+            "thread_id": "",
+            "evidence_refs": ["tests/integration/test_web_api.py:900"],
+            "result": {"status": "ok"},
+        },
+    )
+    assert verify.status_code == 200
+    verify_payload = verify.json()
+    assert verify_payload["ok"] is True
+    assert verify_payload["item"]["status"] == "verified"
+
+    listing = client.get(
+        "/api/v1/governance/evolution/items?status=verified&trace_id=trc_evo_item_1",
+        headers=headers,
+    )
+    assert listing.status_code == 200
+    items = listing.json()["items"]
+    assert items
+    assert items[0]["id"] == "evo_item_1"
+    assert items[0]["status"] == "verified"
+
+    timeline = client.get(
+        "/api/v1/governance/decision-timeline?trace_id=trc_evo_item_1",
+        headers=headers,
+    )
+    assert timeline.status_code == 200
+    event_types = [str(item["event_type"]) for item in timeline.json()["items"]]
+    assert "evolution.item.started" in event_types
+    assert "evolution.item.verified" in event_types
+
+    with get_conn() as conn:
+        row = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='evolution.item.verified' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_evo_item_1",),
+        ).fetchone()
+    assert row is not None
+    payload = json.loads(str(row["payload_json"]))
+    assert "item_id" in payload
+    assert "trace_id" in payload
+    assert "status" in payload
+    assert "evidence_refs" in payload
+    assert "result" in payload
+
+
+def test_evolution_items_reject_invalid_transition() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+
+    first_login = _login_payload(client, "evo-admin-2")
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET role='admin' WHERE id=?", (str(first_login["user_id"]),))
+    admin = _login_payload(client, "evo-admin-2")
+    headers = {"Authorization": f"Bearer {admin['token']}"}
+
+    started = client.post(
+        "/api/v1/governance/evolution/items/evo_item_2/status",
+        headers=headers,
+        json={
+            "status": "started",
+            "trace_id": "trc_evo_item_2",
+            "evidence_refs": [],
+            "result": {"status": "started"},
+        },
+    )
+    assert started.status_code == 200
+    verified = client.post(
+        "/api/v1/governance/evolution/items/evo_item_2/status",
+        headers=headers,
+        json={
+            "status": "verified",
+            "trace_id": "trc_evo_item_2",
+            "evidence_refs": [],
+            "result": {"status": "ok"},
+        },
+    )
+    assert verified.status_code == 200
+
+    blocked_after_verified = client.post(
+        "/api/v1/governance/evolution/items/evo_item_2/status",
+        headers=headers,
+        json={
+            "status": "blocked",
+            "trace_id": "trc_evo_item_2",
+            "evidence_refs": ["tests/integration/test_web_api.py:972"],
+            "result": {"status": "should_fail"},
+        },
+    )
+    assert blocked_after_verified.status_code == 200
+    payload = blocked_after_verified.json()
+    assert payload["ok"] is False
+    assert payload["error"] == "invalid_transition"

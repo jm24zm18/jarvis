@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, Query
+from pydantic import BaseModel, Field
 
 from jarvis.agents.loader import load_agent_registry, reset_loader_caches
 from jarvis.agents.registry import sync_tool_permissions
@@ -14,15 +15,21 @@ from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
     create_failure_remediation_feedback,
+    get_evolution_item,
     get_selfupdate_fitness_gate_config,
     latest_system_fitness_snapshot,
+    list_evolution_items,
     list_failure_remediations,
     list_selfupdate_checks,
     list_selfupdate_transitions,
     list_system_fitness_snapshots,
     remediation_feedback_stats,
     update_remediation_confidence,
+    upsert_evolution_item,
 )
+from jarvis.events.models import EventInput
+from jarvis.events.writer import emit_event, redact_payload
+from jarvis.ids import new_id
 from jarvis.selfupdate.pipeline import read_artifact, read_state
 from jarvis.tasks.dependency_steward import run_dependency_steward
 from jarvis.tasks.maintenance import refresh_learning_loop
@@ -31,9 +38,45 @@ from jarvis.tasks.release_candidate import build_release_candidate
 router = APIRouter(prefix="/governance", tags=["api-governance"])
 
 
+class EvolutionItemStatusInput(BaseModel):
+    status: str = Field(pattern="^(started|verified|blocked)$")
+    trace_id: str = Field(min_length=1)
+    thread_id: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
+    result: dict[str, object] = Field(default_factory=dict)
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return default
+    return default
+
+
+def _as_float(value: object, default: float = 0.0) -> float:
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return default
+    return default
+
+
 def _slo_thresholds() -> dict[str, object]:
     settings = get_settings()
-    fallback = {
+    fallback: dict[str, object] = {
         "max_snapshot_age_minutes": max(1, int(settings.selfupdate_fitness_max_age_minutes)),
         "min_build_success_rate": max(0.0, float(settings.selfupdate_min_build_success_rate)),
         "max_regression_frequency": max(0.0, float(settings.selfupdate_max_regression_frequency)),
@@ -44,10 +87,10 @@ def _slo_thresholds() -> dict[str, object]:
     if stored is None:
         return fallback
     return {
-        "max_snapshot_age_minutes": int(stored["max_snapshot_age_minutes"]),
-        "min_build_success_rate": float(stored["min_build_success_rate"]),
-        "max_regression_frequency": float(stored["max_regression_frequency"]),
-        "max_rollback_frequency": int(stored["max_rollback_frequency"]),
+        "max_snapshot_age_minutes": _as_int(stored["max_snapshot_age_minutes"], 180),
+        "min_build_success_rate": _as_float(stored["min_build_success_rate"], 0.8),
+        "max_regression_frequency": _as_float(stored["max_regression_frequency"], 0.4),
+        "max_rollback_frequency": _as_int(stored["max_rollback_frequency"], 3),
     }
 
 
@@ -70,20 +113,20 @@ def _evaluate_slo(
     metrics = snapshot.get("metrics")
     m = metrics if isinstance(metrics, dict) else {}
 
-    max_age = int(thresholds["max_snapshot_age_minutes"])
+    max_age = _as_int(thresholds.get("max_snapshot_age_minutes"), 180)
     if snapshot_age_minutes is None or snapshot_age_minutes > max_age:
         reasons.append(f"stale_snapshot>{max_age}m")
 
-    build_success = float(m.get("selfupdate_success_rate", 0.0) or 0.0)
-    if build_success < float(thresholds["min_build_success_rate"]):
+    build_success = _as_float(m.get("selfupdate_success_rate", 0.0), 0.0)
+    if build_success < _as_float(thresholds.get("min_build_success_rate"), 0.8):
         reasons.append("low_build_success")
 
-    regression = float(m.get("failure_capsule_recurrence_rate", 0.0) or 0.0)
-    if regression > float(thresholds["max_regression_frequency"]):
+    regression = _as_float(m.get("failure_capsule_recurrence_rate", 0.0), 0.0)
+    if regression > _as_float(thresholds.get("max_regression_frequency"), 0.4):
         reasons.append("high_regression_frequency")
 
-    rollback_frequency = int(m.get("rollback_frequency", 0) or 0)
-    if rollback_frequency > int(thresholds["max_rollback_frequency"]):
+    rollback_frequency = _as_int(m.get("rollback_frequency", 0), 0)
+    if rollback_frequency > _as_int(thresholds.get("max_rollback_frequency"), 3):
         reasons.append("high_rollback_frequency")
 
     if not reasons:
@@ -245,7 +288,8 @@ def decision_timeline(
         "event_type LIKE 'policy.%' OR "
         "event_type LIKE 'self_update.%' OR "
         "event_type LIKE 'agent.step.%' OR "
-        "event_type='evidence.check'"
+        "event_type='evidence.check' OR "
+        "event_type LIKE 'evolution.item.%'"
         ")"
     ]
     params: list[object] = []
@@ -300,6 +344,109 @@ def decision_timeline(
     return {
         "items": items,
         "filters": {"trace_id": trace_id or "", "thread_id": thread_id or "", "limit": limit},
+    }
+
+
+@router.get("/evolution/items")
+def evolution_items(
+    status: str | None = Query(default=None),
+    trace_id: str | None = Query(default=None),
+    thread_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    del ctx
+    with get_conn() as conn:
+        items = list_evolution_items(
+            conn,
+            status=status.strip() if isinstance(status, str) else None,
+            trace_id=trace_id.strip() if isinstance(trace_id, str) else None,
+            thread_id=thread_id.strip() if isinstance(thread_id, str) else None,
+            limit=limit,
+        )
+    return {
+        "items": items,
+        "filters": {
+            "status": status or "",
+            "trace_id": trace_id or "",
+            "thread_id": thread_id or "",
+            "limit": limit,
+        },
+    }
+
+
+@router.post("/evolution/items/{item_id}/status")
+def evolution_item_set_status(
+    item_id: str,
+    input_data: EvolutionItemStatusInput,
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    normalized_item_id = item_id.strip()
+    if not normalized_item_id:
+        return {"ok": False, "error": "invalid_item_id"}
+    next_status = input_data.status.strip()
+    transition_allow = {
+        "started": {"verified", "blocked"},
+        "blocked": {"started"},
+        "verified": set(),
+    }
+    with get_conn() as conn:
+        existing = get_evolution_item(conn, normalized_item_id)
+        if existing is None:
+            if next_status != "started":
+                return {"ok": False, "error": "item_not_started"}
+            previous_status = ""
+        else:
+            previous_status = str(existing.get("status") or "")
+            allowed = transition_allow.get(previous_status, set())
+            if next_status != previous_status and next_status not in allowed:
+                return {
+                    "ok": False,
+                    "error": "invalid_transition",
+                    "from_status": previous_status,
+                    "to_status": next_status,
+                }
+        actor_id = str(ctx.user_id)
+        normalized_trace_id = input_data.trace_id.strip()
+        normalized_thread_id = input_data.thread_id.strip()
+        upsert_evolution_item(
+            conn,
+            item_id=normalized_item_id,
+            trace_id=normalized_trace_id,
+            thread_id=normalized_thread_id or None,
+            status=next_status,
+            evidence_refs=[str(item) for item in input_data.evidence_refs],
+            result=dict(input_data.result),
+            updated_by=actor_id,
+        )
+        payload: dict[str, object] = {
+            "item_id": normalized_item_id,
+            "trace_id": normalized_trace_id,
+            "status": next_status,
+            "evidence_refs": [str(item) for item in input_data.evidence_refs],
+            "result": dict(input_data.result),
+        }
+        event_type = f"evolution.item.{next_status}"
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=normalized_trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=normalized_thread_id or None,
+                event_type=event_type,
+                component="governance.evolution",
+                actor_type="admin",
+                actor_id=actor_id,
+                payload_json=json.dumps(payload),
+                payload_redacted_json=json.dumps(redact_payload(payload)),
+            ),
+        )
+        current = get_evolution_item(conn, normalized_item_id)
+    return {
+        "ok": True,
+        "item": current or {},
+        "transition": {"from_status": previous_status, "to_status": next_status},
     }
 
 

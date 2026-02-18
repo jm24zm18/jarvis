@@ -16,6 +16,7 @@
 make api
 make web-dev
 make setup-smoke
+make setup-smoke-running
 ```
 
 - API reloads with `uvicorn --reload`.
@@ -24,6 +25,8 @@ make setup-smoke
 - `make setup-smoke` validates a reproducible local bootstrap path:
   toolchain checks, dev port preflight, migrations, API import bootstrap,
   and web dependency install.
+- `make setup-smoke-running` is the same smoke path but skips the dev port preflight.
+  Use it when local dependency services are intentionally already running.
 
 ## Common Workflows
 
@@ -99,6 +102,9 @@ make setup-smoke
 - `make web-install` now retries and writes deterministic logs to:
   - wrapper log: `/tmp/jarvis-web-install.log`
   - npm debug log path (if emitted by npm)
+- If npm traffic is blocked by a restricted sandbox/firewall, the wrapper reports:
+  - category: `network_blocked_or_sandboxed`
+  - remediation: retry in a non-restricted shell with outbound network access
 - Typical remediation sequence:
   1. `npm cache clean --force`
   2. `cd web && npm install --cache /tmp/npm-cache --prefer-offline=false`
@@ -131,11 +137,10 @@ services:
 
 ### Secret Hygiene Quick Checks
 
-Run before pushing changes that touch auth/provider/webhook config:
+Run before commit/push when touching auth/provider/webhook config:
 
 ```bash
-gitleaks detect --source . --no-git --redact
-trufflehog filesystem . --only-verified
+make secret-scan
 ```
 
 If a local credential is exposed:

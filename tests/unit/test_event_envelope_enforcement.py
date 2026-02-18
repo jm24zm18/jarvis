@@ -53,3 +53,32 @@ def test_redact_payload_masks_whatsapp_pairing_sensitive_fields() -> None:
     assert isinstance(redacted["nested"], dict)
     assert redacted["nested"]["qr_code"] == "[REDACTED]"
     assert redacted["nested"]["phone"] == "[REDACTED]"
+
+
+def test_emit_event_enforces_evolution_item_payload_contract() -> None:
+    with get_conn() as conn:
+        emit_event(
+            conn,
+            EventInput(
+                trace_id="trc_evolution",
+                span_id="spn_evolution",
+                parent_span_id=None,
+                thread_id=None,
+                event_type="evolution.item.started",
+                component="governance.evolution",
+                actor_type="admin",
+                actor_id="usr_admin",
+                payload_json=json.dumps({"item_id": "evo_1"}),
+                payload_redacted_json=json.dumps({"item_id": "evo_1"}),
+            ),
+        )
+        row = conn.execute(
+            "SELECT payload_json FROM events ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    payload = json.loads(str(row["payload_json"]))
+    assert payload["item_id"] == "evo_1"
+    assert payload["trace_id"] == ""
+    assert payload["status"] == "started"
+    assert payload["evidence_refs"] == []
+    assert payload["result"] == {}

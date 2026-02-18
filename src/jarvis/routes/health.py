@@ -40,7 +40,8 @@ async def metrics() -> JSONResponse:
         event_count = conn.execute("SELECT COUNT(*) AS cnt FROM events").fetchone()
         memory_items_count = conn.execute("SELECT COUNT(*) AS cnt FROM memory_items").fetchone()
         recon_rows = conn.execute(
-            "SELECT updated_count, superseded_count, deduped_count, pruned_count, detail_json "
+            "SELECT updated_count, superseded_count, deduped_count, pruned_count, "
+            "tokens_saved, detail_json "
             "FROM state_reconciliation_runs "
             "WHERE created_at >= datetime('now', '-7 day')"
         ).fetchall()
@@ -66,6 +67,16 @@ async def metrics() -> JSONResponse:
         )
         if changes > 0:
             runs_with_changes += 1
+        raw_tokens_saved = row["tokens_saved"] if "tokens_saved" in row.keys() else 0
+        if isinstance(raw_tokens_saved, int | float):
+            tokens_saved_values.append(float(raw_tokens_saved))
+            continue
+        if isinstance(raw_tokens_saved, str):
+            try:
+                tokens_saved_values.append(float(raw_tokens_saved))
+                continue
+            except ValueError:
+                pass
         raw_detail = row["detail_json"]
         if not isinstance(raw_detail, str) or not raw_detail:
             continue

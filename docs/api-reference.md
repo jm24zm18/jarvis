@@ -40,6 +40,8 @@ Auth levels:
 | `GET` | `/api/v1/governance/audit` | `admin` | `memory_governance_audit_api_v1_governance_audit_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/governance/decision-timeline` | `admin` | `decision_timeline_api_v1_governance_decision_timeline_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/governance/dependency-steward` | `admin` | `dependency_steward_status_api_v1_governance_dependency_steward_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/governance/evolution/items` | `admin` | `evolution_items_api_v1_governance_evolution_items_get` | `-` | `200, 422` |
+| `POST` | `/api/v1/governance/evolution/items/{item_id}/status` | `admin` | `evolution_item_set_status_api_v1_governance_evolution_items__item_id__status_post` | `application/json` | `200, 422` |
 | `GET` | `/api/v1/governance/fitness/history` | `admin` | `fitness_history_api_v1_governance_fitness_history_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/governance/fitness/latest` | `admin` | `fitness_latest_api_v1_governance_fitness_latest_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/governance/learning-loop` | `admin` | `learning_loop_api_v1_governance_learning_loop_get` | `-` | `200, 422` |
@@ -113,12 +115,12 @@ Auth levels:
 
 - `title`: `Jarvis Agent Framework`
 - `version`: `0.1.0`
-- `path_count`: `80`
+- `path_count`: `82`
 
 ```json
 {
   "title": "Jarvis Agent Framework",
   "version": "0.1.0",
-  "path_count": 80
+  "path_count": 82
 }
 ```

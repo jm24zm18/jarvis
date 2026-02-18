@@ -105,3 +105,13 @@ Complete the remaining work after the initial Evolution WhatsApp migration and m
   - Mitigation: dual parser tests for legacy + Evolution payloads.
 - Risk: operational surprises from new metrics.
   - Mitigation: document units and expected ranges in runbook.
+
+## Execution Update (2026-02-18)
+- In progress:
+  - Added Evolution callback contract plumbing (`EVOLUTION_WEBHOOK_URL`, `EVOLUTION_WEBHOOK_BY_EVENTS`, `EVOLUTION_WEBHOOK_EVENTS`) and instance-state persistence fields.
+  - Hardened WhatsApp webhook auth response contract and no-op handling for non-`messages.upsert` payloads.
+  - Added governance evolution-item contracts:
+    - event types `evolution.item.started|verified|blocked`
+    - admin APIs for listing and status transitions.
+- Pending before closure:
+  - Run full gate evidence (`make lint`, `make typecheck`, `make test-gates`, `make docs-check`) and attach outputs.

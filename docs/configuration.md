@@ -78,6 +78,9 @@ Source of truth: `src/jarvis/config.py`.
 | `WHATSAPP_WEBHOOK_SECRET` | str | `` | Shared secret header required by WhatsApp webhook route when set. |
 | `EVOLUTION_API_URL` | str | `` | Evolution API base URL for Baileys sidecar. |
 | `EVOLUTION_API_KEY` | str | `` | Evolution API key header value. |
+| `EVOLUTION_WEBHOOK_URL` | str | `` | Callback URL Evolution should post inbound events to (usually `/webhooks/whatsapp`). |
+| `EVOLUTION_WEBHOOK_BY_EVENTS` | int | `1` | When `1`, Evolution filters callback delivery to configured events only. |
+| `EVOLUTION_WEBHOOK_EVENTS` | str | `messages.upsert` | Comma-separated Evolution event names allowed for callback delivery. |
 | `GOOGLE_OAUTH_CLIENT_ID` | str | `` | Google OAuth client ID. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | str | `` | Google OAuth client secret. |
 | `GOOGLE_OAUTH_REFRESH_TOKEN` | str | `` | OAuth refresh token. |
@@ -193,7 +196,7 @@ Source of truth: `src/jarvis/config.py`.
 `GET /metrics` exposes JSON counters/gauges including memory lifecycle KPIs:
 
 - `memory_items_count`: current `memory_items` row count.
-- `memory_avg_tokens_saved`: average `tokens_saved` extracted from reconciliation `detail_json` when present.
+- `memory_avg_tokens_saved`: average `state_reconciliation_runs.tokens_saved` over the last 7 days.
 - `memory_reconciliation_rate`: fraction of reconciliation runs with non-zero updates/supersessions/dedupes/prunes (7-day window).
 - `memory_hallucination_incidents`: failure capsule count tagged/detected as hallucination.
 
