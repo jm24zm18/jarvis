@@ -1,4 +1,5 @@
 from jarvis.selfupdate.contracts import validate_evidence_context, validate_evidence_packet
+from jarvis.selfupdate.pipeline import evaluate_test_first_gate
 
 
 def _evidence() -> dict[str, object]:
@@ -54,3 +55,19 @@ def test_validate_evidence_context_requires_test_plan_for_critical_change() -> N
         critical_change=True,
     )
     assert any(item.field == "test_plan" for item in issues)
+
+
+def test_evaluate_test_first_gate_returns_typed_failure_codes() -> None:
+    ok, failures, detail = evaluate_test_first_gate(
+        artifact={"tests": {"result": "pending"}},
+        changed_files=["src/jarvis/tools/runtime.py"],
+        critical_patterns=["src/jarvis/tools/**"],
+        min_coverage_pct=80.0,
+        require_critical_path_tests=True,
+    )
+    assert ok is False
+    codes = {item["code"] for item in failures}
+    assert "missing_test_evidence" in codes
+    assert "missing_coverage_evidence" in codes
+    assert "critical_path_tests_missing" in codes
+    assert detail["critical_change"] is True

@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     )
     selfupdate_pr_autoraise: int = Field(alias="SELFUPDATE_PR_AUTORAISE", default=0)
     selfupdate_fitness_gate_mode: str = Field(alias="SELFUPDATE_FITNESS_GATE_MODE", default="warn")
+    selfupdate_test_gate_mode: str = Field(alias="SELFUPDATE_TEST_GATE_MODE", default="warn")
+    selfupdate_test_gate_min_coverage_pct: float = Field(
+        alias="SELFUPDATE_TEST_GATE_MIN_COVERAGE_PCT", default=0.0
+    )
+    selfupdate_test_gate_require_critical_tests: int = Field(
+        alias="SELFUPDATE_TEST_GATE_REQUIRE_CRITICAL_TESTS", default=1
+    )
     selfupdate_fitness_max_age_minutes: int = Field(
         alias="SELFUPDATE_FITNESS_MAX_AGE_MINUTES", default=180
     )

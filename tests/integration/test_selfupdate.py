@@ -249,6 +249,73 @@ def test_selfupdate_apply_blocked_by_fitness_gate(tmp_path: Path, monkeypatch) -
     get_settings.cache_clear()
 
 
+def test_selfupdate_apply_test_gate_warn_mode_does_not_block(tmp_path: Path, monkeypatch) -> None:
+    trace_id = "trc_self_test_gate_warn"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    monkeypatch.setenv("SELFUPDATE_TEST_GATE_MODE", "warn")
+    monkeypatch.setenv("SELFUPDATE_TEST_GATE_MIN_COVERAGE_PCT", "90")
+    get_settings.cache_clear()
+    _ = self_update_propose(trace_id, str(repo), patch, "test", evidence=_evidence())
+    _ = self_update_validate(trace_id)
+    _ = self_update_test(trace_id)
+    apply = self_update_apply(trace_id)
+    assert apply["status"] == "verified"
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, payload_json FROM selfupdate_checks "
+            "WHERE trace_id=? AND check_type='apply.test_gate' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (trace_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["status"]) == "warning"
+    assert "missing_coverage_evidence" in str(row["payload_json"])
+    get_settings.cache_clear()
+
+
+def test_selfupdate_apply_test_gate_enforce_blocks_with_typed_reason(
+    tmp_path: Path, monkeypatch
+) -> None:
+    trace_id = "trc_self_test_gate_enforce"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    monkeypatch.setenv("SELFUPDATE_TEST_GATE_MODE", "enforce")
+    monkeypatch.setenv("SELFUPDATE_TEST_GATE_MIN_COVERAGE_PCT", "90")
+    get_settings.cache_clear()
+    _ = self_update_propose(trace_id, str(repo), patch, "test", evidence=_evidence())
+    _ = self_update_validate(trace_id)
+    _ = self_update_test(trace_id)
+    apply = self_update_apply(trace_id)
+    assert apply["status"] == "rejected"
+    assert "test-first gate blocked apply" in str(apply["reason"])
+    assert "missing_coverage_evidence" in str(apply["reason"])
+    get_settings.cache_clear()
+
+
 def test_selfupdate_rollback_burst_emits_lockdown_event(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     patch = "\n".join(

@@ -37,6 +37,7 @@ from jarvis.selfupdate.contracts import (
 )
 from jarvis.selfupdate.pipeline import (
     changed_files_from_patch,
+    evaluate_test_first_gate,
     execute_test_plan,
     git_apply,
     git_apply_check,
@@ -1367,6 +1368,81 @@ def self_update_apply(trace_id: str) -> dict[str, str]:
             "status": "rejected",
             "reason": f"invalid state transition: {state['state']} -> applied",
         }
+
+    artifact = read_artifact(trace_id, patch_base)
+    patch_text = read_patch(trace_id, patch_base)
+    changed_files = changed_files_from_patch(patch_text)
+
+    test_gate_ok, test_gate_failures, test_gate_detail = evaluate_test_first_gate(
+        artifact=artifact,
+        changed_files=changed_files,
+        critical_patterns=_critical_patterns(),
+        min_coverage_pct=max(0.0, float(settings.selfupdate_test_gate_min_coverage_pct)),
+        require_critical_path_tests=int(settings.selfupdate_test_gate_require_critical_tests) == 1,
+    )
+    test_gate_mode = settings.selfupdate_test_gate_mode.strip().lower()
+    if not test_gate_ok and test_gate_mode == "enforce":
+        detail = "; ".join(item["code"] for item in test_gate_failures) or "test-first gate failed"
+        _record_check(
+            trace_id,
+            check_type="apply.test_gate",
+            status="failed",
+            detail=detail,
+            payload={"failures": test_gate_failures, **test_gate_detail},
+        )
+        update_artifact_section(
+            trace_id,
+            patch_base,
+            "verification",
+            {
+                "status": "blocked",
+                "detail": detail,
+                "test_gate": {
+                    "status": "failed",
+                    "mode": test_gate_mode,
+                    "failures": test_gate_failures,
+                    **test_gate_detail,
+                },
+            },
+        )
+        return {
+            "trace_id": trace_id,
+            "status": "rejected",
+            "reason": f"test-first gate blocked apply: {detail}",
+        }
+    if not test_gate_ok:
+        _record_check(
+            trace_id,
+            check_type="apply.test_gate",
+            status="warning",
+            detail="; ".join(item["code"] for item in test_gate_failures),
+            payload={"failures": test_gate_failures, **test_gate_detail},
+        )
+    else:
+        _record_check(
+            trace_id,
+            check_type="apply.test_gate",
+            status="passed",
+            detail="test-first gate passed",
+            payload=test_gate_detail,
+        )
+    update_artifact_section(
+        trace_id,
+        patch_base,
+        "verification",
+        {
+            "test_gate": {
+                "status": (
+                    "passed"
+                    if test_gate_ok
+                    else ("failed" if test_gate_mode == "enforce" else "warning")
+                ),
+                "mode": test_gate_mode,
+                "failures": test_gate_failures,
+                **test_gate_detail,
+            }
+        },
+    )
 
     gate_ok, gate_reasons, gate_detail = _evaluate_fitness_gate()
     gate_mode = settings.selfupdate_fitness_gate_mode.strip().lower()

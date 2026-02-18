@@ -209,6 +209,86 @@ def evaluate_test_gate(patch_text: str) -> ValidationResult:
     return ValidationResult(ok=True, reason="test gate passed")
 
 
+def evaluate_test_first_gate(
+    *,
+    artifact: dict[str, object] | None,
+    changed_files: list[str],
+    critical_patterns: list[str],
+    min_coverage_pct: float,
+    require_critical_path_tests: bool,
+) -> tuple[bool, list[dict[str, str]], dict[str, object]]:
+    failures: list[dict[str, str]] = []
+    tests = artifact.get("tests") if isinstance(artifact, dict) else None
+    tests_dict = tests if isinstance(tests, dict) else {}
+    result = str(tests_dict.get("result") or "").strip().lower()
+    command_results = tests_dict.get("command_results")
+    has_command_evidence = isinstance(command_results, list) and len(command_results) > 0
+
+    if result == "failed":
+        failures.append(
+            {
+                "code": "failing_test_evidence",
+                "message": "artifact.tests.result is failed",
+            }
+        )
+    elif result != "passed" or not has_command_evidence:
+        failures.append(
+            {
+                "code": "missing_test_evidence",
+                "message": "artifact.tests.result=passed with command_results is required",
+            }
+        )
+
+    coverage_pct = tests_dict.get("coverage_pct")
+    parsed_coverage: float | None = None
+    if isinstance(coverage_pct, int | float):
+        parsed_coverage = float(coverage_pct)
+    elif isinstance(coverage_pct, str):
+        try:
+            parsed_coverage = float(coverage_pct.strip())
+        except Exception:
+            parsed_coverage = None
+    if min_coverage_pct > 0:
+        if parsed_coverage is None:
+            failures.append(
+                {
+                    "code": "missing_coverage_evidence",
+                    "message": "artifact.tests.coverage_pct is required in enforce mode",
+                }
+            )
+        elif parsed_coverage < min_coverage_pct:
+            failures.append(
+                {
+                    "code": "coverage_floor_failed",
+                    "message": (
+                        f"coverage {parsed_coverage:.2f} is below configured floor "
+                        f"{min_coverage_pct:.2f}"
+                    ),
+                }
+            )
+
+    critical_change = touches_critical_paths(changed_files, critical_patterns)
+    if require_critical_path_tests and critical_change and not includes_test_changes(changed_files):
+        failures.append(
+            {
+                "code": "critical_path_tests_missing",
+                "message": "critical-path patch must include tests/ changes",
+            }
+        )
+
+    detail = {
+        "changed_files": changed_files,
+        "critical_change": critical_change,
+        "require_critical_path_tests": require_critical_path_tests,
+        "min_coverage_pct": min_coverage_pct,
+        "observed_coverage_pct": parsed_coverage,
+        "test_result": result or "missing",
+        "has_command_evidence": has_command_evidence,
+        "failure_codes": [item["code"] for item in failures],
+    }
+    return (len(failures) == 0), failures, detail
+
+
 def _git_show_file(repo_path: str, baseline_ref: str, path: str) -> str:
     proc = subprocess.run(
         ["git", "-C", repo_path, "show", f"{baseline_ref}:{path}"],

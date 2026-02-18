@@ -62,6 +62,12 @@ def run_memory_maintenance() -> dict[str, object]:
     retention_days = max(1, int(settings.memory_retention_days))
     stale_before = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
     summary: dict[str, int] = {
+        "scanned": 0,
+        "promoted": 0,
+        "archived": 0,
+        "deduped": 0,
+        "skipped_invalid": 0,
+        "conflicts_detected": 0,
         "pruned_memory_items": 0,
         "pruned_state_items": 0,
         "deduped_memory_items": 0,
@@ -81,6 +87,16 @@ def run_memory_maintenance() -> dict[str, object]:
             ).fetchone()
             is not None
         )
+        demotion_candidates_row = conn.execute(
+            (
+                "SELECT COUNT(*) AS n FROM state_items "
+                "WHERE pinned=0 AND status IN ('active','open') AND confidence!='low' "
+                "AND last_seen_at<?"
+            ),
+            (stale_before,),
+        ).fetchone()
+        demotion_candidates = int(demotion_candidates_row["n"]) if demotion_candidates_row else 0
+
         # Prune old memory items plus associated indexes.
         old_memory = conn.execute(
             "SELECT id, thread_id, text, metadata_json, created_at FROM memory_items WHERE created_at<?",
@@ -243,6 +259,30 @@ def run_memory_maintenance() -> dict[str, object]:
             )
             summary["deduped_memory_items"] = len(dup_ids)
 
+        conflict_row = conn.execute(
+            "SELECT COUNT(*) AS n FROM state_items WHERE conflict=1"
+        ).fetchone()
+        summary["conflicts_detected"] = int(conflict_row["n"]) if conflict_row else 0
+        summary["archived"] = summary["pruned_memory_items"] + summary["pruned_state_items"]
+        summary["deduped"] = summary["deduped_memory_items"]
+        summary["scanned"] = (
+            len(old_memory)
+            + len(deleted_state)
+            + len(duplicates)
+            + demotion_candidates
+        )
+        detail_json = json.dumps(
+            {
+                "scanned": summary["scanned"],
+                "promoted": summary["promoted"],
+                "archived": summary["archived"],
+                "deduped": summary["deduped"],
+                "skipped_invalid": summary["skipped_invalid"],
+                "conflicts_detected": summary["conflicts_detected"],
+            },
+            sort_keys=True,
+        )
+
         conn.execute(
             (
                 "INSERT INTO state_reconciliation_runs("
@@ -259,7 +299,7 @@ def run_memory_maintenance() -> dict[str, object]:
                 summary["deduped_memory_items"],
                 summary["pruned_memory_items"] + summary["pruned_state_items"],
                 0.0,
-                "{}",
+                detail_json,
                 now_iso(),
             ),
         )
@@ -386,6 +426,7 @@ def sync_failure_capsules() -> dict[str, int]:
     if int(settings.memory_failure_bridge_enabled) != 1:
         return {"linked": 0}
     linked = 0
+    scanned = 0
     deduped = 0
     skipped_invalid = 0
     with get_conn() as conn:
@@ -394,8 +435,9 @@ def sync_failure_capsules() -> dict[str, int]:
             "FROM failure_capsules fc "
             "LEFT JOIN failure_state_links fsl ON fsl.failure_capsule_id=fc.id "
             "WHERE fsl.failure_capsule_id IS NULL "
-            "ORDER BY fc.created_at DESC LIMIT 200"
+            "ORDER BY fc.created_at DESC, fc.id DESC LIMIT 200"
         ).fetchall()
+        scanned = len(rows)
         for row in rows:
             trace_id = str(row["trace_id"]).strip()
             phase = str(row["phase"]).strip() or "unknown"
@@ -404,18 +446,25 @@ def sync_failure_capsules() -> dict[str, int]:
                 skipped_invalid += 1
                 continue
 
-            linked_thread = conn.execute(
+            linked_threads = conn.execute(
                 (
-                    "SELECT thread_id FROM events "
+                    "SELECT DISTINCT thread_id FROM events "
                     "WHERE trace_id=? AND thread_id IS NOT NULL AND thread_id!='' "
-                    "ORDER BY created_at DESC LIMIT 1"
+                    "ORDER BY thread_id ASC LIMIT 2"
                 ),
                 (trace_id,),
-            ).fetchone()
-            if linked_thread is None:
+            ).fetchall()
+            if len(linked_threads) != 1:
                 skipped_invalid += 1
                 continue
-            thread_id = str(linked_thread["thread_id"])
+            thread_id = str(linked_threads[0]["thread_id"])
+            thread = conn.execute(
+                "SELECT 1 AS present FROM threads WHERE id=? LIMIT 1",
+                (thread_id,),
+            ).fetchone()
+            if thread is None:
+                skipped_invalid += 1
+                continue
 
             summary_norm = " ".join(summary.lower().split())
             summary_hash = sha256(summary_norm.encode("utf-8")).hexdigest()[:16]
@@ -431,6 +480,8 @@ def sync_failure_capsules() -> dict[str, int]:
                         details = parsed
                 except json.JSONDecodeError:
                     details = {}
+            elif isinstance(raw_details, dict):
+                details = raw_details
 
             error_kind = str(
                 details.get("error_kind")
@@ -537,7 +588,9 @@ def sync_failure_capsules() -> dict[str, int]:
             )
             linked += 1
         summary_payload = {
+            "scanned": scanned,
             "linked": linked,
+            "linkage_count": linked,
             "deduped": deduped,
             "skipped_invalid": skipped_invalid,
         }
@@ -563,7 +616,12 @@ def sync_failure_capsules() -> dict[str, int]:
                 now_iso(),
             ),
         )
-    return {"linked": linked, "deduped": deduped, "skipped_invalid": skipped_invalid}
+    return {
+        "scanned": scanned,
+        "linked": linked,
+        "deduped": deduped,
+        "skipped_invalid": skipped_invalid,
+    }
 
 
 def evaluate_consistency() -> dict[str, object]:

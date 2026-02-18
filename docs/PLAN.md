@@ -131,8 +131,8 @@ Dependencies: M3
 | BK-003 | Foundation + Observability | Unified evolution observability view with trace drill-down | partial | P1 | web_builder | `uv run pytest tests/integration -k governance -v`; manual admin flow validation |
 | BK-004 | Foundation + Observability | Memory denial/redaction event emission contract completion | done | P1 | api_guardian | `uv run pytest tests/unit/test_memory_policy.py -v` |
 | BK-005 | Self-Coding + Release Loop | Self-update artifact schema versioning | done | P0 | coder | `uv run pytest tests/integration -k selfupdate -v` |
-| BK-006 | Self-Coding + Release Loop | Deterministic reconciliation edge-case lock tests + run summary events | partial | P0 | tester | `uv run pytest tests/unit/test_state_store.py -v` |
-| BK-007 | Self-Coding + Release Loop | Test-first gate (failing-test proof + coverage floor + critical-path test requirement) | partial | P0 | tester | `make test-gates`; `uv run pytest tests/integration -k selfupdate -v` |
+| BK-006 | Self-Coding + Release Loop | Deterministic reconciliation edge-case lock tests + run summary events | done | P0 | tester | `uv run pytest tests/unit/test_state_store.py -v`; `uv run pytest tests/unit/test_memory_tasks.py -v` |
+| BK-007 | Self-Coding + Release Loop | Test-first gate (failing-test proof + coverage floor + critical-path test requirement) | partial | P0 | tester | `make test-gates`; `uv run pytest tests/integration/test_selfupdate.py -v`; `uv run pytest tests/unit/test_selfupdate_contracts.py -v` |
 | BK-008 | Self-Coding + Release Loop | PR base-branch enforcement test (`dev` only) | done | P1 | release_ops | `uv run pytest tests/unit/test_github_tasks.py -v` |
 | BK-009 | Self-Coding + Release Loop | Failure remediation scoring uses acceptance/rejection outcomes | done | P1 | researcher | `uv run pytest tests/unit -k failure_capsule -v` |
 | BK-010 | Governance + Safety | Block self-permission escalation edits on agent identity governance fields | partial | P0 | security_reviewer | `uv run pytest tests/integration -k governance -v` |
@@ -141,8 +141,8 @@ Dependencies: M3
 | BK-013 | Governance + Safety | Explicit per-agent memory read/write scope checks across APIs/tasks | partial | P0 | security_reviewer | RBAC integration regressions for memory routes/tasks |
 | BK-014 | Governance + Safety | WhatsApp risky/unknown sender review queue with in-chat approve/deny commands | not_started | P1 | main | webhook + review-flow integration tests |
 | BK-015 | Memory Intelligence + Retrieval | Multi-tier memory lifecycle and archival flow with score-driven migration | done | P1 | planner | `uv run pytest tests/unit -k state_store -v` |
-| BK-016 | Memory Intelligence + Retrieval | Retrieval fusion completion (RRF for vector + FTS5 + filters + tier priors) | partial | P0 | planner | retrieval correctness + latency benchmark and tests |
-| BK-017 | Memory Intelligence + Retrieval | Failure bridge typed mapping + stable dedupe key (`trace_id+phase+summary_hash`) | partial | P1 | planner | unit tests for mapping/dedupe/linkage |
+| BK-016 | Memory Intelligence + Retrieval | Retrieval fusion completion (RRF for vector + FTS5 + filters + tier priors) | done | P0 | planner | `uv run pytest tests/unit/test_hybrid_search.py -v` |
+| BK-017 | Memory Intelligence + Retrieval | Failure bridge typed mapping + stable dedupe key (`trace_id+phase+summary_hash`) | done | P1 | planner | `uv run pytest tests/unit/test_memory_tasks.py -v` |
 | BK-018 | Memory Intelligence + Retrieval | Graph relation extraction confidence/evidence policy completion | partial | P1 | researcher | traversal + relation-extraction tests |
 | BK-019 | Memory Intelligence + Retrieval | Adaptive forgetting/archival calibration harness and threshold tuning | partial | P1 | memory_curator | maintenance/task tests + workload simulation |
 | BK-020 | Memory Intelligence + Retrieval | Consistency evaluator endpoint/UI surface and historical queryability | partial | P1 | planner | API + admin UI tests for reports/filters |
@@ -257,10 +257,28 @@ Dependencies: M3
 4. Remaining tasks discovered during implementation:
    - Add CLI integration assertion that `jarvis ask --json` output remains warning-free under a mocked provider to prevent log-noise regression.
 
-### Packet 2 (next): M2 memory reliability + self-update enforcement
-1. Finish BK-006, BK-007, BK-016, BK-017, BK-021.
-2. Run warn-mode then enforce-mode transition for strict gates.
-3. Validate deterministic ordering, reconciliation summaries, and failure-bridge linkage correctness.
+### Packet 2 (in progress, 2026-02-18): M2 memory reliability + self-update enforcement
+1. Completed in this tranche:
+   - BK-006: deterministic reconciliation counters and ordering edge-case tests.
+   - BK-016: hybrid retrieval fusion with tier priors and deterministic tie-break ordering.
+   - BK-017: failure bridge mismatch/malformed-detail handling and linkage summary assertions.
+2. BK-007 advanced to enforce-capable implementation:
+   - Added test-first gate mode (`warn`/`enforce`) and typed failure taxonomy in self-update apply path.
+   - Added unit/integration coverage for warn/enforce transitions and typed failure codes.
+   - Local default remains warn-friendly.
+3. BK-021 remains partial:
+   - Memory state/admin RBAC integration suites pass.
+   - Remaining: explicit CLI ownership-scope regression for memory export/state commands and any missing WS-vs-HTTP parity assertions for memory surfaces.
+4. Validation evidence executed for this tranche:
+   - `make lint`
+   - `make typecheck`
+   - `uv run pytest tests/unit/test_state_store.py tests/unit/test_hybrid_search.py tests/unit/test_memory_tasks.py tests/unit/test_selfupdate_contracts.py tests/unit/test_cli_test_gates_cmd.py -v`
+   - `uv run pytest tests/integration/test_memory_api_state_surfaces.py tests/integration/test_authorization.py tests/integration/test_selfupdate.py -v`
+   - `make test-gates`
+   - `make docs-check`
+5. Remaining tasks discovered during implementation:
+   - Wire CI merge-time environment defaults to explicit test-gate enforce mode while preserving local warn default.
+   - Add a committed retrieval benchmark artifact/report output path (current benchmark evidence is test-level timing assertion only).
 
 ### Packet 3 (next): M3 productization and governance visibility
 1. Finish BK-010, BK-011, BK-012, BK-013, BK-025, BK-026, BK-036.

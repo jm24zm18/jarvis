@@ -47,3 +47,16 @@ def test_json_output(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     assert '"name"' in out
     assert '"passed"' in out
+
+
+def test_warn_mode_does_not_exit_on_failures() -> None:
+    with patch("jarvis.cli.test_gates.subprocess.run", return_value=_make_completed(1)):
+        run_test_gates(mode="warn")
+
+
+def test_json_output_includes_typed_failure_reason(capsys: pytest.CaptureFixture[str]) -> None:
+    with patch("jarvis.cli.test_gates.subprocess.run", return_value=_make_completed(1)):
+        run_test_gates(json_output=True, mode="warn")
+    out = capsys.readouterr().out
+    assert '"failure_reason"' in out
+    assert '"non_zero_exit"' in out

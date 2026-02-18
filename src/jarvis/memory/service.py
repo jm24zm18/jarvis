@@ -789,8 +789,21 @@ class MemoryService:
         for idx, uid in enumerate(recency_rank):
             scores[uid] = scores.get(uid, 0.0) + 0.20 / (rrf_k + idx + 1)
 
+        tier_prior = {
+            "working": 0.040,
+            "episodic": 0.025,
+            "semantic_longterm": 0.010,
+            "procedural": 0.010,
+        }
+        tier_rank = {
+            "working": 3,
+            "episodic": 2,
+            "semantic_longterm": 1,
+            "procedural": 1,
+        }
+
         filtered: list[dict[str, object]] = []
-        for uid, base_score in sorted(scores.items(), key=lambda item: item[1], reverse=True):
+        for uid, base_score in scores.items():
             row = dict(rows_by_uid.get(uid, {}))
             if not row:
                 continue
@@ -799,23 +812,36 @@ class MemoryService:
             tier = str(row.get("tier") or "working")
             if allowed_tiers and tier not in allowed_tiers:
                 continue
-            prior = (
-                0.05
-                if tier == "procedural"
-                else 0.03
-                if tier == "semantic_longterm"
-                else 0.015
-                if tier == "episodic"
-                else 0.0
-            )
+            prior = tier_prior.get(tier, 0.0)
             combined = base_score + prior
             if combined < min_score * 0.05:
                 continue
             row["score"] = combined
             row["agent_id"] = actor_id
             filtered.append(row)
-            if len(filtered) >= max_k:
-                break
+        def _recency_sort_value(value: object) -> float:
+            try:
+                return datetime.fromisoformat(str(value)).timestamp()
+            except Exception:
+                return 0.0
+
+        def _score_sort_value(value: object) -> float:
+            if isinstance(value, int | float):
+                return float(value)
+            try:
+                return float(str(value))
+            except Exception:
+                return 0.0
+
+        filtered.sort(
+            key=lambda row: (
+                -_score_sort_value(row.get("score")),
+                -tier_rank.get(str(row.get("tier") or "working"), 0),
+                -_recency_sort_value(row.get("last_seen_at")),
+                str(row.get("uid") or ""),
+            )
+        )
+        filtered = filtered[:max_k]
         self._emit_memory_event(
             conn,
             "memory.search.executed",

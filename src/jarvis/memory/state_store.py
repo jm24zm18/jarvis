@@ -331,7 +331,8 @@ class StateStore:
                 "WHEN 'high' THEN 2 "
                 "WHEN 'medium' THEN 1 "
                 "ELSE 0 END DESC, "
-                "last_seen_at DESC "
+                "last_seen_at DESC, "
+                "uid ASC "
                 "LIMIT ?"
             ),
             (thread_id, agent_id, max(0, int(limit))),
