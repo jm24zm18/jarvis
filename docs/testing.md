@@ -23,6 +23,15 @@ uv run pytest tests/unit/test_foo.py -v
 uv run pytest tests/unit/test_foo.py::test_bar -v
 ```
 
+Targeted governance/memory/channel checks:
+
+```bash
+uv run pytest tests/unit/test_memory_policy.py -v
+uv run pytest tests/integration/test_memory_api_state_surfaces.py -v
+uv run pytest tests/integration/test_whatsapp_webhook.py -v
+uv run pytest tests/integration/test_admin_api.py -v
+```
+
 ## CI Test Pipeline
 
 CI workflow `.github/workflows/ci.yml` runs:

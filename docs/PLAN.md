@@ -1,6 +1,7 @@
 # Jarvis Master Execution Plan
 
 **Date:** 2026-02-18
+**Rebaseline:** 2026-02-18 (repo/test evidence alignment pass)
 **Canonical source note:** This file supersedes fragmented plan docs as the execution source of truth.
 
 ## Mission and Operating Model
@@ -41,7 +42,7 @@ Tier flow: `working -> episodic -> semantic/procedural`, with low-importance sta
 
 | Area | implemented | partial | not_started |
 |---|---:|---:|---:|
-| Foundation + Observability | 2 | 4 | 0 |
+| Foundation + Observability | 3 | 3 | 0 |
 | Self-Coding + Release Loop | 3 | 3 | 0 |
 | Governance + Safety | 1 | 4 | 1 |
 | Memory Intelligence + Retrieval | 1 | 7 | 2 |
@@ -86,15 +87,15 @@ Dependencies: M3
 | BK-001 | Foundation + Observability | Ground-truth index dependency edges + freshness CI gate | partial | P0 | planner | `make lint`; `make typecheck`; `uv run pytest tests/unit -k repo_index -v` |
 | BK-002 | Foundation + Observability | Evidence validator required for all mutation-capable flows | partial | P0 | security_reviewer | `uv run pytest tests/unit -k evidence -v`; `uv run pytest tests/integration -k selfupdate -v` |
 | BK-003 | Foundation + Observability | Unified evolution observability view with trace drill-down | partial | P1 | web_builder | `uv run pytest tests/integration -k governance -v`; manual admin flow validation |
-| BK-004 | Foundation + Observability | Memory denial/redaction event emission contract completion | partial | P1 | api_guardian | `uv run pytest tests/unit -k memory_policy -v` |
+| BK-004 | Foundation + Observability | Memory denial/redaction event emission contract completion | done | P1 | api_guardian | `uv run pytest tests/unit/test_memory_policy.py -v` |
 | BK-005 | Self-Coding + Release Loop | Self-update artifact schema versioning | done | P0 | coder | `uv run pytest tests/integration -k selfupdate -v` |
-| BK-006 | Self-Coding + Release Loop | Deterministic reconciliation edge-case lock tests + run summary events | partial | P0 | tester | `uv run pytest tests/unit -k reconcile -v` |
+| BK-006 | Self-Coding + Release Loop | Deterministic reconciliation edge-case lock tests + run summary events | partial | P0 | tester | `uv run pytest tests/unit/test_state_store.py -v` |
 | BK-007 | Self-Coding + Release Loop | Test-first gate (failing-test proof + coverage floor + critical-path test requirement) | partial | P0 | tester | `make test-gates`; `uv run pytest tests/integration -k selfupdate -v` |
-| BK-008 | Self-Coding + Release Loop | PR base-branch enforcement test (`dev` only) | done | P1 | release_ops | `uv run pytest tests/integration -k github_pr_summary -v` |
+| BK-008 | Self-Coding + Release Loop | PR base-branch enforcement test (`dev` only) | done | P1 | release_ops | `uv run pytest tests/unit/test_github_tasks.py -v` |
 | BK-009 | Self-Coding + Release Loop | Failure remediation scoring uses acceptance/rejection outcomes | done | P1 | researcher | `uv run pytest tests/unit -k failure_capsule -v` |
 | BK-010 | Governance + Safety | Block self-permission escalation edits on agent identity governance fields | partial | P0 | security_reviewer | `uv run pytest tests/integration -k governance -v` |
 | BK-011 | Governance + Safety | Self-update deployment gate state machine + typed failure taxonomy | partial | P0 | release_ops | `uv run pytest tests/integration -k selfupdate_apply -v` |
-| BK-012 | Governance + Safety | Memory governance hardening (schema write gates + deny/redaction governance filters) | partial | P0 | security_reviewer | `uv run pytest tests/integration -k memory_governance -v` |
+| BK-012 | Governance + Safety | Memory governance hardening (schema write gates + deny/redaction governance filters) | partial | P0 | security_reviewer | `uv run pytest tests/unit/test_memory_policy.py -v`; `uv run pytest tests/integration/test_memory_api_state_surfaces.py -v` |
 | BK-013 | Governance + Safety | Explicit per-agent memory read/write scope checks across APIs/tasks | partial | P0 | security_reviewer | RBAC integration regressions for memory routes/tasks |
 | BK-014 | Governance + Safety | WhatsApp risky/unknown sender review queue with in-chat approve/deny commands | not_started | P1 | main | webhook + review-flow integration tests |
 | BK-015 | Memory Intelligence + Retrieval | Multi-tier memory lifecycle and archival flow with score-driven migration | done | P1 | planner | `uv run pytest tests/unit -k state_store -v` |
@@ -103,27 +104,34 @@ Dependencies: M3
 | BK-018 | Memory Intelligence + Retrieval | Graph relation extraction confidence/evidence policy completion | partial | P1 | researcher | traversal + relation-extraction tests |
 | BK-019 | Memory Intelligence + Retrieval | Adaptive forgetting/archival calibration harness and threshold tuning | partial | P1 | memory_curator | maintenance/task tests + workload simulation |
 | BK-020 | Memory Intelligence + Retrieval | Consistency evaluator endpoint/UI surface and historical queryability | partial | P1 | planner | API + admin UI tests for reports/filters |
-| BK-021 | Memory Intelligence + Retrieval | Full memory endpoint/CLI/RBAC test suite for new state/review/export surfaces | not_started | P0 | tester | endpoint + CLI + ownership regression tests |
+| BK-021 | Memory Intelligence + Retrieval | Full memory endpoint/CLI/RBAC test suite for new state/review/export surfaces | partial | P0 | tester | `uv run pytest tests/integration/test_memory_api_state_surfaces.py -v`; `uv run pytest tests/integration/test_authorization.py -v` |
 | BK-022 | WhatsApp Channel + Admin UX | Evolution sidecar bootstrap (persistent auth, API key auth, webhook callback) | partial | P0 | api_guardian | container boots; instance QR available; webhook 200 |
-| BK-023 | WhatsApp Channel + Admin UX | WhatsApp channel implementation: text/media/reaction/groups/thread mapping | not_started | P0 | api_guardian | integration tests for text/media/reaction/group payloads |
+| BK-023 | WhatsApp Channel + Admin UX | WhatsApp channel implementation: text/media/reaction/groups/thread mapping | partial | P0 | api_guardian | `uv run pytest tests/integration/test_whatsapp_webhook.py -v`; `uv run pytest tests/unit/test_channel_abstraction.py -v` |
 | BK-024 | WhatsApp Channel + Admin UX | Voice-note pipeline (download, transcribe, memory linkage) | not_started | P0 | api_guardian | voice message integration tests with transcript assertions |
-| BK-025 | WhatsApp Channel + Admin UX | Admin pairing APIs (`status/create/qrcode/pairing-code/disconnect`) + auth/rate limits | not_started | P0 | api_guardian | admin API integration tests |
-| BK-026 | WhatsApp Channel + Admin UX | Admin pairing UI (QR, status polling, connect/disconnect flows) | not_started | P1 | web_builder | UI functional checks + endpoint contract tests |
-| BK-027 | WhatsApp Channel + Admin UX | Webhook auth and payload normalization (`messages.upsert` variants) | not_started | P0 | api_guardian | webhook secret enforcement + variant payload tests |
+| BK-025 | WhatsApp Channel + Admin UX | Admin pairing APIs (`status/create/qrcode/pairing-code/disconnect`) + auth/rate limits | partial | P0 | api_guardian | `uv run pytest tests/integration/test_admin_api.py -v`; `uv run pytest tests/integration/test_authorization.py -v` |
+| BK-026 | WhatsApp Channel + Admin UX | Admin pairing UI (QR, status polling, connect/disconnect flows) | partial | P1 | web_builder | manual UI validation at `/admin/channels` + endpoint contract tests |
+| BK-027 | WhatsApp Channel + Admin UX | Webhook auth and payload normalization (`messages.upsert` variants) | partial | P0 | api_guardian | `uv run pytest tests/integration/test_whatsapp_webhook.py -v` |
 | BK-028 | WhatsApp Channel + Admin UX | WhatsApp security controls (no QR/code leakage, file limits, safe media paths) | not_started | P0 | security_reviewer | log-redaction checks + negative security tests |
 | BK-029 | Documentation + Ops Hardening | Memory Prometheus KPI wiring and docs (`items_count`, `avg_tokens_saved`, `reconciliation_rate`, `hallucination_incidents`) | partial | P1 | release_ops | metric visibility under test flow |
 | BK-030 | Documentation + Ops Hardening | Add rollback/runbook and config docs for new memory tables/tasks/flags | not_started | P1 | release_ops | updates in `docs/runbook.md` and `docs/configuration.md` |
-| BK-031 | Documentation + Ops Hardening | WhatsApp operator docs and troubleshooting coverage | not_started | P1 | release_ops | `docs/channels/whatsapp.md` + UI/troubleshooting docs updated |
-| BK-032 | Documentation + Ops Hardening | API/schema docs for memory routes and conflict-resolution operator flow | not_started | P2 | planner | docs-check and payload schema review |
+| BK-031 | Documentation + Ops Hardening | WhatsApp operator docs and troubleshooting coverage | partial | P1 | release_ops | `docs/channels/whatsapp.md` + `docs/channels/whatsapp-ui.md` updated |
+| BK-032 | Documentation + Ops Hardening | API/schema docs for memory routes and conflict-resolution operator flow | partial | P2 | planner | `docs/api-reference.md` coverage + `make docs-check` |
 | BK-033 | Foundation + Observability | Evolution/governance event contract additions (`evolution.item.*`) | partial | P2 | api_guardian | event schema tests + payload minimum key validation |
-| BK-034 | Governance + Safety | Dependency steward hardening (CVE severity, compatibility bundle, rollback-ready PR context) | partial | P1 | dependency_steward | `uv run pytest tests/unit -k dependency_steward -v` |
-| BK-035 | Governance + Safety | Release-candidate hardening (changelog artifact + runbook evidence) | partial | P1 | release_candidate | `uv run pytest tests/unit -k release_candidate -v` |
+| BK-034 | Governance + Safety | Dependency steward hardening (CVE severity, compatibility bundle, rollback-ready PR context) | partial | P1 | dependency_steward | `uv run pytest tests/unit/test_governance_tasks.py -v` |
+| BK-035 | Governance + Safety | Release-candidate hardening (changelog artifact + runbook evidence) | partial | P1 | release_candidate | `uv run pytest tests/unit/test_governance_tasks.py -v` |
 | BK-036 | Memory Intelligence + Retrieval | Memory admin UI completion (conflicts, tier/archive stats, failure lookup, graph preview) | partial | P1 | web_builder | admin memory page sections visible and populated |
 
 ## Execution Packets
 
+### Packet 0 (completed): Rebaseline + missing test evidence
+1. Re-baselined `docs/PLAN.md` acceptance commands to real test modules.
+2. Added memory policy event/audit contract tests (`tests/unit/test_memory_policy.py`).
+3. Added memory state/review/export RBAC integration suite (`tests/integration/test_memory_api_state_surfaces.py`).
+4. Updated targeted test docs in `docs/testing.md`.
+5. Validation run: targeted tests + `make docs-check` passed.
+
 ### Packet 1 (next): M1 closure + channel ingress baseline
-1. Finish BK-001, BK-002, BK-004, BK-022, BK-027.
+1. Finish BK-001, BK-002, BK-022, BK-027, BK-033.
 2. Add/lock core tests for evidence, memory policy events, webhook auth.
 3. Validate end-to-end inbound path: WhatsApp webhook -> orchestrator -> memory store with auditable events.
 
@@ -150,6 +158,8 @@ Supplemental targeted checks for this plan:
 - `uv run pytest tests/integration/test_whatsapp_webhook.py -v`
 - `uv run pytest tests/integration/test_admin_api.py -v`
 - `uv run pytest tests/unit/test_memory_service.py -v`
+- `uv run pytest tests/integration/test_memory_api_state_surfaces.py -v`
+- `uv run pytest tests/unit/test_memory_policy.py -v`
 
 ## Rollout and Rollback
 

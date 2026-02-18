@@ -146,6 +146,18 @@
     },
     {
       "recipe": [
+        "uv run python scripts/docs_check.py"
+      ],
+      "target": "docs-check"
+    },
+    {
+      "recipe": [
+        "uv run python scripts/generate_api_docs.py"
+      ],
+      "target": "docs-generate"
+    },
+    {
+      "recipe": [
         "uv run jarvis doctor"
       ],
       "target": "doctor"
@@ -260,7 +272,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-18T04:42:13.075804+00:00",
+  "generated_at": "2026-02-18T05:13:25.930261+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
