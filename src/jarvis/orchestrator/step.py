@@ -411,6 +411,13 @@ def _memory_text(payload: dict[str, object]) -> str:
     return json.dumps(redact_payload(payload), ensure_ascii=True, sort_keys=True)
 
 
+def _tool_loop_terminal_fallback_message(trace_id: str) -> str:
+    return (
+        "I completed tool execution but could not synthesize a final summary. "
+        f"Trace: {trace_id}. Review /admin/events for details and retry."
+    )
+
+
 async def run_agent_step(
     conn: sqlite3.Connection,
     router: ProviderRouter,
@@ -724,6 +731,8 @@ async def run_agent_step(
     lane = "primary"
     primary_error: str | None = None
     final_text = ""
+    tool_iteration_exhausted = False
+    degraded_reason: str | None = None
     for step_idx in range(MAX_TOOL_ITERATIONS + 1):
         if notify_fn is not None:
             notify_fn("model.run.start", {"iteration": step_idx})
@@ -901,7 +910,10 @@ async def run_agent_step(
         )
         final_text = _strip_control_tokens(_enforce_identity_policy(stripped_text))
 
-        if not parsed_tool_calls or step_idx >= MAX_TOOL_ITERATIONS:
+        if not parsed_tool_calls:
+            break
+        if step_idx >= MAX_TOOL_ITERATIONS:
+            tool_iteration_exhausted = True
             break
 
         convo.append({"role": "assistant", "content": stripped_text})
@@ -1025,12 +1037,17 @@ async def run_agent_step(
                 )
             convo.append({"role": "user", "content": f"[tool_result] {payload}"})
 
-    if lane == "fallback" and final_text.strip() == PLACEHOLDER_RESPONSE:
+    if final_text.strip() == PLACEHOLDER_RESPONSE or tool_iteration_exhausted:
         for retry_idx in range(FALLBACK_ONLY_RETRIES):
             synthetic_iteration = MAX_TOOL_ITERATIONS + 1 + retry_idx
             start_payload: dict[str, object] = {
                 "iteration": synthetic_iteration,
-                "fallback_only": True,
+                "terminal_synthesis": True,
+                "reason": (
+                    "tool_loop_exhausted"
+                    if tool_iteration_exhausted
+                    else "placeholder_response"
+                ),
             }
             if notify_fn is not None:
                 notify_fn("model.run.start", start_payload)
@@ -1058,7 +1075,7 @@ async def run_agent_step(
             except ProviderError as exc:
                 retry_error_payload: dict[str, object] = {
                     "iteration": synthetic_iteration,
-                    "fallback_only": True,
+                    "terminal_synthesis": True,
                     "error": str(exc),
                 }
                 retry_error_payload.update(_extract_primary_failure_fields(str(exc)))
@@ -1079,13 +1096,14 @@ async def run_agent_step(
                         payload_redacted_json=json.dumps(redact_payload(retry_error_payload)),
                     ),
                 )
-                final_text = DEGRADED_RESPONSE
+                final_text = PLACEHOLDER_RESPONSE
+                degraded_reason = "provider_error_terminal_synthesis"
                 lane = "degraded"
                 break
             run_end_payload = {
                 "iteration": synthetic_iteration,
                 "lane": retry_lane,
-                "fallback_only": True,
+                "terminal_synthesis": True,
             }
             if retry_primary_error:
                 run_end_payload["primary_error"] = retry_primary_error[:500]
@@ -1110,7 +1128,7 @@ async def run_agent_step(
             if retry_lane == "fallback":
                 fallback_retry_payload: dict[str, object] = {
                     "iteration": synthetic_iteration,
-                    "fallback_only": True,
+                    "terminal_synthesis": True,
                 }
                 if retry_primary_error:
                     fallback_retry_payload["primary_error"] = retry_primary_error[:500]
@@ -1152,7 +1170,7 @@ async def run_agent_step(
             retry_thought_payload: dict[str, object] = {
                 "iteration": synthetic_iteration,
                 "lane": retry_lane,
-                "fallback_only": True,
+                "terminal_synthesis": True,
                 "text": retry_reasoning or _strip_control_tokens(retry_resp.text),
                 "thought_source": (
                     "provider_reasoning"
@@ -1216,9 +1234,20 @@ async def run_agent_step(
                 break
 
     if final_text.strip() == PLACEHOLDER_RESPONSE:
-        final_text = DEGRADED_RESPONSE
+        reason = (
+            degraded_reason
+            or (
+                "placeholder_response_after_tool_loop"
+                if tool_iteration_exhausted
+                else "placeholder_response_after_terminal_synthesis"
+            )
+        )
+        if reason == "placeholder_response_after_tool_loop":
+            final_text = _tool_loop_terminal_fallback_message(trace_id)
+        else:
+            final_text = DEGRADED_RESPONSE
         degraded_payload: dict[str, object] = {
-            "reason": "placeholder_response",
+            "reason": reason,
             "actor_id": actor_id,
         }
         if notify_fn is not None:

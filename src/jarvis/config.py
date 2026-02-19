@@ -251,7 +251,7 @@ class Settings(BaseSettings):
         alias="GITHUB_ISSUE_LABELS_FEATURE",
         default="jarvis,feature-request",
     )
-    exec_host_timeout_max_seconds: int = Field(alias="EXEC_HOST_TIMEOUT_MAX_SECONDS", default=120)
+    exec_host_timeout_max_seconds: int = Field(alias="EXEC_HOST_TIMEOUT_MAX_SECONDS", default=600)
     exec_host_log_dir: str = Field(alias="EXEC_HOST_LOG_DIR", default="/var/lib/agent/exec")
     exec_host_env_allowlist: str = Field(
         alias="EXEC_HOST_ENV_ALLOWLIST", default="PATH,HOME,LANG,LC_ALL,TZ"

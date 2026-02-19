@@ -4,6 +4,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from jarvis.agents.loader import get_all_agent_ids
 from jarvis.commands.handlers import parse_command
@@ -398,14 +399,16 @@ async def maybe_execute_command(
             status_filter = args[1].strip().lower() if len(args) >= 2 else "open"
             if status_filter not in {"open", "allowed", "denied"}:
                 status_filter = "open"
-            items = list_whatsapp_sender_reviews(conn, status=status_filter, limit=20)
-            return json.dumps({"status": status_filter, "items": items})
+            review_items = list_whatsapp_sender_reviews(conn, status=status_filter, limit=20)
+            return json.dumps({"status": status_filter, "items": review_items})
         if action in {"allow", "deny"} and len(args) >= 2:
             review_id = args[1].strip()
             note = " ".join(args[2:]).strip()
             if not review_id:
                 return "usage: /wa-review allow|deny <queue_id> [reason]"
-            decision = "allow" if action == "allow" else "deny"
+            decision: Literal["allow", "deny"] = (
+                "allow" if action == "allow" else "deny"
+            )
             resolved = resolve_whatsapp_sender_review(
                 conn,
                 review_id=review_id,
