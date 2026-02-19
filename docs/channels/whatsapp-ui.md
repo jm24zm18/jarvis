@@ -17,3 +17,5 @@ Path: `/admin/channels`
 - Empty QR: ensure the instance exists and Evolution sidecar is reachable.
 - 401 webhook errors: confirm `X-WhatsApp-Secret` matches `WHATSAPP_WEBHOOK_SECRET`.
 - Pairing code or QR should never appear in persisted event payloads; validate with redacted event views.
+- `review_required` sender queue growth: inspect `/api/v1/channels/whatsapp/review-queue` and resolve pending allow/deny decisions.
+- voice/media degraded markers (`[voice note unavailable]`, `[media blocked]`): inspect `channel.inbound.degraded` event reason and align media/voice env gates.

@@ -96,6 +96,43 @@
    - `memory_reconciliation_rate`
    - `memory_hallucination_incidents`
 
+### Memory Conflict Resolution Operator Flow
+
+1. Fetch open conflicts:
+   - `curl -sS -H "Authorization: Bearer <admin-token>" "http://127.0.0.1:8000/api/v1/memory/state/review/conflicts?limit=50"`
+2. For each item, capture operator evidence:
+   - queue item `id`
+   - `uid`
+   - `thread_id`
+   - `agent_id`
+   - `reason`
+   - selected resolution rationale
+3. Resolve with explicit note:
+   - `curl -sS -X POST -H "Authorization: Bearer <admin-token>" -H "Content-Type: application/json" "http://127.0.0.1:8000/api/v1/memory/state/review/<uid>/resolve" -d '{"resolution":"<operator-note>"}'`
+4. Verify queue drain for that `uid`:
+   - `curl -sS -H "Authorization: Bearer <admin-token>" "http://127.0.0.1:8000/api/v1/memory/state/review/conflicts?limit=50"`
+5. If conflict volume spikes unexpectedly, suspend mutation-heavy workflows and run:
+   - `uv run jarvis memory review --conflicts --limit 50`
+   - `uv run jarvis maintenance run`
+
+### Memory Rollback and Recovery
+
+1. Stop write-heavy jobs:
+   - disable maintenance/reconciliation toggles in `.env` (`MAINTENANCE_ENABLED=0`, `MEMORY_TIERS_ENABLED=0`, `MEMORY_IMPORTANCE_ENABLED=0`) and restart API.
+2. Preserve forensic state:
+   - snapshot DB file before changes (`cp /tmp/jarvis.db /tmp/jarvis.db.pre-memory-rollback`).
+3. Restore last known-good DB snapshot when required:
+   - `RESTORE_READYZ_URL=http://127.0.0.1:8000/readyz sudo ./deploy/restore_db.sh <snapshot.db|snapshot.db.gz> [db_path]`
+4. Re-run migrations and readiness:
+   - `make migrate`
+   - `curl -fsS http://127.0.0.1:8000/readyz`
+5. Re-enable memory toggles in stages:
+   - first `MEMORY_REVIEW_QUEUE_ENABLED=1` / `MEMORY_FAILURE_BRIDGE_ENABLED=1`
+   - then `MEMORY_TIERS_ENABLED=1` / `MEMORY_IMPORTANCE_ENABLED=1`
+   - finally `MAINTENANCE_ENABLED=1`
+6. Validate post-rollback memory surfaces:
+   - `uv run pytest tests/integration/test_memory_api_state_surfaces.py -v`
+
 ## WhatsApp Media and Voice Ops
 
 1. Confirm media safety config:
@@ -122,6 +159,44 @@
    - `voice_transcription_timeout`
 4. Media rows are persisted in `whatsapp_media`; verify linkage by thread/message when debugging ingestion.
 
+### WhatsApp Troubleshooting Decision Tree
+
+1. If admin status endpoint fails:
+   - check `GET /api/v1/channels/whatsapp/status`
+   - if `evolution_api_disabled`, set `EVOLUTION_API_URL` and restart API.
+2. If webhook calls return `401`:
+   - verify `X-WhatsApp-Secret` equals `WHATSAPP_WEBHOOK_SECRET`.
+3. If no inbound messages appear:
+   - confirm callback contract from status payload (`callback.enabled`, `callback.configured`, `callback.events`).
+   - validate Evolution is sending `messages.upsert`.
+4. If inbound is accepted but no message persisted:
+   - inspect sender review mode (`WHATSAPP_REVIEW_MODE`, `WHATSAPP_ALLOWED_SENDERS`).
+   - check review queue APIs and resolve pending sender decisions.
+5. If media/voice messages are degraded:
+   - inspect latest `channel.inbound.degraded` reasons and map to config:
+     - `media_host_denied` -> `WHATSAPP_MEDIA_ALLOWED_HOSTS`
+     - `media_mime_denied` -> `WHATSAPP_MEDIA_ALLOWED_MIME_PREFIXES`
+     - `media_size_exceeded` -> `WHATSAPP_MEDIA_MAX_BYTES`
+     - `voice_transcription_timeout` -> `WHATSAPP_VOICE_TRANSCRIBE_TIMEOUT_SECONDS`
+     - `voice_transcription_backend_unavailable` -> backend/runtime setup
+6. If pairing appears stuck:
+   - recreate/disconnect instance from admin channel APIs
+   - regenerate QR / pairing code
+   - confirm sidecar reachability and credentials (`EVOLUTION_API_URL`, `EVOLUTION_API_KEY`)
+
+## Outage-Class Diagnostics Evidence
+
+Deterministic outage classes used in doctor/CLI JSON error reporting:
+- `dns_resolution`
+- `timeout`
+- `network_unreachable`
+- `provider_unavailable`
+
+Targeted evidence commands:
+- `uv run pytest tests/unit/test_cli_checks.py -q`
+- `uv run pytest tests/unit/test_cli_chat.py -q`
+- `uv run jarvis doctor --json`
+
 ## Secret Rotation and Scan
 
 1. Rotate compromised or leaked local credentials at the provider:
@@ -133,6 +208,28 @@
    - `make secret-scan`
 4. Confirm no findings and restart API/web services.
 5. Re-run critical auth checks (`/api/v1/auth/login`, `/api/v1/auth/me`, WebSocket `/ws`).
+
+### Operator-Owned Rotation Checklist (External Dependency)
+
+Repo-side automation is complete; execution remains operator-owned. Capture all artifacts below when rotation is performed:
+
+1. Rotate and record timestamped evidence for:
+   - `GOOGLE_OAUTH_CLIENT_SECRET`
+   - `GOOGLE_OAUTH_REFRESH_TOKEN`
+   - `GITHUB_TOKEN`
+   - `GITHUB_WEBHOOK_SECRET`
+   - `WHATSAPP_WEBHOOK_SECRET`
+2. Save evidence artifacts (names required):
+   - `docs/reports/ops/credential-rotation-YYYYMMDD.md`
+   - `docs/reports/ops/credential-rotation-YYYYMMDD-env-diff.txt`
+   - `docs/reports/ops/credential-rotation-YYYYMMDD-secret-scan.txt`
+3. Required command transcript in evidence:
+   - `make secret-scan`
+   - `uv run jarvis doctor --json`
+   - `curl -fsS http://127.0.0.1:8000/readyz`
+4. Attach redacted proof:
+   - old credential values are not included
+   - only key names, rotation timestamps, and success/health outputs are retained.
 
 ## Scheduler Check
 

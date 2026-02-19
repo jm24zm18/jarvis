@@ -352,6 +352,8 @@ def evolution_items(
     status: str | None = Query(default=None),
     trace_id: str | None = Query(default=None),
     thread_id: str | None = Query(default=None),
+    from_ts: str | None = Query(default=None, alias="from"),
+    to_ts: str | None = Query(default=None, alias="to"),
     limit: int = Query(default=200, ge=1, le=1000),
     ctx: UserContext = Depends(require_admin),  # noqa: B008
 ) -> dict[str, object]:
@@ -362,6 +364,8 @@ def evolution_items(
             status=status.strip() if isinstance(status, str) else None,
             trace_id=trace_id.strip() if isinstance(trace_id, str) else None,
             thread_id=thread_id.strip() if isinstance(thread_id, str) else None,
+            from_ts=from_ts.strip() if isinstance(from_ts, str) else None,
+            to_ts=to_ts.strip() if isinstance(to_ts, str) else None,
             limit=limit,
         )
     return {
@@ -370,6 +374,8 @@ def evolution_items(
             "status": status or "",
             "trace_id": trace_id or "",
             "thread_id": thread_id or "",
+            "from": from_ts or "",
+            "to": to_ts or "",
             "limit": limit,
         },
     }

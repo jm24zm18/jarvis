@@ -300,7 +300,7 @@ def _classify_http_error(exc: Exception, base_url: str) -> tuple[str, str]:
             )
         if "connection refused" in text or "actively refused" in text:
             return (
-                "connection_refused",
+                "provider_unavailable",
                 f"Service refused connection. {service_hint}",
             )
         if "network is unreachable" in text or "no route to host" in text:
@@ -310,13 +310,13 @@ def _classify_http_error(exc: Exception, base_url: str) -> tuple[str, str]:
                 "Validate environment network policy and host routing.",
             )
         return (
-            "connect_error",
+            "provider_unavailable",
             f"Unable to establish TCP connection. {service_hint}",
         )
 
     if isinstance(exc, httpx.NetworkError):
         return (
-            "network_error",
+            "provider_unavailable",
             (
                 f"Network error while contacting {base_url}. "
                 "Check sandbox/network/proxy configuration."

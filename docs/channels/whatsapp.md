@@ -74,3 +74,33 @@ If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path f
 - Queued inbound emits `channel.inbound.review_required` and returns `{"accepted": true, "queued_for_review": true}` without message insertion.
 - Previously denied senders emit `channel.inbound.blocked` and return `{"accepted": true, "blocked_sender": true}`.
 - In-chat review commands (admin WhatsApp IDs only): `/wa-review list [open|allowed|denied]`, `/wa-review allow <queue_id> [reason]`, `/wa-review deny <queue_id> [reason]`.
+
+## Troubleshooting Decision Tree
+
+1. `GET /api/v1/channels/whatsapp/status` fails or returns disabled:
+   - set `EVOLUTION_API_URL` and `EVOLUTION_API_KEY`.
+   - restart API process.
+2. Pairing/QR actions fail:
+   - verify instance exists (`POST /api/v1/channels/whatsapp/create` if needed).
+   - retry `GET /api/v1/channels/whatsapp/qrcode` or `POST /api/v1/channels/whatsapp/pairing-code`.
+3. Webhook receives `401 invalid_webhook_secret`:
+   - ensure Evolution sends `X-WhatsApp-Secret` matching `WHATSAPP_WEBHOOK_SECRET`.
+4. Inbound appears accepted but no thread message created:
+   - check sender review mode (`WHATSAPP_REVIEW_MODE`, `WHATSAPP_ALLOWED_SENDERS`).
+   - resolve queue item via review-queue APIs.
+5. Media/voice degradation:
+   - inspect `channel.inbound.degraded` reason and map to config gates:
+     - `media_host_denied` -> `WHATSAPP_MEDIA_ALLOWED_HOSTS`
+     - `media_mime_denied` -> `WHATSAPP_MEDIA_ALLOWED_MIME_PREFIXES`
+     - `media_size_exceeded` -> `WHATSAPP_MEDIA_MAX_BYTES`
+     - `voice_transcription_timeout` -> `WHATSAPP_VOICE_TRANSCRIBE_TIMEOUT_SECONDS`
+     - `voice_transcription_backend_unavailable` -> backend/runtime dependency.
+
+## Rollback
+
+1. Disable sidecar usage quickly by clearing `EVOLUTION_API_URL` and restarting API.
+2. Keep webhook endpoint active to avoid hard failures while sidecar is unavailable.
+3. Use admin disconnect endpoint:
+   - `POST /api/v1/channels/whatsapp/disconnect`
+4. Validate fallback send path and API readiness:
+   - `curl -fsS http://127.0.0.1:8000/readyz`

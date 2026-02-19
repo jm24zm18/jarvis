@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -22,8 +23,20 @@ function asNumber(value: unknown): number {
   return typeof value === "number" ? value : 0;
 }
 
+function toIsoOrUndefined(value: string): string | undefined {
+  if (!value.trim()) return undefined;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return parsed.toISOString();
+}
+
 export default function AdminGovernancePage() {
   const queryClient = useQueryClient();
+  const [evolutionStatus, setEvolutionStatus] = useState("");
+  const [evolutionTraceId, setEvolutionTraceId] = useState("");
+  const [evolutionFrom, setEvolutionFrom] = useState("");
+  const [evolutionTo, setEvolutionTo] = useState("");
+
   const fitness = useQuery({ queryKey: ["governance-fitness-latest"], queryFn: latestFitness });
   const history = useQuery({ queryKey: ["governance-fitness-history"], queryFn: () => fitnessHistory(8) });
   const slo = useQuery({ queryKey: ["governance-slo"], queryFn: governanceSlo });
@@ -35,8 +48,15 @@ export default function AdminGovernancePage() {
     queryFn: () => governanceDecisionTimeline({ limit: 25 }),
   });
   const evolutionItems = useQuery({
-    queryKey: ["governance-evolution-items"],
-    queryFn: () => governanceEvolutionItems({ limit: 8 }),
+    queryKey: ["governance-evolution-items", evolutionStatus, evolutionTraceId, evolutionFrom, evolutionTo],
+    queryFn: () =>
+      governanceEvolutionItems({
+        status: evolutionStatus || undefined,
+        trace_id: evolutionTraceId || undefined,
+        from: toIsoOrUndefined(evolutionFrom),
+        to: toIsoOrUndefined(evolutionTo),
+        limit: 25,
+      }),
   });
   const memoryConsistency = useQuery({
     queryKey: ["governance-memory-consistency"],
@@ -276,6 +296,36 @@ export default function AdminGovernancePage() {
       </div>
 
       <Card className="mt-6" header={<h3 className="font-display text-base text-[var(--text-primary)]">Evolution Items</h3>}>
+        <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-4">
+          <select
+            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            value={evolutionStatus}
+            onChange={(event) => setEvolutionStatus(event.target.value)}
+          >
+            <option value="">All statuses</option>
+            <option value="started">started</option>
+            <option value="verified">verified</option>
+            <option value="blocked">blocked</option>
+          </select>
+          <input
+            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            placeholder="Filter trace_id"
+            value={evolutionTraceId}
+            onChange={(event) => setEvolutionTraceId(event.target.value)}
+          />
+          <input
+            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            type="datetime-local"
+            value={evolutionFrom}
+            onChange={(event) => setEvolutionFrom(event.target.value)}
+          />
+          <input
+            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            type="datetime-local"
+            value={evolutionTo}
+            onChange={(event) => setEvolutionTo(event.target.value)}
+          />
+        </div>
         {evolutionItems.isLoading ? (
           <p className="text-sm text-[var(--text-muted)]">Loading evolution items...</p>
         ) : (evolutionItems.data?.items ?? []).length === 0 ? (
@@ -285,7 +335,7 @@ export default function AdminGovernancePage() {
             {(evolutionItems.data?.items ?? []).map((item) => (
               <li key={item.item_id} className="flex items-center justify-between gap-2">
                 <span>
-                  {item.item_id} • {item.status}
+                  {item.item_id} • {item.status} • {item.updated_at}
                 </span>
                 <Link
                   className="rounded border border-[var(--border-default)] px-2 py-0.5 text-xs hover:bg-[var(--bg-mist)]"

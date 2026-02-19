@@ -869,7 +869,48 @@ def test_evolution_items_status_flow_and_timeline() -> None:
     items = listing.json()["items"]
     assert items
     assert items[0]["id"] == "evo_item_1"
+    assert items[0]["item_id"] == "evo_item_1"
     assert items[0]["status"] == "verified"
+    assert "span_id" in items[0]
+    assert str(items[0]["span_id"]).startswith("spn_")
+
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE evolution_items SET updated_at=? WHERE id=?",
+            ("2025-01-01T00:00:00+00:00", "evo_item_1"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO evolution_items("
+                "id, trace_id, thread_id, status, evidence_refs_json, result_json, "
+                "updated_by, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                "evo_item_1_recent",
+                "trc_evo_item_1_recent",
+                None,
+                "started",
+                "[]",
+                "{}",
+                str(admin["user_id"]),
+                "2026-02-19T08:00:00+00:00",
+                "2026-02-19T08:00:00+00:00",
+            ),
+        )
+
+    from_to_listing = client.get(
+        "/api/v1/governance/evolution/items",
+        params={
+            "from": "2026-02-19T00:00:00+00:00",
+            "to": "2026-02-20T00:00:00+00:00",
+        },
+        headers=headers,
+    )
+    assert from_to_listing.status_code == 200
+    filtered_ids = {str(item["id"]) for item in from_to_listing.json()["items"]}
+    assert "evo_item_1_recent" in filtered_ids
+    assert "evo_item_1" not in filtered_ids
 
     timeline = client.get(
         "/api/v1/governance/decision-timeline?trace_id=trc_evo_item_1",

@@ -308,12 +308,16 @@ export const governanceEvolutionItems = (params?: {
   status?: string;
   trace_id?: string;
   thread_id?: string;
+  from?: string;
+  to?: string;
   limit?: number;
 }) => {
   const qs = new URLSearchParams();
   if (params?.status) qs.set("status", params.status);
   if (params?.trace_id) qs.set("trace_id", params.trace_id);
   if (params?.thread_id) qs.set("thread_id", params.thread_id);
+  if (params?.from) qs.set("from", params.from);
+  if (params?.to) qs.set("to", params.to);
   if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return apiFetch<{ items: EvolutionItem[]; filters: Record<string, unknown> }>(

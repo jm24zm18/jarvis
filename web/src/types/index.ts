@@ -268,8 +268,10 @@ export interface GovernanceSloHistoryItem {
 }
 
 export interface EvolutionItem {
+  id: string;
   item_id: string;
   trace_id: string;
+  span_id: string;
   thread_id?: string | null;
   status: string;
   evidence_refs?: string[];

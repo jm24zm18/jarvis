@@ -116,6 +116,21 @@ Source of truth: `src/jarvis/config.py`.
 | `OLLAMA_EMBED_MODEL` | str | `nomic-embed-text` | Embedding model. |
 | `MEMORY_EMBED_DIMS` | int | `768` | Embedding dimensions. |
 | `SQLITE_VEC_EXTENSION_PATH` | str | `` | Optional sqlite-vec extension path. |
+| `STATE_EXTRACTION_ENABLED` | int | `1` | Enable state extraction pipeline writes to `state_items`. |
+| `STATE_EXTRACTION_MAX_MESSAGES` | int | `20` | Message window used for state extraction candidates. |
+| `STATE_EXTRACTION_MERGE_THRESHOLD` | float | `0.92` | Similarity threshold for state merge decisions. |
+| `STATE_EXTRACTION_CONFLICT_THRESHOLD` | float | `0.85` | Similarity threshold for conflict queue insertion. |
+| `STATE_EXTRACTION_TIMEOUT_SECONDS` | int | `15` | Timeout for state extraction model operations. |
+| `STATE_MAX_ACTIVE_ITEMS` | int | `40` | Max active state items maintained per scope before archival pressure. |
+| `MEMORY_SECRET_SCAN_ENABLED` | int | `1` | Enable secret-pattern scanning before persistence. |
+| `MEMORY_PII_REDACT_MODE` | str | `mask` | PII handling mode for memory text persistence. |
+| `MEMORY_RETENTION_DAYS` | int | `180` | Retention horizon for memory maintenance/archival decisions. |
+| `MEMORY_TIERS_ENABLED` | int | `0` | Enable tiered memory lifecycle (`working/episodic/semantic`). |
+| `MEMORY_IMPORTANCE_ENABLED` | int | `0` | Enable score-based promotion/demotion decisions. |
+| `MEMORY_GRAPH_ENABLED` | int | `0` | Enable graph relation extraction and traversal surfaces. |
+| `MEMORY_REVIEW_QUEUE_ENABLED` | int | `1` | Enable conflict queue generation in `memory_review_queue`. |
+| `MEMORY_FAILURE_BRIDGE_ENABLED` | int | `1` | Enable failure capsule bridge into state memory. |
+| `MEMORY_SENTENCE_TRANSFORMERS_MODEL` | str | `all-MiniLM-L6-v2` | Sentence-transformers model used by memory similarity operations. |
 | `SEARXNG_BASE_URL` | str | `http://localhost:8080` | SearXNG base URL. |
 | `SEARXNG_API_KEY` | str | `` | SearXNG API key. |
 | `SEARXNG_API_KEY_HEADER` | str | `X-API-Key` | SearXNG API key header name. |

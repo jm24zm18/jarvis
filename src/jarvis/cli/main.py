@@ -53,8 +53,9 @@ def _classify_cli_error(message: str) -> tuple[str, str]:
         )
     if "connection refused" in text:
         return (
-            "connection_refused",
-            "Provider/API refused the connection. Verify service is running and URL is correct.",
+            "provider_unavailable",
+            "Provider/API is unavailable or refusing connections. "
+            "Verify service is running and URL is correct.",
         )
     if "network is unreachable" in text or "no route to host" in text:
         return (
@@ -66,7 +67,7 @@ def _classify_cli_error(message: str) -> tuple[str, str]:
             "timeout",
             "Request timed out. Verify service health and connectivity.",
         )
-    return ("agent_unavailable", message)
+    return ("provider_unavailable", message)
 
 
 @cli.command("gemini-login")

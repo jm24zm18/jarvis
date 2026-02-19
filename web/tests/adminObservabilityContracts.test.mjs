@@ -20,6 +20,9 @@ test("governance page includes evolution items and trace drill-down links", () =
   assert.match(governanceSource, /Evolution Items/);
   assert.match(governanceSource, /Open Trace/);
   assert.match(governanceSource, /\/admin\/events\?/);
+  assert.match(governanceSource, /All statuses/);
+  assert.match(governanceSource, /Filter trace_id/);
+  assert.match(governanceSource, /type="datetime-local"/);
 });
 
 test("events page hydrates filters and trace selection from URL search params", () => {
@@ -37,4 +40,6 @@ test("self-update page exposes direct trace handoff to events page", () => {
 test("api endpoints include governance evolution-items client", () => {
   assert.match(apiSource, /export const governanceEvolutionItems/);
   assert.match(apiSource, /\/api\/v1\/governance\/evolution\/items/);
+  assert.match(apiSource, /qs\.set\("from"/);
+  assert.match(apiSource, /qs\.set\("to"/);
 });

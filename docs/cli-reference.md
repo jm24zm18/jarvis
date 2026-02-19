@@ -57,6 +57,22 @@ uv run jarvis skill list
 - DB migrations should be current (`make migrate`).
 - For `gemini-login`, environment must include Gemini provider config in `.env`.
 
+## Diagnostics Error Contract
+
+`jarvis ask --json` and doctor HTTP checks classify network/provider outages into deterministic codes:
+- `dns_resolution`
+- `timeout`
+- `network_unreachable`
+- `provider_unavailable`
+
+Use targeted evidence checks:
+
+```bash
+uv run pytest tests/unit/test_cli_checks.py -q
+uv run pytest tests/unit/test_cli_chat.py -q
+uv run jarvis doctor --json
+```
+
 ## Related Docs
 
 - `docs/getting-started.md`

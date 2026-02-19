@@ -1246,7 +1246,12 @@ def update_remediation_confidence(
 def get_evolution_item(conn: sqlite3.Connection, item_id: str) -> dict[str, object] | None:
     row = conn.execute(
         (
-            "SELECT id, trace_id, thread_id, status, evidence_refs_json, result_json, "
+            "SELECT id, trace_id, "
+            "(SELECT e.span_id FROM events e "
+            " WHERE e.trace_id=evolution_items.trace_id "
+            "   AND e.event_type LIKE 'evolution.item.%' "
+            " ORDER BY e.created_at DESC LIMIT 1) AS span_id, "
+            "thread_id, status, evidence_refs_json, result_json, "
             "updated_by, created_at, updated_at "
             "FROM evolution_items WHERE id=? LIMIT 1"
         ),
@@ -1268,7 +1273,9 @@ def get_evolution_item(conn: sqlite3.Connection, item_id: str) -> dict[str, obje
         result = {}
     return {
         "id": str(row["id"]),
+        "item_id": str(row["id"]),
         "trace_id": str(row["trace_id"]),
+        "span_id": str(row["span_id"]) if row["span_id"] is not None else "",
         "thread_id": str(row["thread_id"]) if row["thread_id"] is not None else "",
         "status": str(row["status"]),
         "evidence_refs": [str(item) for item in evidence_refs if isinstance(item, str)],
@@ -1322,6 +1329,8 @@ def list_evolution_items(
     status: str | None = None,
     trace_id: str | None = None,
     thread_id: str | None = None,
+    from_ts: str | None = None,
+    to_ts: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, object]]:
     filters: list[str] = []
@@ -1335,10 +1344,21 @@ def list_evolution_items(
     if thread_id:
         filters.append("thread_id=?")
         params.append(thread_id)
+    if from_ts:
+        filters.append("updated_at>=?")
+        params.append(from_ts)
+    if to_ts:
+        filters.append("updated_at<=?")
+        params.append(to_ts)
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     rows = conn.execute(
         (
-            "SELECT id, trace_id, thread_id, status, evidence_refs_json, result_json, "
+            "SELECT id, trace_id, "
+            "(SELECT e.span_id FROM events e "
+            " WHERE e.trace_id=evolution_items.trace_id "
+            "   AND e.event_type LIKE 'evolution.item.%' "
+            " ORDER BY e.created_at DESC LIMIT 1) AS span_id, "
+            "thread_id, status, evidence_refs_json, result_json, "
             "updated_by, created_at, updated_at "
             f"FROM evolution_items {where} ORDER BY updated_at DESC LIMIT ?"
         ),
@@ -1361,7 +1381,9 @@ def list_evolution_items(
         items.append(
             {
                 "id": str(row["id"]),
+                "item_id": str(row["id"]),
                 "trace_id": str(row["trace_id"]),
+                "span_id": str(row["span_id"]) if row["span_id"] is not None else "",
                 "thread_id": str(row["thread_id"]) if row["thread_id"] is not None else "",
                 "status": str(row["status"]),
                 "evidence_refs": [str(item) for item in evidence_refs if isinstance(item, str)],
