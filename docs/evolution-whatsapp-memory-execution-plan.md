@@ -115,3 +115,11 @@ Complete the remaining work after the initial Evolution WhatsApp migration and m
     - admin APIs for listing and status transitions.
 - Pending before closure:
   - Run full gate evidence (`make lint`, `make typecheck`, `make test-gates`, `make docs-check`) and attach outputs.
+
+## Execution Update (2026-02-19)
+- Completed:
+  - Added explicit log-capture assertion proving QR/pairing secrets are redacted in persisted webhook batch events (`tests/integration/test_whatsapp_webhook.py`).
+  - Added self-update governance guardrail coverage for identity-frontmatter escalation keys (`tests/unit/test_selfupdate_pipeline.py`, `tests/integration/test_selfupdate.py`).
+  - Added frontend admin workflow contract tests for memory review/resolve + filtered consistency and channel pairing/QR controls (`web/tests/adminMemoryContracts.test.mjs`, `web/tests/adminChannelsContracts.test.mjs`).
+- Remaining:
+  - None for this execution-plan scope.

@@ -266,3 +266,15 @@ export interface GovernanceSloHistoryItem {
   reasons: string[];
   detail: Record<string, unknown>;
 }
+
+export interface EvolutionItem {
+  item_id: string;
+  trace_id: string;
+  thread_id?: string | null;
+  status: string;
+  evidence_refs?: string[];
+  result?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  updated_by: string;
+}

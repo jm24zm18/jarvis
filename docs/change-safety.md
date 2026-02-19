@@ -9,6 +9,9 @@
 - ID format prefixes are stable (`src/jarvis/ids.py`).
 - Self-update evidence packets must include `file_refs`, `line_refs`, `policy_refs`, and `invariant_checks`.
 - Self-update validation must preserve deterministic replay from the captured `baseline_ref`.
+- Self-update propose path must reject governance-key mutations in `agents/*/identity.md` (`allowed_tools`, `risk_tier`, `max_actions_per_step`, `allowed_paths`, `can_request_privileged_change`).
+- Persisted webhook/event logs must redact QR and pairing-code fields in `payload_redacted_json`.
+- Memory state reads/writes must enforce thread-scoped active-agent boundaries and emit governance denials on blocked mutation attempts.
 
 ## High-Risk Files
 

@@ -13,7 +13,8 @@ import httpx
 
 from jarvis.config import get_settings
 from jarvis.ids import new_id
-from jarvis.memory.policy import apply_memory_policy
+from jarvis.memory.policy import apply_memory_policy, record_memory_governance_decision
+from jarvis.memory.scope import can_agent_access_thread_memory, is_known_agent, normalize_agent_id
 from jarvis.memory.state_store import StateStore
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,24 @@ class MemoryService:
     EVENT_VEC_INDEX_MAP_TABLE = "event_vec_index_map"
     BACKFILL_BATCH_SIZE = 200
     DEFAULT_CHUNK_SIZE = 8192
+    _MESSAGE_LINKED_SOURCES = frozenset({"agent.step.end", "command.executed", "onboarding.step"})
+
+    @staticmethod
+    def _memory_write_schema_ok(metadata: dict[str, object] | None) -> tuple[bool, str]:
+        if metadata is None:
+            return True, "none"
+        source = str(metadata.get("source", "")).strip().lower()
+        if source in MemoryService._MESSAGE_LINKED_SOURCES:
+            message_id = metadata.get("message_id")
+            evidence_refs = metadata.get("evidence_refs")
+            has_message_id = isinstance(message_id, str) and bool(message_id.strip())
+            has_evidence_refs = (
+                isinstance(evidence_refs, list)
+                and any(isinstance(item, str) and item.strip() for item in evidence_refs)
+            )
+            if not has_message_id and not has_evidence_refs:
+                return False, "missing_evidence_ref"
+        return True, "none"
 
     def _emit_memory_event(
         self,
@@ -80,7 +99,34 @@ class MemoryService:
         settings = get_settings()
         actor_id = "system"
         if metadata and isinstance(metadata.get("actor_id"), str):
-            actor_id = str(metadata["actor_id"])
+            actor_id = normalize_agent_id(str(metadata["actor_id"]), default="system")
+
+        schema_ok, schema_reason = self._memory_write_schema_ok(metadata)
+        if not schema_ok:
+            record_memory_governance_decision(
+                conn,
+                thread_id=thread_id,
+                actor_id=actor_id,
+                target_kind="memory_item",
+                decision="deny",
+                reason=schema_reason,
+            )
+            raise PermissionError(f"memory write blocked: {schema_reason}")
+
+        if is_known_agent(actor_id):
+            allowed, reason = can_agent_access_thread_memory(
+                conn, thread_id=thread_id, agent_id=actor_id
+            )
+            if not allowed:
+                record_memory_governance_decision(
+                    conn,
+                    thread_id=thread_id,
+                    actor_id=actor_id,
+                    target_kind="memory_item",
+                    decision="deny",
+                    reason=reason,
+                )
+                raise PermissionError(f"memory write blocked: {reason}")
         governed_text, decision, reason = apply_memory_policy(
             conn,
             text=text,
@@ -705,12 +751,14 @@ class MemoryService:
             if isinstance(item, str) and item.strip()
         }
 
+        scoped_actor_id = normalize_agent_id(actor_id)
         vector_rows = store.search_similar_items(
             conn=conn,
             thread_id=thread_id,
             embedding=self._embed_text_cached(conn, query),
             type_tag=desired_type,
             limit=pool_size,
+            agent_id=scoped_actor_id,
         )
         vector_rank: list[str] = []
         rows_by_uid: dict[str, dict[str, object]] = {}
@@ -726,9 +774,10 @@ class MemoryService:
                 "SELECT uid, text, status, type_tag, topic_tags_json, confidence, tier, "
                 "importance_score, last_seen_at "
                 "FROM state_items WHERE thread_id=? AND status!='superseded' "
+                "AND agent_id=? "
                 "AND LOWER(text) LIKE ? ORDER BY updated_at DESC LIMIT ?"
             ),
-            (thread_id, f"%{query.strip().lower()}%", pool_size),
+            (thread_id, scoped_actor_id, f"%{query.strip().lower()}%", pool_size),
         ).fetchall()
         lexical_rank: list[str] = []
         for row in lexical_rows:
@@ -755,9 +804,10 @@ class MemoryService:
                 "SELECT uid, text, status, type_tag, topic_tags_json, confidence, tier, "
                 "importance_score, last_seen_at "
                 "FROM state_items WHERE thread_id=? AND status!='superseded' "
+                "AND agent_id=? "
                 "ORDER BY last_seen_at DESC LIMIT ?"
             ),
-            (thread_id, pool_size),
+            (thread_id, scoped_actor_id, pool_size),
         ).fetchall()
         recency_rank: list[str] = []
         for row in recent_rows:
@@ -817,7 +867,7 @@ class MemoryService:
             if combined < min_score * 0.05:
                 continue
             row["score"] = combined
-            row["agent_id"] = actor_id
+            row["agent_id"] = scoped_actor_id
             filtered.append(row)
         def _recency_sort_value(value: object) -> float:
             try:

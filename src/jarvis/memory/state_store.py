@@ -10,7 +10,8 @@ from math import exp, log1p, sqrt
 
 from jarvis.config import get_settings
 from jarvis.ids import new_id
-from jarvis.memory.policy import apply_memory_policy
+from jarvis.memory.policy import apply_memory_policy, record_memory_governance_decision
+from jarvis.memory.scope import can_agent_access_thread_memory, normalize_agent_id
 from jarvis.memory.state_items import (
     DEFAULT_STATUS,
     TYPE_PRIORITY,
@@ -139,7 +140,21 @@ class StateStore:
         agent_id: str = "main",
     ) -> StateItem:
         now = self._now_iso()
-        item.agent_id = (item.agent_id or agent_id).strip() or "main"
+        item.agent_id = normalize_agent_id(item.agent_id or agent_id)
+        allowed, scope_reason = can_agent_access_thread_memory(
+            conn, thread_id=thread_id, agent_id=item.agent_id
+        )
+        if not allowed:
+            record_memory_governance_decision(
+                conn,
+                thread_id=thread_id,
+                actor_id=item.agent_id,
+                target_kind="state_item",
+                target_id=item.uid,
+                decision="deny",
+                reason=scope_reason,
+            )
+            raise PermissionError(f"state write blocked: {scope_reason}")
         governed_text, _decision, _reason = apply_memory_policy(
             conn,
             text=item.text,
@@ -497,14 +512,17 @@ class StateStore:
         thread_id: str,
         embedding: list[float],
         type_tag: str,
+        agent_id: str = "main",
         limit: int = 10,
     ) -> list[dict[str, object]]:
+        scoped_agent = normalize_agent_id(agent_id)
         normalized = self._normalize(embedding)
         sqlite_vec = self._search_state_vec_index(
             conn=conn,
             thread_id=thread_id,
             query_vec=normalized,
             type_tag=type_tag,
+            agent_id=scoped_agent,
             limit=limit,
         )
         if sqlite_vec:
@@ -516,9 +534,10 @@ class StateStore:
                 "sie.vector_json "
                 "FROM state_item_embeddings sie "
                 "JOIN state_items si ON si.uid=sie.uid AND si.thread_id=sie.thread_id "
-                "WHERE si.thread_id=? AND si.type_tag=? AND si.status!='superseded'"
+                "WHERE si.thread_id=? AND si.type_tag=? AND si.status!='superseded' "
+                "AND si.agent_id=?"
             ),
-            (thread_id, type_tag),
+            (thread_id, type_tag, scoped_agent),
         ).fetchall()
         scored: list[tuple[float, dict[str, object]]] = []
         for row in rows:
@@ -719,6 +738,7 @@ class StateStore:
         thread_id: str,
         query_vec: list[float],
         type_tag: str,
+        agent_id: str,
         limit: int,
     ) -> list[dict[str, object]]:
         if not self._ensure_vec_runtime(conn):
@@ -734,9 +754,10 @@ class StateStore:
                     "JOIN state_item_embeddings sie "
                     "ON sie.uid=si.uid AND sie.thread_id=si.thread_id "
                     "WHERE idx.embedding MATCH ? AND k = ? "
-                    "AND sm.thread_id=? AND si.type_tag=? AND si.status!='superseded'"
+                    "AND sm.thread_id=? AND si.type_tag=? AND si.status!='superseded' "
+                    "AND si.agent_id=?"
                 ),
-                (json.dumps(query_vec), max(1, int(limit)), thread_id, type_tag),
+                (json.dumps(query_vec), max(1, int(limit)), thread_id, type_tag, agent_id),
             ).fetchall()
         except sqlite3.OperationalError:
             logger.debug("state vector index search failed", exc_info=True)

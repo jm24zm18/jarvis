@@ -3,6 +3,7 @@ from pathlib import Path
 
 from jarvis.selfupdate.pipeline import (
     execute_test_plan,
+    governance_identity_edits_from_patch,
     replay_patch_determinism_check,
     smoke_commands,
     validate_evidence_refs_in_repo,
@@ -132,3 +133,39 @@ def test_execute_test_plan_reports_command_failure(tmp_path: Path) -> None:
     )
     assert result.ok is False
     assert len(command_results) == 2
+
+
+def test_governance_identity_edits_from_patch_detects_field_changes() -> None:
+    patch = "\n".join(
+        [
+            "diff --git a/agents/main/identity.md b/agents/main/identity.md",
+            "--- a/agents/main/identity.md",
+            "+++ b/agents/main/identity.md",
+            "@@ -1,7 +1,7 @@",
+            " ---",
+            "-risk_tier: medium",
+            "+risk_tier: high",
+            " allowed_tools:",
+            "   - web_search",
+            " ---",
+            "",
+        ]
+    )
+    assert governance_identity_edits_from_patch(patch) == ["agents/main/identity.md"]
+
+
+def test_governance_identity_edits_from_patch_detects_allowed_tools_list_changes() -> None:
+    patch = "\n".join(
+        [
+            "diff --git a/agents/main/identity.md b/agents/main/identity.md",
+            "--- a/agents/main/identity.md",
+            "+++ b/agents/main/identity.md",
+            "@@ -4,3 +4,4 @@",
+            " allowed_tools:",
+            "   - web_search",
+            "+  - exec_host",
+            " ---",
+            "",
+        ]
+    )
+    assert governance_identity_edits_from_patch(patch) == ["agents/main/identity.md"]

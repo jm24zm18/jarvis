@@ -72,14 +72,33 @@ def test_write_persists_metadata_json() -> None:
             conn,
             thread_id,
             "assistant found critical info",
-            metadata={"role": "assistant", "source": "agent.step.end"},
+            metadata={"role": "assistant", "source": "agent.step.end", "message_id": "msg_demo"},
         )
         row = conn.execute(
             "SELECT metadata_json FROM memory_items WHERE id=?",
             (memory_id,),
         ).fetchone()
     assert row is not None
-    assert row["metadata_json"] == '{"role": "assistant", "source": "agent.step.end"}'
+    assert (
+        row["metadata_json"]
+        == '{"role": "assistant", "source": "agent.step.end", "message_id": "msg_demo"}'
+    )
+
+
+def test_write_denies_message_linked_source_without_evidence() -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550126")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        with pytest.raises(PermissionError):
+            service.write(
+                conn,
+                thread_id,
+                "assistant found critical info",
+                metadata={"role": "assistant", "source": "agent.step.end"},
+            )
 
 
 def test_write_chunked_splits_large_payload_and_sets_chunk_metadata() -> None:

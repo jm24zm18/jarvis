@@ -29,6 +29,7 @@ import type {
   FitnessSnapshot,
   GovernanceSlo,
   GovernanceSloHistoryItem,
+  EvolutionItem,
 } from "../types";
 
 export const login = (password: string) =>
@@ -302,6 +303,23 @@ export const governanceDecisionTimeline = (params: {
 
 export const governancePatchLifecycle = (traceId: string) =>
   apiFetch<Record<string, unknown>>(`/api/v1/governance/patch-lifecycle/${encodeURIComponent(traceId)}`);
+
+export const governanceEvolutionItems = (params?: {
+  status?: string;
+  trace_id?: string;
+  thread_id?: string;
+  limit?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.trace_id) qs.set("trace_id", params.trace_id);
+  if (params?.thread_id) qs.set("thread_id", params.thread_id);
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ items: EvolutionItem[]; filters: Record<string, unknown> }>(
+    `/api/v1/governance/evolution/items${suffix}`,
+  );
+};
 
 export const governanceLearningLoop = (windowDays = 14, refresh = true) =>
   apiFetch<Record<string, unknown>>(

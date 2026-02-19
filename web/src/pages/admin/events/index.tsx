@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, Search } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { getTrace, listEvents } from "../../../api/endpoints";
 import Header from "../../../components/layout/Header";
 import Input from "../../../components/ui/Input";
@@ -13,12 +14,42 @@ import Badge from "../../../components/ui/Badge";
 const PAGE_SIZE = 20;
 
 export default function AdminEventsPage() {
-  const [eventType, setEventType] = useState("");
-  const [component, setComponent] = useState("");
-  const [threadId, setThreadId] = useState("");
-  const [query, setQuery] = useState("");
-  const [selectedTrace, setSelectedTrace] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [eventType, setEventType] = useState(() => searchParams.get("event_type") ?? "");
+  const [component, setComponent] = useState(() => searchParams.get("component") ?? "");
+  const [threadId, setThreadId] = useState(() => searchParams.get("thread_id") ?? "");
+  const [query, setQuery] = useState(() => searchParams.get("query") ?? "");
+  const [selectedTrace, setSelectedTrace] = useState(() => searchParams.get("trace_id") ?? "");
   const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    const nextEventType = searchParams.get("event_type") ?? "";
+    const nextComponent = searchParams.get("component") ?? "";
+    const nextThreadId = searchParams.get("thread_id") ?? "";
+    const nextQuery = searchParams.get("query") ?? "";
+    const nextTrace = searchParams.get("trace_id") ?? "";
+    if (nextEventType !== eventType) setEventType(nextEventType);
+    if (nextComponent !== component) setComponent(nextComponent);
+    if (nextThreadId !== threadId) setThreadId(nextThreadId);
+    if (nextQuery !== query) setQuery(nextQuery);
+    if (nextTrace !== selectedTrace) setSelectedTrace(nextTrace);
+  }, [component, eventType, query, searchParams, selectedTrace, threadId]);
+
+  const writeSearchParams = (next: {
+    event_type?: string;
+    component?: string;
+    thread_id?: string;
+    query?: string;
+    trace_id?: string;
+  }) => {
+    const out = new URLSearchParams();
+    if (next.event_type) out.set("event_type", next.event_type);
+    if (next.component) out.set("component", next.component);
+    if (next.thread_id) out.set("thread_id", next.thread_id);
+    if (next.query) out.set("query", next.query);
+    if (next.trace_id) out.set("trace_id", next.trace_id);
+    setSearchParams(out);
+  };
 
   const filters = useMemo(
     () => ({ event_type: eventType, component, thread_id: threadId, query }),
@@ -72,6 +103,13 @@ export default function AdminEventsPage() {
               className="w-full"
               onClick={() => {
                 setPage(1);
+                writeSearchParams({
+                  event_type: eventType,
+                  component,
+                  thread_id: threadId,
+                  query,
+                  trace_id: selectedTrace,
+                });
                 void events.refetch();
               }}
             >
@@ -126,7 +164,17 @@ export default function AdminEventsPage() {
                           ? "bg-blue-50 dark:bg-blue-900/20"
                           : "hover:bg-[var(--bg-mist)]"
                       }`}
-                      onClick={() => setSelectedTrace(item.trace_id ?? "")}
+                      onClick={() => {
+                        const traceId = item.trace_id ?? "";
+                        setSelectedTrace(traceId);
+                        writeSearchParams({
+                          event_type: eventType,
+                          component,
+                          thread_id: threadId,
+                          query,
+                          trace_id: traceId,
+                        });
+                      }}
                     >
                       <td className="whitespace-nowrap px-4 py-2.5 text-xs text-[var(--text-muted)]">
                         {item.created_at}

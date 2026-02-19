@@ -1,8 +1,19 @@
 import json
 
 from jarvis.db.connection import get_conn
-from jarvis.db.queries import create_thread, ensure_channel, ensure_user, now_iso
-from jarvis.tasks.memory import evaluate_consistency, run_memory_maintenance, sync_failure_capsules
+from jarvis.db.queries import (
+    create_thread,
+    ensure_channel,
+    ensure_user,
+    now_iso,
+    set_thread_agents,
+)
+from jarvis.tasks.memory import (
+    evaluate_consistency,
+    index_event,
+    run_memory_maintenance,
+    sync_failure_capsules,
+)
 
 
 def test_sync_failure_capsules_dedupes_and_links_to_trace_thread() -> None:
@@ -310,3 +321,36 @@ def test_evaluate_consistency_persists_details_payload() -> None:
     details = json.loads(str(row["details_json"]))
     assert "conflict_ratio" in details
     assert details["computed_by"] == "tasks.memory.evaluate_consistency"
+
+
+def test_index_event_denies_write_when_actor_scope_not_active() -> None:
+    with get_conn() as conn:
+        user_id = ensure_user(conn, "15550010009")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = create_thread(conn, user_id, channel_id)
+        set_thread_agents(conn, thread_id, ["main"])
+
+    memory_id = index_event(
+        trace_id="trc_scope_denied",
+        thread_id=thread_id,
+        text="scoped note",
+        metadata={"actor_id": "researcher", "source": "agent.step.end", "message_id": "msg_demo"},
+    )
+    assert memory_id == ""
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM memory_items WHERE thread_id=? ORDER BY created_at DESC LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+        audit = conn.execute(
+            (
+                "SELECT decision, reason FROM memory_governance_audit "
+                "WHERE thread_id=? ORDER BY created_at DESC LIMIT 1"
+            ),
+            (thread_id,),
+        ).fetchone()
+    assert row is None
+    assert audit is not None
+    assert str(audit["decision"]) == "deny"
+    assert str(audit["reason"]) == "agent_scope_denied"

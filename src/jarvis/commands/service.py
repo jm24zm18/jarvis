@@ -14,6 +14,8 @@ from jarvis.db.queries import (
     get_system_state,
     list_selfupdate_checks,
     list_selfupdate_transitions,
+    list_whatsapp_sender_reviews,
+    resolve_whatsapp_sender_review,
     set_thread_agents,
     set_thread_verbose,
 )
@@ -387,5 +389,38 @@ async def maybe_execute_command(
         if target_ref:
             return f"approval created: {action} target={target_ref}"
         return f"approval created: {action}"
+
+    if command == "/wa-review" and args:
+        if not _is_admin(admin_ids, actor_external_id):
+            return "admin required"
+        action = args[0].strip().lower()
+        if action == "list":
+            status_filter = args[1].strip().lower() if len(args) >= 2 else "open"
+            if status_filter not in {"open", "allowed", "denied"}:
+                status_filter = "open"
+            items = list_whatsapp_sender_reviews(conn, status=status_filter, limit=20)
+            return json.dumps({"status": status_filter, "items": items})
+        if action in {"allow", "deny"} and len(args) >= 2:
+            review_id = args[1].strip()
+            note = " ".join(args[2:]).strip()
+            if not review_id:
+                return "usage: /wa-review allow|deny <queue_id> [reason]"
+            decision = "allow" if action == "allow" else "deny"
+            resolved = resolve_whatsapp_sender_review(
+                conn,
+                review_id=review_id,
+                decision=decision,
+                reviewer_id=actor_external_id or "admin",
+                resolution_note=note,
+            )
+            if resolved is None:
+                return "review item not found"
+            if bool(resolved.get("closed")):
+                return f"review item already {resolved.get('status')}"
+            return f"review decision saved: {review_id} -> {resolved.get('status')}"
+        return (
+            "usage: /wa-review list [open|allowed|denied] | "
+            "/wa-review allow|deny <queue_id> [reason]"
+        )
 
     return "unknown command"

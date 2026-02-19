@@ -312,6 +312,15 @@ def test_non_admin_cannot_manage_whatsapp_channels() -> None:
         ).status_code
         == 403
     )
+    assert client.get("/api/v1/channels/whatsapp/review-queue", headers=headers).status_code == 403
+    assert (
+        client.post(
+            "/api/v1/channels/whatsapp/review-queue/sch_demo/resolve",
+            headers=headers,
+            json={"decision": "deny", "reason": "blocked"},
+        ).status_code
+        == 403
+    )
 
 
 def test_user_memory_search_scoped() -> None:
