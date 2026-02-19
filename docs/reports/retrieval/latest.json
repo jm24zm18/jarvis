@@ -1,0 +1,21 @@
+{
+  "dataset": {
+    "items_seeded": 120,
+    "query": "benchmark query"
+  },
+  "generated_at": "2026-02-19T00:55:38.813664+00:00",
+  "latency_ms": {
+    "avg": 0.483,
+    "max": 1.363,
+    "p50": 0.347,
+    "p95": 1.363
+  },
+  "results": {
+    "avg_count": 20,
+    "max_count": 20,
+    "min_count": 20
+  },
+  "run_id": "20260219005538",
+  "runs": 8,
+  "scenario": "state_search_rrf_latency"
+}

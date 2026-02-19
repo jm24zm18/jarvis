@@ -22,7 +22,15 @@ def _headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _seed_state_item(conn, uid: str, thread_id: str, text: str, *, conflict: int = 0) -> None:
+def _seed_state_item(
+    conn,
+    uid: str,
+    thread_id: str,
+    text: str,
+    *,
+    conflict: int = 0,
+    agent_id: str = "main",
+) -> None:
     now = now_iso()
     conn.execute(
         (
@@ -54,7 +62,7 @@ def _seed_state_item(conn, uid: str, thread_id: str, text: str, *, conflict: int
             0.75,
             0,
             conflict,
-            "main",
+            agent_id,
             now,
         ),
     )
@@ -325,3 +333,67 @@ def test_admin_memory_state_review_and_failures_routes() -> None:
     assert "tiers" in payload
     assert "archive_items" in payload
     assert "open_conflicts" in payload
+
+
+def test_memory_state_agent_scope_is_enforced() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = TestClient(app)
+    alice_token, alice_user_id = _login(client, "alice-scope")
+
+    with get_conn() as conn:
+        channel_id = ensure_channel(conn, alice_user_id, "whatsapp")
+        thread_id = create_thread(conn, alice_user_id, channel_id)
+        conn.execute(
+            (
+                "INSERT INTO thread_settings("
+                "thread_id, verbose, active_agent_ids_json, updated_at"
+                ") "
+                "VALUES(?,?,?,datetime('now')) "
+                "ON CONFLICT(thread_id) DO UPDATE SET "
+                "active_agent_ids_json=excluded.active_agent_ids_json, "
+                "updated_at=excluded.updated_at"
+            ),
+            (thread_id, 0, "[\"main\"]"),
+        )
+        _seed_state_item(conn, "st_scope_main", thread_id, "main lane item", agent_id="main")
+        _seed_state_item(
+            conn, "st_scope_researcher", thread_id, "researcher lane item", agent_id="researcher"
+        )
+
+    allowed_search = client.get(
+        "/api/v1/memory/state/search",
+        params={"thread_id": thread_id, "q": "main lane", "min_score": 0.0, "agent_id": "main"},
+        headers=_headers(alice_token),
+    )
+    assert allowed_search.status_code == 200
+    assert any(item["uid"] == "st_scope_main" for item in allowed_search.json()["items"])
+
+    denied_search = client.get(
+        "/api/v1/memory/state/search",
+        params={
+            "thread_id": thread_id,
+            "q": "researcher lane",
+            "min_score": 0.0,
+            "agent_id": "researcher",
+        },
+        headers=_headers(alice_token),
+    )
+    assert denied_search.status_code == 200
+    assert denied_search.json()["items"] == []
+
+    denied_graph = client.get(
+        "/api/v1/memory/state/graph/st_scope_researcher",
+        params={"agent_id": "researcher"},
+        headers=_headers(alice_token),
+    )
+    assert denied_graph.status_code == 200
+    assert denied_graph.json()["nodes"] == []
+
+    denied_export = client.get(
+        "/api/v1/memory/export",
+        params={"thread_id": thread_id, "agent_id": "researcher", "limit": 50},
+        headers=_headers(alice_token),
+    )
+    assert denied_export.status_code == 200
+    assert denied_export.json()["items"] == []

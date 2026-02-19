@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   dependencyStewardStatus,
   fitnessHistory,
   governanceDecisionTimeline,
+  governanceEvolutionItems,
   governanceLearningLoop,
   governancePatchLifecycle,
   governanceRemediationFeedback,
@@ -31,6 +33,10 @@ export default function AdminGovernancePage() {
   const timeline = useQuery({
     queryKey: ["governance-decision-timeline"],
     queryFn: () => governanceDecisionTimeline({ limit: 25 }),
+  });
+  const evolutionItems = useQuery({
+    queryKey: ["governance-evolution-items"],
+    queryFn: () => governanceEvolutionItems({ limit: 8 }),
   });
   const memoryConsistency = useQuery({
     queryKey: ["governance-memory-consistency"],
@@ -65,6 +71,11 @@ export default function AdminGovernancePage() {
   const releaseStatus = String(release.data?.status ?? "unknown");
   const blockers = Array.isArray(release.data?.blockers) ? release.data?.blockers : [];
   const proposals = Array.isArray(dependency.data?.proposals) ? dependency.data?.proposals : [];
+  const traceHref = (traceId: string, itemThreadId?: string) => {
+    const query = new URLSearchParams({ trace_id: traceId });
+    if (itemThreadId) query.set("thread_id", itemThreadId);
+    return `/admin/events?${query.toString()}`;
+  };
 
   return (
     <div>
@@ -201,7 +212,19 @@ export default function AdminGovernancePage() {
           <ul className="space-y-2 text-sm text-[var(--text-secondary)]">
             {timelineItems.slice(0, 8).map((item, idx) => (
               <li key={`${String(item.id ?? "evt")}-${idx}`}>
-                {String(item.created_at ?? "")} • {String(item.event_type ?? "")}
+                <div className="flex items-center justify-between gap-2">
+                  <span>
+                    {String(item.created_at ?? "")} • {String(item.event_type ?? "")}
+                  </span>
+                  {typeof item.trace_id === "string" && item.trace_id ? (
+                    <Link
+                      className="rounded border border-[var(--border-default)] px-2 py-0.5 text-xs hover:bg-[var(--bg-mist)]"
+                      to={traceHref(item.trace_id, typeof item.thread_id === "string" ? item.thread_id : undefined)}
+                    >
+                      Open Trace
+                    </Link>
+                  ) : null}
+                </div>
               </li>
             ))}
             {timelineItems.length === 0 ? (
@@ -252,7 +275,41 @@ export default function AdminGovernancePage() {
         </Card>
       </div>
 
+      <Card className="mt-6" header={<h3 className="font-display text-base text-[var(--text-primary)]">Evolution Items</h3>}>
+        {evolutionItems.isLoading ? (
+          <p className="text-sm text-[var(--text-muted)]">Loading evolution items...</p>
+        ) : (evolutionItems.data?.items ?? []).length === 0 ? (
+          <p className="text-sm text-[var(--text-muted)]">No evolution items found.</p>
+        ) : (
+          <ul className="space-y-2 text-sm text-[var(--text-secondary)]">
+            {(evolutionItems.data?.items ?? []).map((item) => (
+              <li key={item.item_id} className="flex items-center justify-between gap-2">
+                <span>
+                  {item.item_id} • {item.status}
+                </span>
+                <Link
+                  className="rounded border border-[var(--border-default)] px-2 py-0.5 text-xs hover:bg-[var(--bg-mist)]"
+                  to={traceHref(item.trace_id, item.thread_id ?? undefined)}
+                >
+                  Open Trace
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
       <Card className="mt-6" header={<h3 className="font-display text-base text-[var(--text-primary)]">Patch Lifecycle</h3>}>
+        {latestTraceId ? (
+          <div className="mb-2">
+            <Link
+              className="rounded border border-[var(--border-default)] px-2 py-1 text-xs hover:bg-[var(--bg-mist)]"
+              to={traceHref(latestTraceId)}
+            >
+              Open Latest Trace In Events
+            </Link>
+          </div>
+        ) : null}
         <pre className="overflow-auto rounded bg-[var(--bg-mist)] p-3 text-xs text-[var(--text-secondary)]">
           {JSON.stringify(lifecycle.data ?? { status: "no-trace-context" }, null, 2)}
         </pre>

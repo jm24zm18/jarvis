@@ -20,6 +20,14 @@ PROTECTED_PATH_PATTERNS = (
     re.compile(r"^/etc/nftables"),
     re.compile(r"^/root/"),
 )
+GOVERNANCE_IDENTITY_FIELDS = {
+    "allowed_tools",
+    "risk_tier",
+    "max_actions_per_step",
+    "allowed_paths",
+    "can_request_privileged_change",
+}
+_IDENTITY_LIST_FIELDS = {"allowed_tools", "allowed_paths"}
 
 
 @dataclass(slots=True)
@@ -158,6 +166,48 @@ def changed_files_from_patch(patch_text: str) -> list[str]:
         seen.add(path)
         unique.append(path)
     return unique
+
+
+def governance_identity_edits_from_patch(patch_text: str) -> list[str]:
+    flagged: set[str] = set()
+    current_file = ""
+    current_key = ""
+    for raw_line in patch_text.splitlines():
+        if raw_line.startswith("diff --git "):
+            parts = raw_line.split()
+            current_file = ""
+            current_key = ""
+            if len(parts) >= 4:
+                candidate = parts[3]
+                if candidate.startswith("b/"):
+                    candidate = candidate[2:]
+                if candidate.startswith("agents/") and candidate.endswith("/identity.md"):
+                    current_file = candidate
+            continue
+        if not current_file:
+            continue
+        if raw_line.startswith("@@"):
+            current_key = ""
+            continue
+        if raw_line.startswith("+++ ") or raw_line.startswith("--- "):
+            continue
+        if not raw_line or raw_line[0] not in {" ", "+", "-"}:
+            continue
+        marker = raw_line[0]
+        content = raw_line[1:]
+        key_match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", content)
+        if key_match:
+            current_key = key_match.group(1)
+            if marker in {"+", "-"} and current_key in GOVERNANCE_IDENTITY_FIELDS:
+                flagged.add(current_file)
+                continue
+        if (
+            marker in {"+", "-"}
+            and current_key in _IDENTITY_LIST_FIELDS
+            and re.match(r"\s*-\s+\S+", content)
+        ):
+            flagged.add(current_file)
+    return sorted(flagged)
 
 
 def touches_critical_paths(changed_files: list[str], critical_patterns: list[str]) -> bool:

@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from fastapi import HTTPException
 
@@ -389,6 +390,200 @@ def get_whatsapp_instance(conn: sqlite3.Connection, instance: str) -> dict[str, 
     }
 
 
+def get_whatsapp_sender_review_open(
+    conn: sqlite3.Connection,
+    *,
+    instance: str,
+    sender_jid: str,
+) -> dict[str, object] | None:
+    row = conn.execute(
+        (
+            "SELECT id, instance, sender_jid, remote_jid, participant_jid, thread_id, "
+            "external_msg_id, reason, status, reviewer_id, resolution_note, created_at, updated_at "
+            "FROM whatsapp_sender_review_queue "
+            "WHERE instance=? AND sender_jid=? AND status='open' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ),
+        (instance, sender_jid),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": str(row["id"]),
+        "instance": str(row["instance"]),
+        "sender_jid": str(row["sender_jid"]),
+        "remote_jid": str(row["remote_jid"]) if row["remote_jid"] is not None else "",
+        "participant_jid": (
+            str(row["participant_jid"]) if row["participant_jid"] is not None else ""
+        ),
+        "thread_id": str(row["thread_id"]) if row["thread_id"] is not None else "",
+        "external_msg_id": (
+            str(row["external_msg_id"]) if row["external_msg_id"] is not None else ""
+        ),
+        "reason": str(row["reason"]),
+        "status": str(row["status"]),
+        "reviewer_id": str(row["reviewer_id"]) if row["reviewer_id"] is not None else "",
+        "resolution_note": (
+            str(row["resolution_note"]) if row["resolution_note"] is not None else ""
+        ),
+        "created_at": str(row["created_at"]),
+        "updated_at": str(row["updated_at"]),
+    }
+
+
+def get_whatsapp_sender_review_latest_decision(
+    conn: sqlite3.Connection,
+    *,
+    instance: str,
+    sender_jid: str,
+) -> str | None:
+    row = conn.execute(
+        (
+            "SELECT status FROM whatsapp_sender_review_queue "
+            "WHERE instance=? AND sender_jid=? AND status IN ('allowed', 'denied') "
+            "ORDER BY updated_at DESC LIMIT 1"
+        ),
+        (instance, sender_jid),
+    ).fetchone()
+    if row is None:
+        return None
+    status_value = str(row["status"]).strip().lower()
+    if status_value in {"allowed", "denied"}:
+        return status_value
+    return None
+
+
+def create_whatsapp_sender_review(
+    conn: sqlite3.Connection,
+    *,
+    instance: str,
+    sender_jid: str,
+    remote_jid: str,
+    participant_jid: str,
+    thread_id: str,
+    external_msg_id: str,
+    reason: str,
+) -> str:
+    review_id = new_id("sch")
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO whatsapp_sender_review_queue("
+            "id, instance, sender_jid, remote_jid, participant_jid, thread_id, external_msg_id, "
+            "reason, status, reviewer_id, resolution_note, created_at, updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ),
+        (
+            review_id,
+            instance,
+            sender_jid,
+            remote_jid,
+            participant_jid,
+            thread_id,
+            external_msg_id,
+            reason,
+            "open",
+            None,
+            None,
+            now,
+            now,
+        ),
+    )
+    return review_id
+
+
+def list_whatsapp_sender_reviews(
+    conn: sqlite3.Connection,
+    *,
+    status: str = "open",
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    rows = conn.execute(
+        (
+            "SELECT id, instance, sender_jid, remote_jid, participant_jid, thread_id, "
+            "external_msg_id, reason, status, reviewer_id, resolution_note, created_at, updated_at "
+            "FROM whatsapp_sender_review_queue WHERE status=? "
+            "ORDER BY created_at DESC LIMIT ?"
+        ),
+        (status, max(1, min(500, int(limit)))),
+    ).fetchall()
+    return [
+        {
+            "id": str(row["id"]),
+            "instance": str(row["instance"]),
+            "sender_jid": str(row["sender_jid"]),
+            "remote_jid": str(row["remote_jid"]) if row["remote_jid"] is not None else "",
+            "participant_jid": (
+                str(row["participant_jid"]) if row["participant_jid"] is not None else ""
+            ),
+            "thread_id": str(row["thread_id"]) if row["thread_id"] is not None else "",
+            "external_msg_id": (
+                str(row["external_msg_id"]) if row["external_msg_id"] is not None else ""
+            ),
+            "reason": str(row["reason"]),
+            "status": str(row["status"]),
+            "reviewer_id": str(row["reviewer_id"]) if row["reviewer_id"] is not None else "",
+            "resolution_note": (
+                str(row["resolution_note"]) if row["resolution_note"] is not None else ""
+            ),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
+        for row in rows
+    ]
+
+
+def resolve_whatsapp_sender_review(
+    conn: sqlite3.Connection,
+    *,
+    review_id: str,
+    decision: Literal["allow", "deny"],
+    reviewer_id: str,
+    resolution_note: str = "",
+) -> dict[str, object] | None:
+    row = conn.execute(
+        (
+            "SELECT id, instance, sender_jid, status FROM whatsapp_sender_review_queue "
+            "WHERE id=? LIMIT 1"
+        ),
+        (review_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    if str(row["status"]) != "open":
+        return {
+            "id": str(row["id"]),
+            "instance": str(row["instance"]),
+            "sender_jid": str(row["sender_jid"]),
+            "status": str(row["status"]),
+            "closed": True,
+        }
+    status = "allowed" if decision == "allow" else "denied"
+    now = now_iso()
+    conn.execute(
+        (
+            "UPDATE whatsapp_sender_review_queue "
+            "SET status=?, reviewer_id=?, resolution_note=?, updated_at=? "
+            "WHERE instance=? AND sender_jid=? AND status='open'"
+        ),
+        (
+            status,
+            reviewer_id,
+            resolution_note[:500],
+            now,
+            str(row["instance"]),
+            str(row["sender_jid"]),
+        ),
+    )
+    return {
+        "id": str(row["id"]),
+        "instance": str(row["instance"]),
+        "sender_jid": str(row["sender_jid"]),
+        "status": status,
+        "closed": False,
+    }
+
+
 def create_thread(conn: sqlite3.Connection, user_id: str, channel_id: str) -> str:
     thread_id = new_id("thr")
     conn.execute(
@@ -444,6 +639,65 @@ def record_external_message(
         return True
     except sqlite3.IntegrityError:
         return False
+
+
+def get_whatsapp_media_by_message(
+    conn: sqlite3.Connection, *, thread_id: str, message_id: str
+) -> dict[str, object] | None:
+    row = conn.execute(
+        (
+            "SELECT id, thread_id, message_id, media_type, local_path, "
+            "mime_type, bytes, created_at "
+            "FROM whatsapp_media WHERE thread_id=? AND message_id=? LIMIT 1"
+        ),
+        (thread_id, message_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": str(row["id"]),
+        "thread_id": str(row["thread_id"]),
+        "message_id": str(row["message_id"]) if row["message_id"] is not None else "",
+        "media_type": str(row["media_type"]),
+        "local_path": str(row["local_path"]),
+        "mime_type": str(row["mime_type"]) if row["mime_type"] is not None else "",
+        "bytes": int(row["bytes"]),
+        "created_at": str(row["created_at"]),
+    }
+
+
+def insert_whatsapp_media(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    message_id: str,
+    media_type: str,
+    local_path: str,
+    mime_type: str,
+    num_bytes: int,
+) -> str:
+    existing = get_whatsapp_media_by_message(conn, thread_id=thread_id, message_id=message_id)
+    if existing is not None:
+        return str(existing["id"])
+    media_id = new_id("wmd")
+    conn.execute(
+        (
+            "INSERT INTO whatsapp_media("
+            "id, thread_id, message_id, media_type, local_path, mime_type, bytes, created_at"
+            ") VALUES(?,?,?,?,?,?,?,?)"
+        ),
+        (
+            media_id,
+            thread_id,
+            message_id,
+            media_type,
+            local_path,
+            mime_type,
+            int(num_bytes),
+            now_iso(),
+        ),
+    )
+    return media_id
 
 
 def set_thread_verbose(conn: sqlite3.Connection, thread_id: str, verbose: bool) -> None:

@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  SELFUPDATE_TEST_GATE_MODE: enforce
+
 jobs:
   lint:
     runs-on: ubuntu-latest

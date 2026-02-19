@@ -81,6 +81,46 @@ class Settings(BaseSettings):
         alias="WHATSAPP_AUTO_CREATE_ON_STARTUP", default=0
     )
     whatsapp_webhook_secret: str = Field(alias="WHATSAPP_WEBHOOK_SECRET", default="")
+    whatsapp_media_dir: str = Field(
+        alias="WHATSAPP_MEDIA_DIR",
+        default="/tmp/jarvis/whatsapp-media",
+    )
+    whatsapp_media_max_bytes: int = Field(alias="WHATSAPP_MEDIA_MAX_BYTES", default=10_485_760)
+    whatsapp_media_allowed_mime_prefixes: str = Field(
+        alias="WHATSAPP_MEDIA_ALLOWED_MIME_PREFIXES",
+        default="audio/,image/,video/,application/pdf",
+    )
+    whatsapp_media_allowed_hosts: str = Field(alias="WHATSAPP_MEDIA_ALLOWED_HOSTS", default="")
+    whatsapp_voice_transcribe_enabled: int = Field(
+        alias="WHATSAPP_VOICE_TRANSCRIBE_ENABLED",
+        default=1,
+    )
+    whatsapp_voice_transcribe_backend: str = Field(
+        alias="WHATSAPP_VOICE_TRANSCRIBE_BACKEND",
+        default="stub",
+    )
+    whatsapp_voice_transcribe_timeout_seconds: int = Field(
+        alias="WHATSAPP_VOICE_TRANSCRIBE_TIMEOUT_SECONDS",
+        default=20,
+    )
+    whatsapp_voice_model: str = Field(
+        alias="WHATSAPP_VOICE_MODEL",
+        default="base",
+    )
+    whatsapp_voice_device: str = Field(
+        alias="WHATSAPP_VOICE_DEVICE",
+        default="cpu",
+    )
+    whatsapp_voice_compute_type: str = Field(
+        alias="WHATSAPP_VOICE_COMPUTE_TYPE",
+        default="int8",
+    )
+    whatsapp_voice_language: str = Field(
+        alias="WHATSAPP_VOICE_LANGUAGE",
+        default="",
+    )
+    whatsapp_review_mode: str = Field(alias="WHATSAPP_REVIEW_MODE", default="unknown_only")
+    whatsapp_allowed_senders: str = Field(alias="WHATSAPP_ALLOWED_SENDERS", default="")
     evolution_api_url: str = Field(alias="EVOLUTION_API_URL", default="")
     evolution_api_key: str = Field(alias="EVOLUTION_API_KEY", default="")
     evolution_webhook_url: str = Field(alias="EVOLUTION_WEBHOOK_URL", default="")

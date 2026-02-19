@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { RefreshCw, CheckCircle, Clock, AlertTriangle } from "lucide-react";
+import { Link } from "react-router-dom";
 import {
   approvePatch,
   getPatch,
@@ -210,6 +211,12 @@ export default function AdminSelfUpdatePage() {
                 >
                   {approve.isPending ? "Approving..." : "Approve Tested Patch"}
                 </Button>
+                <Link
+                  className="rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-xs hover:bg-[var(--bg-mist)]"
+                  to={`/admin/events?trace_id=${encodeURIComponent(detail.data.trace_id)}`}
+                >
+                  View In Events
+                </Link>
                 <Badge variant="default">
                   {timeline.data?.transitions?.length ?? 0} transitions
                 </Badge>

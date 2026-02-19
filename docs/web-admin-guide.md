@@ -59,6 +59,15 @@ Event envelope includes `type`, `thread_id`, `created_at`, plus payload fields.
 4. Verify non-admin token cannot access admin-only actions.
 5. Subscribe to a thread over WS and confirm live updates.
 
+## Trace Drill-Down Workflow
+
+For governance and self-update investigations:
+
+1. Open `/admin/governance` and use `Open Trace` on `Decision Timeline` or `Evolution Items`.
+2. Open `/admin/selfupdate` and use `View In Events` from a selected patch.
+3. Land on `/admin/events` with query parameters (`trace_id`, optional `thread_id`).
+4. Verify the events table and trace viewer load the selected trace context.
+
 ## Related Docs
 
 - `docs/api-usage-guide.md`

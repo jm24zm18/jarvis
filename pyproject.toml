@@ -20,6 +20,7 @@ dependencies = [
   "tiktoken>=0.7,<1",
   "structlog>=24.1,<26",
   "slowapi>=0.1.9,<1",
+  "faster-whisper>=1.1,<2",
 ]
 
 [project.scripts]

@@ -42,6 +42,7 @@ from jarvis.selfupdate.pipeline import (
     git_apply,
     git_apply_check,
     git_commit_applied,
+    governance_identity_edits_from_patch,
     includes_test_changes,
     mark_applied,
     mark_rollback,
@@ -720,6 +721,28 @@ def self_update_propose(
 ) -> dict[str, str]:
     patch_base = _patch_base()
     changed_files = changed_files_from_patch(patch_text)
+    governance_edits = governance_identity_edits_from_patch(patch_text)
+    if governance_edits:
+        reason = (
+            "identity governance fields are immutable in self-update: "
+            + ", ".join(governance_edits)
+        )
+        write_state(trace_id, patch_base, "rejected", reason)
+        _record_check(
+            trace_id,
+            check_type="governance.identity_guardrail",
+            status="failed",
+            detail=reason,
+            payload={"files": governance_edits},
+        )
+        _record_transition(
+            trace_id,
+            from_state="new",
+            to_state="rejected",
+            reason=reason,
+        )
+        _record_failure_capsule(trace_id, "propose", reason)
+        return {"trace_id": trace_id, "status": "rejected", "reason": reason}
     guardrail_reason = _guardrail_check(trace_id, changed_files=changed_files, check_pr_count=False)
     if guardrail_reason:
         write_state(trace_id, patch_base, "rejected", guardrail_reason)

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from jarvis.auth.dependencies import UserContext, require_admin, require_auth
 from jarvis.db.connection import get_conn
 from jarvis.memory.knowledge import KnowledgeBaseService
+from jarvis.memory.scope import can_agent_access_thread_memory, normalize_agent_id
 from jarvis.memory.service import MemoryService
 from jarvis.tasks.memory import run_memory_maintenance
 
@@ -40,6 +41,16 @@ def _thread_allowed(conn: sqlite3.Connection, ctx: UserContext, thread_id: str) 
     if owner is None:
         return False
     return bool(ctx.is_admin or str(owner["user_id"]) == ctx.user_id)
+
+
+def _resolve_state_agent_scope(
+    conn: sqlite3.Connection, *, thread_id: str, agent_id: str
+) -> str | None:
+    scoped = normalize_agent_id(agent_id)
+    allowed, _reason = can_agent_access_thread_memory(conn, thread_id=thread_id, agent_id=scoped)
+    if not allowed:
+        return None
+    return scoped
 
 
 @router.get("")
@@ -186,6 +197,7 @@ def state_search(
     q: str = "",
     k: int = Query(default=20, ge=1, le=100),
     min_score: float = Query(default=0.75, ge=0.0, le=1.0),
+    agent_id: str = Query(default="main", min_length=1, max_length=128),
 ) -> dict[str, object]:
     if not thread_id.strip() or not q.strip():
         return {"items": []}
@@ -193,13 +205,16 @@ def state_search(
     with get_conn() as conn:
         if not _thread_allowed(conn, ctx, thread_id):
             return {"items": []}
+        scoped_agent = _resolve_state_agent_scope(conn, thread_id=thread_id, agent_id=agent_id)
+        if scoped_agent is None:
+            return {"items": []}
         items = service.search_state(
             conn,
             thread_id=thread_id,
             query=q,
             k=k,
             min_score=min_score,
-            actor_id=ctx.user_id,
+            actor_id=scoped_agent,
         )
     return {"items": items}
 
@@ -222,17 +237,26 @@ def state_graph(
     uid: str,
     ctx: UserContext = Depends(require_auth),  # noqa: B008
     depth: int = Query(default=2, ge=1, le=5),
+    agent_id: str = Query(default="main", min_length=1, max_length=128),
 ) -> dict[str, object]:
     service = MemoryService()
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT thread_id FROM state_items WHERE uid=? ORDER BY updated_at DESC LIMIT 1",
+            (
+                "SELECT thread_id, agent_id FROM state_items "
+                "WHERE uid=? ORDER BY updated_at DESC LIMIT 1"
+            ),
             (uid,),
         ).fetchone()
         if row is None:
             return {"root_uid": uid, "nodes": [], "edges": []}
         thread_id = str(row["thread_id"])
         if not _thread_allowed(conn, ctx, thread_id):
+            return {"root_uid": uid, "nodes": [], "edges": []}
+        scoped_agent = _resolve_state_agent_scope(conn, thread_id=thread_id, agent_id=agent_id)
+        if scoped_agent is None:
+            return {"root_uid": uid, "nodes": [], "edges": []}
+        if str(row["agent_id"]) != scoped_agent:
             return {"root_uid": uid, "nodes": [], "edges": []}
         graph = service.graph_traverse(conn, uid=uid, depth=depth)
     return graph
@@ -333,11 +357,19 @@ def memory_export(
     format: str = "jsonl",
     tier: str = "",
     thread_id: str | None = None,
+    agent_id: str = "",
     limit: int = Query(default=500, ge=1, le=5000),
 ) -> dict[str, object]:
     if format.lower() != "jsonl":
         return {"error": "only jsonl format is supported"}
     with get_conn() as conn:
+        scoped_agent: str | None = None
+        if thread_id and agent_id.strip():
+            scoped_agent = _resolve_state_agent_scope(conn, thread_id=thread_id, agent_id=agent_id)
+            if scoped_agent is None:
+                return {"items": []}
+        elif agent_id.strip():
+            scoped_agent = normalize_agent_id(agent_id)
         if thread_id:
             if not _thread_allowed(conn, ctx, thread_id):
                 return {"items": []}
@@ -347,9 +379,31 @@ def memory_export(
                     "importance_score, created_at "
                     "FROM state_items WHERE thread_id=? "
                     + ("AND tier=? " if tier.strip() else "")
+                    + ("AND agent_id=? " if scoped_agent else "")
                     + "ORDER BY created_at DESC LIMIT ?"
                 ),
-                ((thread_id, tier, limit) if tier.strip() else (thread_id, limit)),
+                (
+                    (
+                        thread_id,
+                        tier,
+                        scoped_agent,
+                        limit,
+                    )
+                    if tier.strip() and scoped_agent
+                    else (
+                        thread_id,
+                        tier,
+                        limit,
+                    )
+                    if tier.strip()
+                    else (
+                        thread_id,
+                        scoped_agent,
+                        limit,
+                    )
+                    if scoped_agent
+                    else (thread_id, limit)
+                ),
             ).fetchall()
         elif ctx.is_admin:
             rows = conn.execute(
@@ -358,9 +412,19 @@ def memory_export(
                     "importance_score, created_at "
                     "FROM state_items "
                     + ("WHERE tier=? " if tier.strip() else "")
+                    + ("AND agent_id=? " if tier.strip() and scoped_agent else "")
+                    + ("WHERE agent_id=? " if (not tier.strip()) and scoped_agent else "")
                     + "ORDER BY created_at DESC LIMIT ?"
                 ),
-                ((tier, limit) if tier.strip() else (limit,)),
+                (
+                    (tier, scoped_agent, limit)
+                    if tier.strip() and scoped_agent
+                    else (tier, limit)
+                    if tier.strip()
+                    else (scoped_agent, limit)
+                    if scoped_agent
+                    else (limit,)
+                ),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -370,9 +434,18 @@ def memory_export(
                     "FROM state_items si JOIN threads t ON t.id=si.thread_id "
                     "WHERE t.user_id=? "
                     + ("AND si.tier=? " if tier.strip() else "")
+                    + ("AND si.agent_id=? " if scoped_agent else "")
                     + "ORDER BY si.created_at DESC LIMIT ?"
                 ),
-                ((ctx.user_id, tier, limit) if tier.strip() else (ctx.user_id, limit)),
+                (
+                    (ctx.user_id, tier, scoped_agent, limit)
+                    if tier.strip() and scoped_agent
+                    else (ctx.user_id, tier, limit)
+                    if tier.strip()
+                    else (ctx.user_id, scoped_agent, limit)
+                    if scoped_agent
+                    else (ctx.user_id, limit)
+                ),
             ).fetchall()
     items = [
         json.dumps(

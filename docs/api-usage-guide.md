@@ -44,6 +44,13 @@ Admin-only operations:
 - Approve apply: `POST /api/v1/selfupdate/patches/{trace_id}/approve`
 - Timeline/checks: `GET /api/v1/selfupdate/patches/{trace_id}/timeline`, `GET /api/v1/selfupdate/patches/{trace_id}/checks`
 
+Governance evolution visibility:
+
+- Evolution items: `GET /api/v1/governance/evolution/items`
+- Decision timeline: `GET /api/v1/governance/decision-timeline`
+
+Web admin trace drill-down uses `trace_id` and optional `thread_id` query parameters to pivot into `/admin/events`.
+
 ## System and Lockdown
 
 - Runtime status: `GET /api/v1/system/status`

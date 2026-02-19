@@ -65,5 +65,5 @@ Status snapshot of remaining work after the current implementation pass.
 ## Optional but Recommended
 
 - [ ] Add REST/JSON schema docs for new memory route payloads and responses.
-- [ ] Add benchmark script for retrieval quality and latency before/after RRF fusion.
+- [x] Add benchmark script for retrieval quality and latency before/after RRF fusion (`scripts/retrieval_benchmark_report.py`, artifact path `docs/reports/retrieval/latest.json`).
 - [ ] Add conflict-resolution UX flow documentation for operators.

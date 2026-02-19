@@ -126,6 +126,57 @@ def test_selfupdate_rejects_protected_path(tmp_path: Path) -> None:
     assert propose["status"] == "rejected"
 
 
+def test_selfupdate_rejects_identity_governance_field_edits(tmp_path: Path) -> None:
+    trace_id = "trc_self_identity_governance"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    (repo / "agents").mkdir()
+    (repo / "agents" / "main").mkdir()
+    (repo / "agents" / "main" / "identity.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "risk_tier: medium",
+                "allowed_tools:",
+                "  - web_search",
+                "---",
+                "",
+            ]
+        )
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "seed identity"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    patch = "\n".join(
+        [
+            "diff --git a/agents/main/identity.md b/agents/main/identity.md",
+            "--- a/agents/main/identity.md",
+            "+++ b/agents/main/identity.md",
+            "@@ -1,5 +1,5 @@",
+            " ---",
+            "-risk_tier: medium",
+            "+risk_tier: high",
+            " allowed_tools:",
+            "   - web_search",
+            " ---",
+            "",
+        ]
+    )
+    propose = self_update_propose(
+        trace_id,
+        str(repo),
+        patch,
+        "attempt governance escalation",
+        evidence=_evidence(),
+    )
+    assert propose["status"] == "rejected"
+    assert "identity governance fields are immutable" in propose["reason"]
+
+
 def test_selfupdate_test_failure_and_rollback(tmp_path: Path) -> None:
     trace_id = "trc_self_fail_test"
     _clean(trace_id)

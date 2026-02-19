@@ -307,6 +307,86 @@ async def test_approve_command_rejects_unknown_action() -> None:
 
 
 @pytest.mark.asyncio
+async def test_wa_review_list_requires_admin() -> None:
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550123")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
+        denied = await maybe_execute_command(
+            conn,
+            thread_id,
+            "/wa-review list",
+            "15555550123",
+            router,
+            set(),
+        )
+        allowed = await maybe_execute_command(
+            conn,
+            thread_id,
+            "/wa-review list",
+            "15555550123",
+            router,
+            {"15555550123"},
+        )
+    assert denied == "admin required"
+    assert allowed is not None
+    parsed = json.loads(allowed)
+    assert parsed["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_wa_review_allow_updates_queue_row() -> None:
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550123")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        conn.execute(
+            (
+                "INSERT OR REPLACE INTO whatsapp_sender_review_queue("
+                "id, instance, sender_jid, remote_jid, participant_jid, "
+                "thread_id, external_msg_id, "
+                "reason, status, reviewer_id, resolution_note, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                "sch_review_cmd_1",
+                "personal",
+                "15555559004",
+                "15555559004",
+                "",
+                thread_id,
+                "wamid.TEST.CMD.REVIEW.1",
+                "unknown_sender",
+                "open",
+                None,
+                None,
+                "2026-02-19T00:00:00+00:00",
+                "2026-02-19T00:00:00+00:00",
+            ),
+        )
+        router = ProviderRouter(StubProvider(), SGLangProvider("f"))
+        result = await maybe_execute_command(
+            conn,
+            thread_id,
+            "/wa-review allow sch_review_cmd_1 trusted",
+            "15555550123",
+            router,
+            {"15555550123"},
+        )
+        row = conn.execute(
+            "SELECT status, resolution_note FROM whatsapp_sender_review_queue WHERE id=?",
+            ("sch_review_cmd_1",),
+        ).fetchone()
+    assert result == "review decision saved: sch_review_cmd_1 -> allowed"
+    assert row is not None
+    assert str(row["status"]) == "allowed"
+    assert "trusted" in str(row["resolution_note"])
+
+
+@pytest.mark.asyncio
 async def test_new_command_closes_current_and_creates_next_thread() -> None:
     with get_conn() as conn:
         ensure_system_state(conn)

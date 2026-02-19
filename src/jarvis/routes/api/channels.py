@@ -11,14 +11,24 @@ from jarvis.auth.dependencies import UserContext, require_admin
 from jarvis.channels.whatsapp.evolution_client import EvolutionClient
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
-from jarvis.db.queries import get_whatsapp_instance, upsert_whatsapp_instance
+from jarvis.db.queries import (
+    get_whatsapp_instance,
+    list_whatsapp_sender_reviews,
+    resolve_whatsapp_sender_review,
+    upsert_whatsapp_instance,
+)
 
 router = APIRouter(prefix="/channels", tags=["api-channels"])
 _limiter = Limiter(key_func=get_remote_address)
 
 
 class PairingCodeInput(BaseModel):
-    number: str = Field(min_length=6, max_length=32)
+    number: str = Field(min_length=6, max_length=32, pattern=r"^\+?[0-9]{6,32}$")
+
+
+class WhatsAppReviewResolveInput(BaseModel):
+    decision: str = Field(pattern="^(allow|deny)$")
+    reason: str = Field(default="", max_length=500)
 
 
 @router.get("/whatsapp/status")
@@ -183,3 +193,38 @@ def whatsapp_disconnect(
             callback_last_error="disconnected",
         )
     return {"ok": status_code < 400, "status_code": status_code, "payload": payload}
+
+
+@router.get("/whatsapp/review-queue")
+def whatsapp_review_queue(
+    status: str = "open",
+    limit: int = 50,
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    del ctx
+    normalized_status = status.strip().lower()
+    if normalized_status not in {"open", "allowed", "denied"}:
+        normalized_status = "open"
+    with get_conn() as conn:
+        items = list_whatsapp_sender_reviews(conn, status=normalized_status, limit=limit)
+    return {"items": items, "status": normalized_status, "count": len(items)}
+
+
+@router.post("/whatsapp/review-queue/{review_id}/resolve")
+def whatsapp_resolve_review_item(
+    review_id: str,
+    input_data: WhatsAppReviewResolveInput,
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    with get_conn() as conn:
+        decision = "allow" if input_data.decision == "allow" else "deny"
+        resolved = resolve_whatsapp_sender_review(
+            conn,
+            review_id=review_id,
+            decision=decision,
+            reviewer_id=ctx.user_id,
+            resolution_note=input_data.reason,
+        )
+    if resolved is None:
+        return {"ok": False, "error": "not_found", "review_id": review_id}
+    return {"ok": True, "item": resolved}

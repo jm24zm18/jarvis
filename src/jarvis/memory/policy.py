@@ -74,6 +74,65 @@ def _emit_policy_event(
     )
 
 
+def record_memory_governance_decision(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str | None,
+    actor_id: str,
+    target_kind: str,
+    decision: str,
+    reason: str,
+    target_id: str = "",
+    extra: dict[str, object] | None = None,
+) -> None:
+    payload: dict[str, object] = {
+        "char_count": 0,
+        "decision": decision,
+        "reason": reason,
+    }
+    if extra:
+        payload.update(extra)
+    try:
+        conn.execute(
+            (
+                "INSERT INTO memory_governance_audit("
+                "id, thread_id, actor_id, decision, reason, target_kind, target_id, "
+                "payload_redacted_json, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                new_id("evt"),
+                thread_id,
+                actor_id,
+                decision,
+                reason,
+                target_kind,
+                target_id,
+                json.dumps(payload, sort_keys=True),
+                _now_iso(),
+            ),
+        )
+    except sqlite3.OperationalError:
+        # Table not present yet (pre-migration), avoid breaking runtime.
+        pass
+    if decision == "redact":
+        _emit_policy_event(
+            conn,
+            thread_id=thread_id,
+            actor_id=actor_id,
+            event_type="memory.policy.redaction",
+            payload={"reason": reason, "target_kind": target_kind, "target_id": target_id},
+        )
+    elif decision == "deny":
+        _emit_policy_event(
+            conn,
+            thread_id=thread_id,
+            actor_id=actor_id,
+            event_type="memory.policy.denial",
+            payload={"reason": reason, "target_kind": target_kind, "target_id": target_id},
+        )
+
+
 def apply_memory_policy(
     conn: sqlite3.Connection,
     *,
@@ -105,52 +164,15 @@ def apply_memory_policy(
             decision = "redact"
             reason = "pii_masked"
 
-    try:
-        conn.execute(
-            (
-                "INSERT INTO memory_governance_audit("
-                "id, thread_id, actor_id, decision, reason, target_kind, target_id, "
-                "payload_redacted_json, created_at"
-                ") VALUES(?,?,?,?,?,?,?,?,?)"
-            ),
-            (
-                new_id("evt"),
-                thread_id,
-                actor_id,
-                decision,
-                reason,
-                target_kind,
-                target_id,
-                json.dumps(
-                    {
-                        "char_count": len(working),
-                        "decision": decision,
-                        "reason": reason,
-                    },
-                    sort_keys=True,
-                ),
-                _now_iso(),
-            ),
-        )
-    except sqlite3.OperationalError:
-        # Table not present yet (pre-migration), avoid breaking runtime.
-        pass
-
-    if decision == "redact":
-        _emit_policy_event(
-            conn,
-            thread_id=thread_id,
-            actor_id=actor_id,
-            event_type="memory.policy.redaction",
-            payload={"reason": reason, "target_kind": target_kind, "target_id": target_id},
-        )
-    elif decision == "deny":
-        _emit_policy_event(
-            conn,
-            thread_id=thread_id,
-            actor_id=actor_id,
-            event_type="memory.policy.denial",
-            payload={"reason": reason, "target_kind": target_kind, "target_id": target_id},
-        )
+    record_memory_governance_decision(
+        conn,
+        thread_id=thread_id,
+        actor_id=actor_id,
+        target_kind=target_kind,
+        target_id=target_id,
+        decision=decision,
+        reason=reason,
+        extra={"char_count": len(working)},
+    )
 
     return working, decision, reason

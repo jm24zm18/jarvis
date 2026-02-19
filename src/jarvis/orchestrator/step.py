@@ -512,6 +512,7 @@ async def run_agent_step(
                 thread_id=thread_id,
                 router=router,
                 memory=memory,
+                actor_id=actor_id,
             )
             extraction_payload = {
                 "thread_id": thread_id,

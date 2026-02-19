@@ -76,6 +76,19 @@ Source of truth: `src/jarvis/config.py`.
 | `WHATSAPP_INSTANCE` | str | `personal` | Evolution instance name. |
 | `WHATSAPP_AUTO_CREATE_ON_STARTUP` | int | `0` | Auto-create Evolution instance on API startup. |
 | `WHATSAPP_WEBHOOK_SECRET` | str | `` | Shared secret header required by WhatsApp webhook route when set. |
+| `WHATSAPP_MEDIA_DIR` | str | `/tmp/jarvis/whatsapp-media` | Local media staging directory for inbound WhatsApp media/voice notes. |
+| `WHATSAPP_MEDIA_MAX_BYTES` | int | `10485760` | Max bytes accepted per inbound media download; oversized payloads are blocked. |
+| `WHATSAPP_MEDIA_ALLOWED_MIME_PREFIXES` | str | `audio/,image/,video/,application/pdf` | Comma-separated MIME prefixes allowed for inbound media persistence. |
+| `WHATSAPP_MEDIA_ALLOWED_HOSTS` | str | `` | Optional comma-separated HTTPS host allowlist for inbound media URLs. |
+| `WHATSAPP_VOICE_TRANSCRIBE_ENABLED` | int | `1` | Enable voice-note transcript generation for inbound audio messages. |
+| `WHATSAPP_VOICE_TRANSCRIBE_BACKEND` | str | `stub` | Voice-note transcription backend selector (`stub`, `faster_whisper`). |
+| `WHATSAPP_VOICE_TRANSCRIBE_TIMEOUT_SECONDS` | int | `20` | Timeout for media download/transcription operations on voice notes. |
+| `WHATSAPP_VOICE_MODEL` | str | `base` | Faster-Whisper model name when `WHATSAPP_VOICE_TRANSCRIBE_BACKEND=faster_whisper`. |
+| `WHATSAPP_VOICE_DEVICE` | str | `cpu` | Faster-Whisper device target (for example `cpu`, `cuda`). |
+| `WHATSAPP_VOICE_COMPUTE_TYPE` | str | `int8` | Faster-Whisper compute profile (for example `int8`, `float16`). |
+| `WHATSAPP_VOICE_LANGUAGE` | str | `` | Optional fixed language code for transcription; empty enables auto-detect. |
+| `WHATSAPP_REVIEW_MODE` | str | `unknown_only` | Sender review policy mode (`off`, `unknown_only`, `strict`) for WhatsApp ingress gating. |
+| `WHATSAPP_ALLOWED_SENDERS` | str | `` | Comma-separated sender allowlist for strict sender review mode. |
 | `EVOLUTION_API_URL` | str | `` | Evolution API base URL for Baileys sidecar. |
 | `EVOLUTION_API_KEY` | str | `` | Evolution API key header value. |
 | `EVOLUTION_WEBHOOK_URL` | str | `` | Callback URL Evolution should post inbound events to (usually `/webhooks/whatsapp`). |

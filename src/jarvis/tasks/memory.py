@@ -21,7 +21,10 @@ def index_event(
     del trace_id
     service = MemoryService()
     with get_conn() as conn:
-        ids = service.write_chunked(conn, thread_id, text, metadata=metadata)
+        try:
+            ids = service.write_chunked(conn, thread_id, text, metadata=metadata)
+        except PermissionError:
+            return ""
     return ids[0] if ids else ""
 
 

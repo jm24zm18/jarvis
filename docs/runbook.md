@@ -96,6 +96,32 @@
    - `memory_reconciliation_rate`
    - `memory_hallucination_incidents`
 
+## WhatsApp Media and Voice Ops
+
+1. Confirm media safety config:
+   - `WHATSAPP_MEDIA_DIR` points to a writable runtime directory.
+   - `WHATSAPP_MEDIA_MAX_BYTES` matches expected inbound limits.
+   - `WHATSAPP_MEDIA_ALLOWED_MIME_PREFIXES` and `WHATSAPP_MEDIA_ALLOWED_HOSTS` match policy.
+2. For voice notes, verify:
+   - `WHATSAPP_VOICE_TRANSCRIBE_ENABLED=1`
+   - `WHATSAPP_VOICE_TRANSCRIBE_BACKEND` set to either `stub` (smoke/dev) or `faster_whisper` (production local transcription)
+   - when using `faster_whisper`, set:
+     - `WHATSAPP_VOICE_MODEL`
+     - `WHATSAPP_VOICE_DEVICE`
+     - `WHATSAPP_VOICE_COMPUTE_TYPE`
+     - optional `WHATSAPP_VOICE_LANGUAGE`
+3. If inbound media is blocked, inspect latest `channel.inbound.degraded` events for reason codes:
+   - `media_url_invalid`
+   - `media_host_denied`
+   - `media_mime_denied`
+   - `media_size_exceeded`
+   - `media_path_unsafe`
+   - `media_download_failed`
+   - `voice_transcription_backend_unavailable`
+   - `voice_transcription_failed`
+   - `voice_transcription_timeout`
+4. Media rows are persisted in `whatsapp_media`; verify linkage by thread/message when debugging ingestion.
+
 ## Secret Rotation and Scan
 
 1. Rotate compromised or leaked local credentials at the provider:
