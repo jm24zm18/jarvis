@@ -184,7 +184,7 @@ Source of truth: `src/jarvis/config.py`.
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `EXEC_HOST_TIMEOUT_MAX_SECONDS` | int | `120` | Max command runtime. |
+| `EXEC_HOST_TIMEOUT_MAX_SECONDS` | int | `600` | Max command runtime. |
 | `EXEC_HOST_LOG_DIR` | str | `/var/lib/agent/exec` | Exec-host log path. |
 | `EXEC_HOST_ENV_ALLOWLIST` | str | `PATH,HOME,LANG,LC_ALL,TZ` | Allowed env pass-through list. |
 | `EXEC_HOST_ALLOWED_CWD_PREFIXES` | str | `/srv/agent-framework,/tmp,/home/justin/jarvis` | Allowed working-directory prefixes. |

@@ -1,6 +1,7 @@
 """Admin routes for channel integration management."""
 
 import asyncio
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
@@ -217,7 +218,9 @@ def whatsapp_resolve_review_item(
     ctx: UserContext = Depends(require_admin),  # noqa: B008
 ) -> dict[str, object]:
     with get_conn() as conn:
-        decision = "allow" if input_data.decision == "allow" else "deny"
+        decision: Literal["allow", "deny"] = (
+            "allow" if input_data.decision == "allow" else "deny"
+        )
         resolved = resolve_whatsapp_sender_review(
             conn,
             review_id=review_id,

@@ -26,7 +26,7 @@ You are being asked to run a self-improvement build cycle on the Jarvis codebase
 1. Create a new git branch named `auto/build-{timestamp}` where `{timestamp}` is the current \
 date/time in YYYYMMDD-HHMMSS format.
 
-2. Delegate to the **coder** agent with the following instructions:
+2. Execute the build cycle directly as **main** (do not delegate this flow to worker agents).
    a. Run `uv run jarvis test-gates --fail-fast` to check for lint, type, and test failures.
    b. Read any failures carefully.
    c. Fix all lint, typecheck, and test issues you find.

@@ -11,7 +11,7 @@ def test_build_prompt_contains_key_instructions() -> None:
     assert "auto/build-" in BUILD_PROMPT
     assert "test-gates" in BUILD_PROMPT
     assert "dev" in BUILD_PROMPT
-    assert "coder" in BUILD_PROMPT
+    assert "do not delegate this flow to worker agents" in BUILD_PROMPT
     assert "gh pr create" in BUILD_PROMPT
 
 

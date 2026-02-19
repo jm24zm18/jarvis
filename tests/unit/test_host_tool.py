@@ -1,5 +1,8 @@
 import os
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
@@ -141,5 +144,36 @@ def test_exec_host_failure_rate_emits_lockdown_triggered_event(tmp_path: Path) -
         assert state["lockdown"] == 1
         assert row is not None
         assert "exec_host_failure_rate" in str(row["payload_redacted_json"])
+    finally:
+        get_settings.cache_clear()
+
+
+def test_exec_host_none_sandbox_does_not_apply_ulimit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    os.environ["EXEC_HOST_ALLOWED_CWD_PREFIXES"] = str(tmp_path)
+    os.environ["EXEC_HOST_SANDBOX"] = "none"
+    get_settings.cache_clear()
+    captured: dict[str, object] = {}
+
+    def _fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        cmd = args[0]
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr("jarvis.tools.host.subprocess.run", _fake_run)
+    try:
+        with get_conn() as conn:
+            ensure_system_state(conn)
+            result = execute_host_command(
+                conn,
+                command="echo ok",
+                cwd=str(tmp_path),
+                trace_id="trc_host_sandbox_none",
+                caller_id="coder",
+            )
+        assert result["exit_code"] == 0
+        assert captured["cmd"] == ["/bin/bash", "-lc", "echo ok"]
     finally:
         get_settings.cache_clear()

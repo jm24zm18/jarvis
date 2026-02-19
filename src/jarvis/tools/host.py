@@ -406,13 +406,16 @@ def execute_host_command(
             f"ubuntu:22.04 /bin/bash -c {shlex.quote(command)}"
         )
         exec_cmd = ["/bin/bash", "-lc", docker_cmd]
-    else:
-        # Apply resource limits via ulimit (best-effort without Docker)
+    elif sandbox_mode and sandbox_mode != "none":
+        # Apply resource limits via ulimit (best-effort local sandbox mode).
         ulimit_prefix = (
             f"ulimit -v {max_mem_mb * 1024} 2>/dev/null; "
             f"ulimit -t {max_cpu_s} 2>/dev/null; "
         )
         exec_cmd = ["/bin/bash", "-lc", f"{ulimit_prefix}{command}"]
+    else:
+        # Default "none": execute command without sandbox memory/cpu limits.
+        exec_cmd = ["/bin/bash", "-lc", command]
 
     try:
         proc = subprocess.run(
