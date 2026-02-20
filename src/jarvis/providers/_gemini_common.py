@@ -127,7 +127,10 @@ def build_request_body(
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_tokens,
-            "thinkingConfig": {"includeThoughts": True},
+            "thinkingConfig": {
+                "thinkingBudget": 8192,
+                "includeThoughts": True,
+            },
         },
     }
     if system_parts:
