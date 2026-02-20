@@ -231,3 +231,14 @@ def whatsapp_resolve_review_item(
     if resolved is None:
         return {"ok": False, "error": "not_found", "review_id": review_id}
     return {"ok": True, "item": resolved}
+
+@router.get("/telegram/status")
+def telegram_status(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+    del ctx
+    settings = get_settings()
+    enabled = bool(settings.telegram_bot_token)
+    return {
+        "enabled": enabled,
+        "token_configured": enabled,
+        "allowed_chat_ids": settings.telegram_allowed_chat_ids,
+    }

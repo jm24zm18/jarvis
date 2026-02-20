@@ -11,19 +11,28 @@ import {
   whatsappPairingCode,
   whatsappQrCode,
   whatsappStatus,
+  telegramStatus,
 } from "../../../api/endpoints";
 
 export default function AdminChannelsPage() {
   const [pairNumber, setPairNumber] = useState("");
+
   const statusQuery = useQuery({
     queryKey: ["whatsapp-status"],
     queryFn: whatsappStatus,
     refetchInterval: 3000,
   });
+
   const qrQuery = useQuery({
     queryKey: ["whatsapp-qr"],
     queryFn: whatsappQrCode,
     enabled: false,
+  });
+
+  const tgQuery = useQuery({
+    queryKey: ["telegram-status"],
+    queryFn: telegramStatus,
+    refetchInterval: 10000,
   });
 
   const createMutation = useMutation({ mutationFn: whatsappCreate, onSuccess: () => void statusQuery.refetch() });
@@ -39,9 +48,33 @@ export default function AdminChannelsPage() {
   const status = String(statusQuery.data?.status ?? (statusQuery.data?.payload as Record<string, unknown> | undefined)?.state ?? "unknown");
   const qr = String(qrQuery.data?.qrcode ?? "");
 
+  const tgEnabled = Boolean(tgQuery.data?.enabled);
+  const tgToken = Boolean(tgQuery.data?.token_configured);
+  const tgChats = String(tgQuery.data?.allowed_chat_ids || "");
+
   return (
     <div>
-      <Header title="Channels" subtitle="Manage WhatsApp Evolution pairing and status" />
+      <Header title="Channels" subtitle="Manage configured messaging channels" />
+
+      <h2 className="mb-4 font-display text-xl text-[var(--text-primary)]">Telegram (Bot API)</h2>
+      <Card className="mb-8">
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-2">
+            Status: <Badge variant={tgEnabled ? "success" : "warning"}>{tgEnabled ? "enabled" : "disabled"}</Badge>
+          </div>
+          <div className="text-sm text-[var(--text-secondary)]">
+            <p className="mb-1"><strong>Bot Token:</strong> {tgToken ? "Configured (Hidden)" : "Not configured in environment"}</p>
+            <p><strong>Allowed Chat IDs:</strong> {tgChats || "None configured"}</p>
+          </div>
+          {!tgEnabled && (
+            <p className="text-xs text-[var(--text-muted)]">
+              Set TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_IDS in your production environment to enable.
+            </p>
+          )}
+        </div>
+      </Card>
+
+      <h2 className="mb-4 font-display text-xl text-[var(--text-primary)]">WhatsApp (Evolution API)</h2>
       <Card className="mb-6">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={status === "open" || status === "connected" ? "success" : "warning"}>
