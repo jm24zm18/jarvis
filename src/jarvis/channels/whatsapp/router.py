@@ -552,6 +552,15 @@ async def inbound(
                     },
                     "tools_io",
                 )
+            # Send typing indicator ("composing") to show Jarvis is thinking
+            try:
+                await adapter.send_presence(
+                    recipient=str(msg.sender_id or remote_jid),
+                    presence="composing",
+                )
+            except Exception:
+                pass  # Typing indicator is best-effort, don't block on failure
+
             step_ok = _safe_send_task(
                 "jarvis.tasks.agent.agent_step",
                 {"trace_id": trace_id, "thread_id": thread_id},

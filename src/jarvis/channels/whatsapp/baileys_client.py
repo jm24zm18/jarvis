@@ -64,6 +64,19 @@ class BaileysClient:
             response = await client.post(url, json=payload, headers=self._headers())
         return response.status_code
 
+    async def send_presence(self, recipient: str, presence: str = "composing") -> int:
+        """Send typing indicator to a WhatsApp contact.
+
+        Args:
+            recipient: WhatsApp JID (e.g. 15551234567@s.whatsapp.net)
+            presence: One of "composing", "paused", "available", "unavailable"
+        """
+        url = f"{self._base_url}/presenceUpdate"
+        payload = {"number": recipient, "presence": presence}
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(url, json=payload, headers=self._headers())
+        return response.status_code
+
     async def send_media(
         self,
         recipient: str,

@@ -244,6 +244,25 @@ app.post("/sendText", async (req, res) => {
     }
 });
 
+app.post("/presenceUpdate", async (req, res) => {
+    if (connectionState !== "open") {
+        return res.status(400).json({ error: "Not connected" });
+    }
+    const { number, presence } = req.body;
+    // presence: "composing" | "paused" | "available" | "unavailable"
+    const validPresences = ["composing", "paused", "available", "unavailable"];
+    if (!validPresences.includes(presence)) {
+        return res.status(400).json({ error: `Invalid presence. Must be one of: ${validPresences.join(", ")}` });
+    }
+    try {
+        const jid = number.includes("@") ? number : `${number}@s.whatsapp.net`;
+        await sock.sendPresenceUpdate(presence, jid);
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
     logger.info(`Baileys Microservice running on port ${PORT}`);

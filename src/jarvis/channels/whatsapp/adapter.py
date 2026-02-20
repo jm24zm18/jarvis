@@ -34,6 +34,13 @@ class WhatsAppAdapter:
             response = await client.post(url, json=payload, headers=headers)
         return response.status_code
 
+    async def send_presence(self, recipient: str, presence: str = "composing") -> int:
+        """Send typing indicator (composing/paused) to a WhatsApp contact."""
+        baileys = BaileysClient()
+        if baileys.enabled:
+            return await baileys.send_presence(recipient=recipient, presence=presence)
+        return 200  # Cloud API doesn't support presence updates
+
     def parse_inbound(self, payload: dict[str, Any]) -> list[InboundMessage]:
         if self._looks_like_evolution(payload):
             return self._parse_evolution(payload)

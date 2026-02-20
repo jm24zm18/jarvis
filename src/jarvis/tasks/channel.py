@@ -123,6 +123,14 @@ def send_channel_message(
             {"message_id": message_id, "status": "sent", "attempts": attempts},
             channel_type=channel_type,
         )
+
+        # Stop typing indicator after sending the message
+        if channel_type == "whatsapp" and hasattr(adapter, "send_presence"):
+            try:
+                asyncio.run(adapter.send_presence(outbound["recipient"], "paused"))
+            except Exception:
+                pass  # Best-effort, don't fail the task
+
         return {"thread_id": thread_id, "message_id": message_id, "status": "sent"}
 
     _emit(
