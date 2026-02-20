@@ -134,7 +134,7 @@
     },
     {
       "recipe": [
-        "uv run uvicorn jarvis.main:app --reload --app-dir src"
+        "uv run uvicorn jarvis.main:app --host 0.0.0.0 --reload --app-dir src"
       ],
       "target": "api"
     },
@@ -297,7 +297,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-20T01:08:31.348083+00:00",
+  "generated_at": "2026-02-20T13:03:14.766088+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
