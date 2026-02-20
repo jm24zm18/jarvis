@@ -1,5 +1,5 @@
 import express from "express";
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } from "@whiskeysockets/baileys";
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage } from "@whiskeysockets/baileys";
 import pino from "pino";
 import qrcode from "qrcode";
 import fs from "fs";
@@ -240,6 +240,32 @@ app.post("/sendText", async (req, res) => {
         await sock.sendMessage(jid, { text });
         res.json({ ok: true });
     } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post("/downloadMedia", async (req, res) => {
+    if (connectionState !== "open") {
+        return res.status(400).json({ error: "Not connected" });
+    }
+    const { message } = req.body;
+    if (!message) {
+        return res.status(400).json({ error: "message object required" });
+    }
+    try {
+        const buffer = await downloadMediaMessage(
+            { message },
+            'buffer',
+            {},
+        );
+        // Determine mime type from the message
+        const audioMsg = message.audioMessage || message.imageMessage || message.videoMessage || message.documentMessage || message.stickerMessage;
+        const mimeType = audioMsg?.mimetype || "application/octet-stream";
+        res.set("Content-Type", mimeType);
+        res.set("Content-Length", buffer.length);
+        res.send(buffer);
+    } catch (e) {
+        logger.error(`Download media failed: ${e.message}`);
         res.status(500).json({ error: e.message });
     }
 });

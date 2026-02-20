@@ -93,6 +93,30 @@ class BaileysClient:
         # Not yet fully implemented in microservice, stub it to avoid crashes
         return 501
 
+    async def download_media(self, message: dict[str, Any], target_path: str) -> int:
+        """Download and decrypt media from a Baileys message via the microservice.
+
+        Args:
+            message: The raw Baileys message object containing the encrypted media.
+            target_path: Local file path to save the decrypted media.
+
+        Returns:
+            Number of bytes written, or 0 on failure.
+        """
+        url = f"{self._base_url}/downloadMedia"
+        payload = {"message": message}
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(url, json=payload, headers=self._headers())
+            if response.status_code != 200:
+                return 0
+            from pathlib import Path
+            Path(target_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(target_path).write_bytes(response.content)
+            return len(response.content)
+        except Exception:
+            return 0
+
     async def create_instance(self) -> tuple[int, dict[str, Any]]:
         url = f"{self._base_url}/start"
         async with httpx.AsyncClient(timeout=20) as client:

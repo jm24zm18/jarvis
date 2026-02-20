@@ -440,14 +440,94 @@ async def inbound(
                     target = str(reaction_key.get("id") or "")
                 text = f"[reaction] {emoji} {target}".strip()
             elif msg.message_type in {"image", "video", "document", "audio", "sticker"}:
-                media_result = await _process_media_payload(
-                    external_msg_id=msg.external_msg_id,
-                    message_type=msg.message_type,
-                    text=text,
-                    media_url=str(msg.media_url or msg.media.get("url") or ""),
-                    mime_type=str(msg.media.get("mime_type") or ""),
-                    settings=settings,
-                )
+                # For audio messages from Baileys, download via Baileys server
+                # (handles decryption of encrypted WhatsApp CDN media)
+                baileys_downloaded = False
+                if msg.message_type == "audio" and isinstance(msg.raw, dict):
+                    raw_data = msg.raw.get("data", msg.raw)
+                    raw_messages = []
+                    if isinstance(raw_data, dict):
+                        raw_messages = raw_data.get("messages", [])
+                    # Find the matching message in the raw payload
+                    raw_message_obj = None
+                    for rm in raw_messages:
+                        if isinstance(rm, dict) and isinstance(rm.get("message"), dict):
+                            raw_message_obj = rm.get("message")
+                            break
+                    if raw_message_obj and "audioMessage" in raw_message_obj:
+                        from jarvis.channels.whatsapp.baileys_client import BaileysClient
+                        from jarvis.channels.whatsapp.media_security import (
+                            ensure_media_root,
+                            media_filename,
+                            resolve_media_output_path,
+                        )
+                        try:
+                            baileys = BaileysClient()
+                            if baileys.enabled:
+                                media_root = ensure_media_root(settings.whatsapp_media_dir)
+                                file_name = media_filename(
+                                    msg.external_msg_id, "audio",
+                                    str(raw_message_obj["audioMessage"].get("mimetype", "audio/ogg")),
+                                )
+                                target_path = resolve_media_output_path(media_root, file_name)
+                                total = await baileys.download_media(
+                                    message=raw_message_obj,
+                                    target_path=str(target_path),
+                                )
+                                if total > 0:
+                                    baileys_downloaded = True
+                                    mime_type = str(
+                                        raw_message_obj["audioMessage"].get("mimetype", "audio/ogg")
+                                    )
+                                    media_result = {
+                                        "text": "",
+                                        "degraded": False,
+                                        "reason": "",
+                                        "mime_type": mime_type,
+                                        "local_path": str(target_path),
+                                        "bytes": total,
+                                        "transcription_status": "n/a",
+                                        "transcript_backend": "",
+                                    }
+                                    # Run transcription if enabled
+                                    if int(settings.whatsapp_voice_transcribe_enabled) == 1:
+                                        try:
+                                            transcriber = build_voice_transcriber(settings)
+                                            transcript = await transcribe_with_timeout(
+                                                transcriber=transcriber,
+                                                file_path=target_path,
+                                                mime_type=mime_type,
+                                                timeout_seconds=int(
+                                                    settings.whatsapp_voice_transcribe_timeout_seconds
+                                                ),
+                                            )
+                                            media_result["text"] = f"[voice] {transcript.strip()}"
+                                            media_result["transcription_status"] = "ok"
+                                            backend_name = (
+                                                settings.whatsapp_voice_transcribe_backend.strip().lower()
+                                                or "stub"
+                                            )
+                                            media_result["transcript_backend"] = backend_name
+                                        except VoiceTranscriptionError as exc:
+                                            media_result["degraded"] = True
+                                            media_result["reason"] = exc.reason
+                                            media_result["text"] = "[voice note unavailable]"
+                                            media_result["transcription_status"] = "failed"
+                                    else:
+                                        media_result["text"] = "[voice note]"
+                                        media_result["transcription_status"] = "disabled"
+                        except Exception:
+                            pass  # Fall back to regular media download
+
+                if not baileys_downloaded:
+                    media_result = await _process_media_payload(
+                        external_msg_id=msg.external_msg_id,
+                        message_type=msg.message_type,
+                        text=text,
+                        media_url=str(msg.media_url or msg.media.get("url") or ""),
+                        mime_type=str(msg.media.get("mime_type") or ""),
+                        settings=settings,
+                    )
                 text = str(media_result["text"])
                 if bool(media_result["degraded"]):
                     degraded = True
