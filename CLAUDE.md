@@ -4,9 +4,9 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
-Jarvis Agent Framework: multi-agent async framework with WhatsApp integration, event-sourced observability, semantic memory, scheduler, and controlled self-update.
+Jarvis Agent Framework: multi-agent async framework with WhatsApp and Telegram integration, event-sourced observability, semantic memory, scheduler, and controlled self-update.
 
-Primary plan: `planv2.md`.
+Primary plan: `docs/PLAN.md`.
 
 ## Commands
 
@@ -26,6 +26,8 @@ make test
 make lint
 make typecheck
 make test-gates
+make docs-generate
+make docs-check
 
 # targeted tests
 uv run pytest tests/unit -v
@@ -47,7 +49,7 @@ uv run jarvis skill install <path>
 ## Architecture Facts
 
 - Runtime process: API (`src/jarvis/main.py`) with in-process asyncio task runner.
-- Database: SQLite with ordered SQL migrations under `src/jarvis/db/migrations` (currently `001..023`).
+- Database: SQLite with ordered SQL migrations under `src/jarvis/db/migrations` (currently `001..055`).
 - Core request path: webhook -> DB dedup/persist -> `channel.inbound` event -> `agent_step` task -> orchestrator/provider/tools -> outbound.
 - Tool execution is deny-by-default and gated by policy + agent permissions.
 - Lockdown and restart state are enforced via `system_state`.
@@ -60,6 +62,7 @@ uv run jarvis skill install <path>
 - Every agent bundle in `agents/<id>/` must include `identity.md`, `soul.md`, `heartbeat.md`.
 - New DB migration files must be additive, ordered, and never renumber existing migrations.
 - Do not widen tool permissions by default; explicit allow is required.
+- Self-update evidence must include concrete file and line references.
 
 ## Project Structure
 
@@ -67,7 +70,7 @@ uv run jarvis skill install <path>
 src/jarvis/
   main.py, config.py, tasks/runner.py
   agents/, auth/, channels/, cli/, commands/
-  db/ (connection.py, queries.py, migrations/001..023)
+  db/ (connection.py, queries.py, migrations/001..055)
   events/, memory/, models/, onboarding/
   orchestrator/, plugins/, policy/, providers/
   routes/, scheduler/, selfupdate/, tasks/, tools/
@@ -85,8 +88,11 @@ deploy/                # systemd + healthcheck/rollback/restore scripts
 ## Read First
 
 - `README.md`
+- `docs/README.md`
 - `docs/getting-started.md`
 - `docs/architecture.md`
+- `docs/api-usage-guide.md`
+- `docs/cli-reference.md`
 - `docs/change-safety.md`
 - `docs/testing.md`
 
@@ -95,6 +101,9 @@ deploy/                # systemd + healthcheck/rollback/restore scripts
 - Prefer additive changes to schema and API.
 - For behavior changes, update tests in both unit/integration scopes where relevant.
 - Run at least `make lint`, `make typecheck`, and focused tests before finalizing.
+- Run docs drift checks (`make docs-generate`, `make docs-check`) when changing docs or public interfaces.
+- Documentation updates are mandatory: any behavior, API, schema, config, tooling, or operational workflow change MUST update corresponding docs in the same PR before handoff.
+- Always update `docs/PLAN.md` with any missing tasks discovered during work and any remaining tasks before handoff.
 - Keep `AGENTS.md` and this file aligned on operational facts.
 - Git flow policy:
   - Use a dedicated branch for implementation work.

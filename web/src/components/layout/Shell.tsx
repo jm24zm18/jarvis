@@ -10,17 +10,20 @@ import {
   MessagesSquare,
   RefreshCw,
   Shield,
+  Scale,
   Server,
   Bug,
   Sun,
   Moon,
   Monitor,
+  Smartphone,
   LogOut,
   PanelLeftClose,
   PanelLeft,
 } from "lucide-react";
 import { useThemeStore } from "../../stores/theme";
 import { useAuthStore } from "../../stores/auth";
+import { logout } from "../../api/endpoints";
 
 const navGroups = [
   {
@@ -36,9 +39,11 @@ const navGroups = [
       { label: "Dashboard", to: "/admin/dashboard", icon: LayoutDashboard },
       { label: "Agents", to: "/admin/agents", icon: Bot },
       { label: "Providers", to: "/admin/providers", icon: Server },
+      { label: "Channels", to: "/admin/channels", icon: Smartphone },
       { label: "Memory", to: "/admin/memory", icon: Brain },
       { label: "Schedules", to: "/admin/schedules", icon: Clock },
       { label: "Self-Update", to: "/admin/selfupdate", icon: RefreshCw },
+      { label: "Governance", to: "/admin/governance", icon: Scale },
       { label: "Permissions", to: "/admin/permissions", icon: Shield },
     ],
   },
@@ -66,6 +71,15 @@ export default function Shell({ children }: PropsWithChildren) {
     setTheme(themeOrder[(idx + 1) % themeOrder.length]);
   };
   const ThemeIcon = themeIcons[theme];
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch {
+      // Always clear local auth state even if API logout fails.
+    } finally {
+      clearAuth();
+    }
+  };
 
   return (
     <div className="flex min-h-screen">
@@ -130,7 +144,7 @@ export default function Shell({ children }: PropsWithChildren) {
             {!collapsed && <span className="capitalize">{theme}</span>}
           </button>
           <button
-            onClick={clearAuth}
+            onClick={handleLogout}
             className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-[var(--text-secondary)] hover:bg-mist hover:text-red-500 ${collapsed ? "justify-center" : ""}`}
           >
             <LogOut size={18} />

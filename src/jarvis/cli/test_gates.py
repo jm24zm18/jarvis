@@ -44,10 +44,18 @@ def _bold(text: str) -> str:
     return f"\033[1m{text}\033[0m"
 
 
-def run_test_gates(*, fail_fast: bool = False, json_output: bool = False) -> None:
+def run_test_gates(
+    *,
+    fail_fast: bool = False,
+    json_output: bool = False,
+    mode: str = "enforce",
+) -> None:
     results: list[dict[str, object]] = []
     failed = 0
     t0 = time.monotonic()
+    gate_mode = mode.strip().lower()
+    if gate_mode not in {"warn", "enforce"}:
+        raise ValueError("mode must be 'warn' or 'enforce'")
 
     for name, cmd in GATES:
         print(f"\n{_bold(name)}")
@@ -60,7 +68,14 @@ def run_test_gates(*, fail_fast: bool = False, json_output: bool = False) -> Non
         icon = _green("\u2713") if passed else _red("\u2717")
         print(f"  {icon} {name} ({elapsed}s)")
 
-        results.append({"name": name, "passed": passed, "seconds": elapsed})
+        results.append(
+            {
+                "name": name,
+                "passed": passed,
+                "seconds": elapsed,
+                "failure_reason": None if passed else "non_zero_exit",
+            }
+        )
         if not passed:
             failed += 1
             if fail_fast:
@@ -79,5 +94,5 @@ def run_test_gates(*, fail_fast: bool = False, json_output: bool = False) -> Non
     if json_output:
         print("\n" + json.dumps(results, indent=2))
 
-    if failed:
+    if failed and gate_mode == "enforce":
         sys.exit(1)

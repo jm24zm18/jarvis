@@ -8,10 +8,15 @@ import time
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 
-from jarvis.auth.dependencies import UserContext, _extract_bearer, require_admin, require_auth
+from jarvis.auth.dependencies import (
+    UserContext,
+    extract_session_token,
+    require_admin,
+    require_auth,
+)
 from jarvis.auth.google_onboarding import (
     complete_google_flow,
     create_google_flow,
@@ -40,6 +45,7 @@ _PLACEHOLDER_VALUES = {
     "your-client-secret",
 }
 _ALLOWED_PRIMARY_PROVIDERS = {"gemini", "sglang"}
+_MAX_EXTERNAL_ID_LENGTH = 256
 _GEMINI_CLI_MODEL_FILE_CANDIDATES = (
     "node_modules/@google/gemini-cli-core/dist/src/config/models.js",
     "node_modules/@google/gemini-cli-core/dist/config/models.js",
@@ -214,7 +220,7 @@ async def _verify_gemini_models_for_account(models: list[str]) -> dict[str, str]
 
 
 @router.post("/login")
-def login(payload: dict[str, str]) -> dict[str, str]:
+def login(payload: dict[str, str], request: Request, response: Response) -> dict[str, str]:
     settings = get_settings()
     setup_password = settings.web_auth_setup_password.strip()
     if not setup_password:
@@ -228,6 +234,11 @@ def login(payload: dict[str, str]) -> dict[str, str]:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
     external_id = str(payload.get("external_id", "web_admin")).strip() or "web_admin"
+    if len(external_id) > _MAX_EXTERNAL_ID_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"external_id must be at most {_MAX_EXTERNAL_ID_LENGTH} characters",
+        )
     with get_conn() as conn:
         user_id = ensure_user(conn, external_id)
         admin_count_row = conn.execute(
@@ -239,6 +250,16 @@ def login(payload: dict[str, str]) -> dict[str, str]:
         role_row = conn.execute("SELECT role FROM users WHERE id=? LIMIT 1", (user_id,)).fetchone()
         role = str(role_row["role"]) if role_row is not None else "user"
         session_id, token = create_session(conn, user_id, role)
+    ttl_hours = max(1, settings.web_auth_token_ttl_hours)
+    response.set_cookie(
+        key="jarvis_session",
+        value=token,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        max_age=ttl_hours * 3600,
+        path="/",
+    )
     return {"token": token, "session_id": session_id, "user_id": user_id, "role": role}
 
 
@@ -249,11 +270,13 @@ def me(ctx: UserContext = Depends(require_auth)) -> dict[str, str]:  # noqa: B00
 
 @router.post("/logout")
 def logout(
+    response: Response,
     ctx: UserContext = Depends(require_auth),  # noqa: B008
     authorization: str | None = Header(default=None),
+    jarvis_session: str | None = Cookie(default=None),
 ) -> dict[str, bool]:
     del ctx
-    raw = _extract_bearer(authorization)
+    raw = extract_session_token(authorization, jarvis_session)
     if raw:
         with get_conn() as conn:
             item = session_from_token(conn, raw)
@@ -261,6 +284,7 @@ def logout(
                 delete_session(conn, item[0])
             else:
                 delete_session_by_token(conn, raw)
+    response.delete_cookie(key="jarvis_session", path="/")
     return {"ok": True}
 
 

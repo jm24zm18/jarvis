@@ -7,17 +7,26 @@
 - Ollama: `11434`
 - SearXNG: `8080`
 - SGLang: `30000`
+- `make dev` runs a host-port preflight first and fails early with remediation hints if
+  any of these ports are occupied.
 
 ## Core Runtime Commands
 
 ```bash
 make api
 make web-dev
+make setup-smoke
+make setup-smoke-running
 ```
 
 - API reloads with `uvicorn --reload`.
 - Web UI reloads via Vite HMR.
 - Periodic tasks run in-process inside the API lifespan.
+- `make setup-smoke` validates a reproducible local bootstrap path:
+  toolchain checks, dev port preflight, migrations, API import bootstrap,
+  and web dependency install.
+- `make setup-smoke-running` is the same smoke path but skips the dev port preflight.
+  Use it when local dependency services are intentionally already running.
 
 ## Common Workflows
 
@@ -88,6 +97,59 @@ make web-dev
 - Check API health: `GET /readyz`, `GET /metrics`
 - Validate compose services: `docker compose ps`
 
+### `make web-install` failures
+
+- `make web-install` now retries and writes deterministic logs to:
+  - wrapper log: `/tmp/jarvis-web-install.log`
+  - npm debug log path (if emitted by npm)
+- If npm traffic is blocked by a restricted sandbox/firewall, the wrapper reports:
+  - category: `network_blocked_or_sandboxed`
+  - remediation: retry in a non-restricted shell with outbound network access
+- Typical remediation sequence:
+  1. `npm cache clean --force`
+  2. `cd web && npm install --cache /tmp/npm-cache --prefer-offline=false`
+  3. Retry in a non-restricted/networked shell if DNS/egress is blocked.
+
+### Port conflict troubleshooting and alternate host-port profile
+
+- Detect current listeners:
+  - `ss -ltn '( sport = :11434 or sport = :30000 or sport = :8080 )'`
+- If needed, run dependencies on alternate host ports with `docker compose` overrides.
+  Example `docker-compose.override.yml`:
+
+```yaml
+services:
+  ollama:
+    ports:
+      - "21434:11434"
+  sglang:
+    ports:
+      - "31000:30000"
+  searxng:
+    ports:
+      - "18080:8080"
+```
+
+- When using alternate ports, update `.env` accordingly:
+  - `OLLAMA_BASE_URL=http://localhost:21434`
+  - `SGLANG_BASE_URL=http://localhost:31000/v1`
+  - `SEARXNG_BASE_URL=http://localhost:18080`
+
+### Secret Hygiene Quick Checks
+
+Run before commit/push when touching auth/provider/webhook config:
+
+```bash
+make secret-scan
+```
+
+If a local credential is exposed:
+
+1. Rotate the credential at the provider first (Google OAuth, GitHub token, webhook secret, etc.).
+2. Remove stale local values from `.env` and any local token cache files.
+3. Re-run the secret scans above and confirm clean output.
+4. Restart local services and verify auth/provider flows with new credentials.
+
 ## Related Docs
 
 - `docs/getting-started.md`
@@ -95,3 +157,5 @@ make web-dev
 - `docs/codebase-tour.md`
 - `docs/configuration.md`
 - `docs/github-pr-automation.md`
+- `docs/cli-reference.md`
+- `docs/api-usage-guide.md`

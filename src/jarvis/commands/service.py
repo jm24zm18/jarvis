@@ -4,6 +4,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from jarvis.agents.loader import get_all_agent_ids
 from jarvis.commands.handlers import parse_command
@@ -12,6 +13,10 @@ from jarvis.db.queries import (
     create_approval,
     create_thread,
     get_system_state,
+    list_selfupdate_checks,
+    list_selfupdate_transitions,
+    list_whatsapp_sender_reviews,
+    resolve_whatsapp_sender_review,
     set_thread_agents,
     set_thread_verbose,
 )
@@ -23,6 +28,7 @@ from jarvis.memory.service import MemoryService
 from jarvis.onboarding.service import reset_onboarding_state, start_onboarding_prompt
 from jarvis.providers.router import ProviderRouter
 from jarvis.scheduler.service import estimate_schedule_backlog
+from jarvis.selfupdate.pipeline import read_artifact, read_state
 from jarvis.tasks import get_task_runner
 from jarvis.tasks.system import enqueue_restart
 
@@ -189,6 +195,44 @@ async def maybe_execute_command(
         payload = [dict(r) for r in rows]
         return json.dumps({"trace_id": trace_id, "events": payload})
 
+    if command == "/logs" and len(args) >= 2 and args[0] == "trace-audit":
+        trace_id = args[1]
+        event_rows = conn.execute(
+            (
+                "SELECT event_type, component, created_at, payload_redacted_json "
+                "FROM events WHERE trace_id=? ORDER BY created_at ASC"
+            ),
+            (trace_id,),
+        ).fetchall()
+        checks = list_selfupdate_checks(conn, trace_id)
+        transitions = list_selfupdate_transitions(conn, trace_id)
+        patch_base = Path(get_settings().selfupdate_patch_dir)
+        trace_state: dict[str, str] = {}
+        artifact: dict[str, object] = {}
+        try:
+            trace_state = read_state(trace_id, patch_base)
+        except Exception:
+            trace_state = {}
+        try:
+            artifact = read_artifact(trace_id, patch_base)
+        except Exception:
+            artifact = {}
+        repo_index_hash = ""
+        hash_path = Path(".jarvis/repo_index.sha256")
+        if hash_path.exists():
+            repo_index_hash = hash_path.read_text().strip()
+        return json.dumps(
+            {
+                "trace_id": trace_id,
+                "repo_index_hash": repo_index_hash,
+                "events": [dict(r) for r in event_rows],
+                "checks": checks,
+                "transitions": transitions,
+                "state": trace_state,
+                "artifact": artifact,
+            }
+        )
+
     if command == "/logs" and len(args) >= 2 and args[0] == "search":
         query = " ".join(args[1:]).strip()
         if not query:
@@ -312,8 +356,8 @@ async def maybe_execute_command(
     if command == "/restart":
         if not _is_admin(admin_ids, actor_external_id):
             return "admin required"
-        state = get_system_state(conn)
-        if state["lockdown"] == 1:
+        system_state = get_system_state(conn)
+        if system_state["lockdown"] == 1:
             return "restart blocked during lockdown"
         conn.execute(
             "UPDATE system_state SET restarting=1, updated_at=datetime('now') WHERE id='singleton'"
@@ -326,6 +370,7 @@ async def maybe_execute_command(
         if not _is_admin(admin_ids, actor_external_id):
             return "admin required"
         action = args[0].strip().lower()
+        target_ref = args[1].strip() if len(args) >= 2 else ""
         allowed_actions = {
             "host.exec.sudo",
             "host.exec.systemctl",
@@ -335,7 +380,50 @@ async def maybe_execute_command(
         if action not in allowed_actions:
             return "invalid action"
         actor = actor_external_id or "admin"
-        _ = create_approval(conn, action=action, actor_id=actor)
+        _ = create_approval(
+            conn,
+            action=action,
+            actor_id=actor,
+            target_ref=target_ref if action == "selfupdate.apply" else "",
+            ttl_minutes=30,
+        )
+        if target_ref:
+            return f"approval created: {action} target={target_ref}"
         return f"approval created: {action}"
+
+    if command == "/wa-review" and args:
+        if not _is_admin(admin_ids, actor_external_id):
+            return "admin required"
+        action = args[0].strip().lower()
+        if action == "list":
+            status_filter = args[1].strip().lower() if len(args) >= 2 else "open"
+            if status_filter not in {"open", "allowed", "denied"}:
+                status_filter = "open"
+            review_items = list_whatsapp_sender_reviews(conn, status=status_filter, limit=20)
+            return json.dumps({"status": status_filter, "items": review_items})
+        if action in {"allow", "deny"} and len(args) >= 2:
+            review_id = args[1].strip()
+            note = " ".join(args[2:]).strip()
+            if not review_id:
+                return "usage: /wa-review allow|deny <queue_id> [reason]"
+            decision: Literal["allow", "deny"] = (
+                "allow" if action == "allow" else "deny"
+            )
+            resolved = resolve_whatsapp_sender_review(
+                conn,
+                review_id=review_id,
+                decision=decision,
+                reviewer_id=actor_external_id or "admin",
+                resolution_note=note,
+            )
+            if resolved is None:
+                return "review item not found"
+            if bool(resolved.get("closed")):
+                return f"review item already {resolved.get('status')}"
+            return f"review decision saved: {review_id} -> {resolved.get('status')}"
+        return (
+            "usage: /wa-review list [open|allowed|denied] | "
+            "/wa-review allow|deny <queue_id> [reason]"
+        )
 
     return "unknown command"

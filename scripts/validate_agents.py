@@ -5,6 +5,7 @@ Checks:
 - Required files exist (identity.md, soul.md, heartbeat.md)
 - YAML frontmatter in identity.md has agent_id matching directory name
 - allowed_tools is non-empty
+- governance fields are present and valid
 - Referenced tools exist in the tool registry
 """
 
@@ -48,7 +49,13 @@ def _parse_frontmatter(text: str) -> dict[str, object]:
             key = parts[0].strip()
             val = parts[1].strip()
             if val:
-                result[key] = val
+                lowered = val.lower()
+                if lowered in {"true", "false"}:
+                    result[key] = lowered == "true"
+                elif val.isdigit():
+                    result[key] = int(val)
+                else:
+                    result[key] = val
                 current_key = None
                 current_list = []
             else:
@@ -117,6 +124,26 @@ def validate() -> list[str]:
                 for tool in tools:
                     if tool not in registered_tools:
                         errors.append(f"{prefix} tool '{tool}' not found in registry")
+
+            risk_tier = frontmatter.get("risk_tier")
+            if risk_tier not in {"low", "medium", "high"}:
+                errors.append(f"{prefix} risk_tier must be one of low|medium|high")
+
+            max_actions = frontmatter.get("max_actions_per_step")
+            if not isinstance(max_actions, int) or max_actions < 1:
+                errors.append(f"{prefix} max_actions_per_step must be integer >= 1")
+
+            allowed_paths = frontmatter.get("allowed_paths")
+            if not isinstance(allowed_paths, list) or not allowed_paths:
+                errors.append(f"{prefix} allowed_paths must be a non-empty list")
+            elif any(not isinstance(path, str) or not path.strip() for path in allowed_paths):
+                errors.append(f"{prefix} allowed_paths entries must be non-empty strings")
+
+            can_request = frontmatter.get("can_request_privileged_change")
+            if not isinstance(can_request, bool):
+                errors.append(
+                    f"{prefix} can_request_privileged_change must be true or false"
+                )
 
         print(f"  {agent_id}: OK" if not any(agent_id in e for e in errors) else "")
 

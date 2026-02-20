@@ -4,7 +4,8 @@ from pathlib import Path
 
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
-from jarvis.db.queries import ensure_system_state
+from jarvis.db.queries import ensure_system_state, insert_system_fitness_snapshot, now_iso
+from jarvis.selfupdate.pipeline import write_context
 from jarvis.tasks.selfupdate import (
     self_update_apply,
     self_update_propose,
@@ -45,6 +46,18 @@ def _make_repo(tmp_path: Path) -> Path:
         text=True,
     )
     return repo
+
+
+def _evidence(file_ref: str = "hello.txt:1") -> dict[str, object]:
+    return {
+        "intent": "apply patch safely",
+        "file_refs": [file_ref],
+        "line_refs": [file_ref],
+        "policy_refs": ["deny-by-default tool access"],
+        "invariant_checks": ["append-only database migrations"],
+        "test_plan": ["echo ok"],
+        "risk_notes": ["low-risk text replacement"],
+    }
 
 
 def _make_python_repo(tmp_path: Path) -> Path:
@@ -91,7 +104,7 @@ def test_selfupdate_success_path(tmp_path: Path) -> None:
         ]
     )
 
-    propose = self_update_propose(trace_id, str(repo), patch, "test")
+    propose = self_update_propose(trace_id, str(repo), patch, "test", evidence=_evidence())
     validate = self_update_validate(trace_id)
     test = self_update_test(trace_id)
     apply = self_update_apply(trace_id)
@@ -109,12 +122,59 @@ def test_selfupdate_rejects_protected_path(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     patch = "diff --git a/etc/systemd/system/x.service b/etc/systemd/system/x.service\n+bad\n"
 
-    _ = self_update_propose(trace_id, str(repo), patch, "bad")
-    validate = self_update_validate(trace_id)
-    apply = self_update_apply(trace_id)
+    propose = self_update_propose(trace_id, str(repo), patch, "bad", evidence=_evidence())
+    assert propose["status"] == "rejected"
 
-    assert validate["status"] == "rejected"
-    assert apply["status"] == "rejected"
+
+def test_selfupdate_rejects_identity_governance_field_edits(tmp_path: Path) -> None:
+    trace_id = "trc_self_identity_governance"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    (repo / "agents").mkdir()
+    (repo / "agents" / "main").mkdir()
+    (repo / "agents" / "main" / "identity.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "risk_tier: medium",
+                "allowed_tools:",
+                "  - web_search",
+                "---",
+                "",
+            ]
+        )
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "seed identity"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    patch = "\n".join(
+        [
+            "diff --git a/agents/main/identity.md b/agents/main/identity.md",
+            "--- a/agents/main/identity.md",
+            "+++ b/agents/main/identity.md",
+            "@@ -1,5 +1,5 @@",
+            " ---",
+            "-risk_tier: medium",
+            "+risk_tier: high",
+            " allowed_tools:",
+            "   - web_search",
+            " ---",
+            "",
+        ]
+    )
+    propose = self_update_propose(
+        trace_id,
+        str(repo),
+        patch,
+        "attempt governance escalation",
+        evidence=_evidence(),
+    )
+    assert propose["status"] == "rejected"
+    assert "identity governance fields are immutable" in propose["reason"]
 
 
 def test_selfupdate_test_failure_and_rollback(tmp_path: Path) -> None:
@@ -133,7 +193,9 @@ def test_selfupdate_test_failure_and_rollback(tmp_path: Path) -> None:
         ]
     )
 
-    _ = self_update_propose(trace_id, str(repo), patch, "bad test")
+    evidence = _evidence()
+    evidence["test_plan"] = ["false"]
+    _ = self_update_propose(trace_id, str(repo), patch, "bad test", evidence=evidence)
     validate = self_update_validate(trace_id)
     test = self_update_test(trace_id)
     rollback = self_update_rollback(trace_id, "readyz failed")
@@ -160,7 +222,13 @@ def test_selfupdate_smoke_gate_pytest_failure(tmp_path: Path) -> None:
         ]
     )
 
-    _ = self_update_propose(trace_id, str(repo), patch, "smoke fail")
+    _ = self_update_propose(
+        trace_id,
+        str(repo),
+        patch,
+        "smoke fail",
+        evidence=_evidence("tests/test_basic.py:1"),
+    )
     validate = self_update_validate(trace_id)
     test = self_update_test(trace_id)
 
@@ -183,7 +251,7 @@ def test_selfupdate_apply_blocked_during_lockdown(tmp_path: Path) -> None:
             "",
         ]
     )
-    _ = self_update_propose(trace_id, str(repo), patch, "test")
+    _ = self_update_propose(trace_id, str(repo), patch, "test", evidence=_evidence())
     _ = self_update_validate(trace_id)
     _ = self_update_test(trace_id)
     with get_conn() as conn:
@@ -192,6 +260,111 @@ def test_selfupdate_apply_blocked_during_lockdown(tmp_path: Path) -> None:
     apply = self_update_apply(trace_id)
     assert apply["status"] == "rejected"
     assert "lockdown" in apply["reason"]
+
+
+def test_selfupdate_apply_blocked_by_fitness_gate(tmp_path: Path, monkeypatch) -> None:
+    trace_id = "trc_self_fitness_gate"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    monkeypatch.setenv("SELFUPDATE_FITNESS_GATE_MODE", "enforce")
+    monkeypatch.setenv("SELFUPDATE_MIN_BUILD_SUCCESS_RATE", "0.95")
+    get_settings.cache_clear()
+    with get_conn() as conn:
+        _ = insert_system_fitness_snapshot(
+            conn,
+            period_start=now_iso(),
+            period_end=now_iso(),
+            metrics={
+                "selfupdate_success_rate": 0.10,
+                "failure_capsule_recurrence_rate": 0.90,
+                "rollback_frequency": 9,
+            },
+        )
+    _ = self_update_propose(trace_id, str(repo), patch, "test", evidence=_evidence())
+    _ = self_update_validate(trace_id)
+    _ = self_update_test(trace_id)
+    apply = self_update_apply(trace_id)
+    assert apply["status"] == "rejected"
+    assert "fitness gate blocked" in str(apply["reason"])
+    get_settings.cache_clear()
+
+
+def test_selfupdate_apply_test_gate_warn_mode_does_not_block(tmp_path: Path, monkeypatch) -> None:
+    trace_id = "trc_self_test_gate_warn"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    monkeypatch.setenv("SELFUPDATE_TEST_GATE_MODE", "warn")
+    monkeypatch.setenv("SELFUPDATE_TEST_GATE_MIN_COVERAGE_PCT", "90")
+    get_settings.cache_clear()
+    _ = self_update_propose(trace_id, str(repo), patch, "test", evidence=_evidence())
+    _ = self_update_validate(trace_id)
+    _ = self_update_test(trace_id)
+    apply = self_update_apply(trace_id)
+    assert apply["status"] == "verified"
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, payload_json FROM selfupdate_checks "
+            "WHERE trace_id=? AND check_type='apply.test_gate' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (trace_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["status"]) == "warning"
+    assert "missing_coverage_evidence" in str(row["payload_json"])
+    get_settings.cache_clear()
+
+
+def test_selfupdate_apply_test_gate_enforce_blocks_with_typed_reason(
+    tmp_path: Path, monkeypatch
+) -> None:
+    trace_id = "trc_self_test_gate_enforce"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    monkeypatch.setenv("SELFUPDATE_TEST_GATE_MODE", "enforce")
+    monkeypatch.setenv("SELFUPDATE_TEST_GATE_MIN_COVERAGE_PCT", "90")
+    get_settings.cache_clear()
+    _ = self_update_propose(trace_id, str(repo), patch, "test", evidence=_evidence())
+    _ = self_update_validate(trace_id)
+    _ = self_update_test(trace_id)
+    apply = self_update_apply(trace_id)
+    assert apply["status"] == "rejected"
+    assert "test-first gate blocked apply" in str(apply["reason"])
+    assert "missing_coverage_evidence" in str(apply["reason"])
+    get_settings.cache_clear()
 
 
 def test_selfupdate_rollback_burst_emits_lockdown_event(tmp_path: Path) -> None:
@@ -211,8 +384,8 @@ def test_selfupdate_rollback_burst_emits_lockdown_event(tmp_path: Path) -> None:
     second = "trc_self_rb_2"
     _clean(first)
     _clean(second)
-    _ = self_update_propose(first, str(repo), patch, "rollback one")
-    _ = self_update_propose(second, str(repo), patch, "rollback two")
+    _ = self_update_propose(first, str(repo), patch, "rollback one", evidence=_evidence())
+    _ = self_update_propose(second, str(repo), patch, "rollback two", evidence=_evidence())
     _ = self_update_rollback(first, "forced rollback 1")
     _ = self_update_rollback(second, "forced rollback 2")
 
@@ -222,3 +395,137 @@ def test_selfupdate_rollback_burst_emits_lockdown_event(tmp_path: Path) -> None:
             "WHERE event_type='lockdown.triggered' ORDER BY created_at DESC LIMIT 5"
         ).fetchall()
     assert any("rollback_burst" in str(row["payload_redacted_json"]) for row in rows)
+
+
+def test_selfupdate_requires_evidence_packet(tmp_path: Path) -> None:
+    trace_id = "trc_self_missing_evidence"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    propose = self_update_propose(trace_id, str(repo), patch, "missing evidence", evidence=None)
+    assert propose["status"] == "rejected"
+
+
+def test_selfupdate_requires_line_refs(tmp_path: Path) -> None:
+    trace_id = "trc_self_missing_line_refs"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    evidence = _evidence()
+    del evidence["line_refs"]
+    propose = self_update_propose(
+        trace_id,
+        str(repo),
+        patch,
+        "missing line refs",
+        evidence=evidence,
+    )
+    assert propose["status"] == "rejected"
+
+
+def test_selfupdate_rejects_malformed_line_refs(tmp_path: Path) -> None:
+    trace_id = "trc_self_bad_line_refs"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    evidence = _evidence()
+    evidence["line_refs"] = ["hello.txt:0"]
+    propose = self_update_propose(trace_id, str(repo), patch, "bad line refs", evidence=evidence)
+    assert propose["status"] == "rejected"
+
+
+def test_selfupdate_critical_path_requires_test_changes(tmp_path: Path) -> None:
+    trace_id = "trc_self_critical_no_tests"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    critical_path = repo / "src" / "jarvis" / "tools"
+    critical_path.mkdir(parents=True, exist_ok=True)
+    runtime_file = critical_path / "runtime.py"
+    runtime_file.write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "add runtime file"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    patch = "\n".join(
+        [
+            "diff --git a/src/jarvis/tools/runtime.py b/src/jarvis/tools/runtime.py",
+            "--- a/src/jarvis/tools/runtime.py",
+            "+++ b/src/jarvis/tools/runtime.py",
+            "@@ -1 +1 @@",
+            "-x = 1",
+            "+x = 2",
+            "",
+        ]
+    )
+    _ = self_update_propose(
+        trace_id,
+        str(repo),
+        patch,
+        "critical change",
+        evidence=_evidence("src/jarvis/tools/runtime.py:1"),
+    )
+    _ = self_update_validate(trace_id)
+    result = self_update_test(trace_id)
+    assert result["status"] == "failed"
+    assert "requires tests" in result["reason"]
+
+
+def test_selfupdate_validate_requires_baseline_for_replay(tmp_path: Path) -> None:
+    trace_id = "trc_self_missing_baseline"
+    _clean(trace_id)
+    repo = _make_repo(tmp_path)
+    patch = "\n".join(
+        [
+            "diff --git a/hello.txt b/hello.txt",
+            "--- a/hello.txt",
+            "+++ b/hello.txt",
+            "@@ -1 +1 @@",
+            "-one",
+            "+two",
+            "",
+        ]
+    )
+    _ = self_update_propose(trace_id, str(repo), patch, "test", evidence=_evidence())
+    write_context(
+        trace_id,
+        Path(get_settings().selfupdate_patch_dir),
+        str(repo),
+        "test",
+        baseline_ref="",
+    )
+    result = self_update_validate(trace_id)
+    assert result["status"] == "rejected"
+    assert "baseline_ref" in result["reason"]

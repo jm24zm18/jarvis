@@ -12,6 +12,7 @@ from jarvis.db.queries import (
     ensure_user,
     insert_message,
 )
+from jarvis.errors import ProviderError
 from jarvis.memory.skills import SkillsService
 from jarvis.orchestrator.step import (
     DEGRADED_RESPONSE,
@@ -73,6 +74,102 @@ class _SequenceRouter:
         self.calls += 1
         response, lane = self._responses[idx]
         return response, lane, None
+
+
+class _FailingProviderRouter:
+    async def generate(
+        self,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, object]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        priority: str = "normal",
+    ) -> tuple[ModelResponse, str, str | None]:
+        del messages, tools, temperature, max_tokens, priority
+        raise ProviderError(
+            "all providers failed: primary=ConnectError: temporary failure in name resolution, "
+            "fallback=ConnectError: [Errno -2] Name or service not known",
+            retryable=False,
+        )
+
+
+class _ToolLoopThenSynthesisRouter:
+    def __init__(self, synthesis_text: str = "terminal synthesis answer") -> None:
+        self.calls = 0
+        self.synthesis_text = synthesis_text
+
+    async def generate(
+        self,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, object]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        priority: str = "normal",
+    ) -> tuple[ModelResponse, str, str | None]:
+        del messages, temperature, max_tokens, priority
+        self.calls += 1
+        if tools is None:
+            return ModelResponse(text=self.synthesis_text, tool_calls=[]), "primary", None
+        return (
+            ModelResponse(
+                text="I can help with that.",
+                tool_calls=[{"name": "echo", "arguments": {"x": 1}}],
+            ),
+            "primary",
+            None,
+        )
+
+
+class _ToolLoopThenSynthesisErrorRouter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def generate(
+        self,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, object]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        priority: str = "normal",
+    ) -> tuple[ModelResponse, str, str | None]:
+        del messages, temperature, max_tokens, priority
+        self.calls += 1
+        if tools is None:
+            raise ProviderError("all providers failed: fallback timeout", retryable=True)
+        return (
+            ModelResponse(
+                text="I can help with that.",
+                tool_calls=[{"name": "echo", "arguments": {"x": 1}}],
+            ),
+            "primary",
+            None,
+        )
+
+
+class _ToolLoopThenSynthesisPlaceholderRouter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def generate(
+        self,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, object]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        priority: str = "normal",
+    ) -> tuple[ModelResponse, str, str | None]:
+        del messages, temperature, max_tokens, priority
+        self.calls += 1
+        if tools is None:
+            return ModelResponse(text="I can help with that.", tool_calls=[]), "primary", None
+        return (
+            ModelResponse(
+                text="I can help with that.",
+                tool_calls=[{"name": "echo", "arguments": {"x": 1}}],
+            ),
+            "primary",
+            None,
+        )
 
 
 def test_run_agent_step_model_path_with_tool_loop(monkeypatch) -> None:
@@ -207,7 +304,7 @@ def test_run_agent_step_enforces_tool_iteration_cap(monkeypatch) -> None:
         _ = asyncio.run(
             run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_3")
         )
-    assert router.calls == MAX_TOOL_ITERATIONS + 1
+    assert router.calls == MAX_TOOL_ITERATIONS + 2
     assert runtime.execute_calls == MAX_TOOL_ITERATIONS
 
 
@@ -486,6 +583,116 @@ def test_run_agent_step_fallback_only_retry_recovers_response(monkeypatch) -> No
     assert router.calls == 2
 
 
+def test_run_agent_step_tool_loop_exhaustion_runs_terminal_synthesis(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", lambda **_kwargs: None)
+    monkeypatch.setattr("jarvis.events.writer.MemoryService.embed_text", lambda _self, _text: [0.0])
+    monkeypatch.setattr(
+        "jarvis.events.writer.MemoryService.upsert_event_vector",
+        lambda _self, _conn, _event_id, _thread_id, _vector: None,
+    )
+    router = _ToolLoopThenSynthesisRouter("Recovered terminal synthesis answer.")
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550137")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "build loop")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_13")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        evt = conn.execute(
+            (
+                "SELECT COUNT(*) AS c FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.degraded'"
+            ),
+            ("trc_step_13",),
+        ).fetchone()
+    assert row is not None
+    assert row["content"] == "Recovered terminal synthesis answer."
+    assert evt is not None and int(evt["c"]) == 0
+    assert runtime.execute_calls == MAX_TOOL_ITERATIONS
+    assert router.calls == MAX_TOOL_ITERATIONS + 2
+
+
+def test_run_agent_step_terminal_synthesis_provider_error_sets_specific_reason(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", lambda **_kwargs: None)
+    monkeypatch.setattr("jarvis.events.writer.MemoryService.embed_text", lambda _self, _text: [0.0])
+    monkeypatch.setattr(
+        "jarvis.events.writer.MemoryService.upsert_event_vector",
+        lambda _self, _conn, _event_id, _thread_id, _vector: None,
+    )
+    router = _ToolLoopThenSynthesisErrorRouter()
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550138")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "build loop error")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_14")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        degraded_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.degraded' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_step_14",),
+        ).fetchone()
+    assert row is not None
+    assert row["content"] == DEGRADED_RESPONSE
+    assert degraded_evt is not None
+    payload = json.loads(str(degraded_evt["payload_json"]))
+    assert payload["reason"] == "provider_error_terminal_synthesis"
+    assert runtime.execute_calls == MAX_TOOL_ITERATIONS
+
+
+def test_run_agent_step_tool_loop_placeholder_uses_deterministic_terminal_message(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", lambda **_kwargs: None)
+    monkeypatch.setattr("jarvis.events.writer.MemoryService.embed_text", lambda _self, _text: [0.0])
+    monkeypatch.setattr(
+        "jarvis.events.writer.MemoryService.upsert_event_vector",
+        lambda _self, _conn, _event_id, _thread_id, _vector: None,
+    )
+    router = _ToolLoopThenSynthesisPlaceholderRouter()
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550139")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "build loop placeholder")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_15")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        degraded_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.degraded' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_step_15",),
+        ).fetchone()
+    assert row is not None
+    assert "I completed tool execution but could not synthesize a final summary." in str(
+        row["content"]
+    )
+    assert "Trace: trc_step_15." in str(row["content"])
+    assert degraded_evt is not None
+    payload = json.loads(str(degraded_evt["payload_json"]))
+    assert payload["reason"] == "placeholder_response_after_tool_loop"
+
+
 def test_extract_primary_failure_fields_parses_retry_and_request_id() -> None:
     payload = _extract_primary_failure_fields(
         "Quota exceeded 429 retry-after 2.5 req_abc123"
@@ -494,6 +701,50 @@ def test_extract_primary_failure_fields_parses_retry_and_request_id() -> None:
     assert payload["primary_status_code"] == 429
     assert payload["primary_retry_seconds"] == 2
     assert payload["primary_request_id"] == "req_abc123"
+
+
+def test_extract_primary_failure_fields_classifies_dns_and_transport() -> None:
+    dns_payload = _extract_primary_failure_fields(
+        "ConnectError: temporary failure in name resolution"
+    )
+    transport_payload = _extract_primary_failure_fields(
+        "ConnectError: failed to establish a new connection: connection refused"
+    )
+    assert dns_payload["primary_failure_kind"] == "dns_resolution"
+    assert transport_payload["primary_failure_kind"] == "transport_unavailable"
+
+
+def test_run_agent_step_provider_failure_writes_degraded_message_and_error_event(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    runtime = _FakeRuntime()
+    router = _FailingProviderRouter()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550135")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "hello")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_12")
+        )
+        message_row = conn.execute(
+            "SELECT content FROM messages WHERE id=?",
+            (message_id,),
+        ).fetchone()
+        event_row = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='model.run.error' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_step_12",),
+        ).fetchone()
+    assert message_row is not None
+    assert message_row["content"] == DEGRADED_RESPONSE
+    assert event_row is not None
+    payload = json.loads(str(event_row["payload_json"]))
+    assert payload["primary_failure_kind"] == "dns_resolution"
 
 
 def test_load_agent_context_falls_back_to_files(monkeypatch, tmp_path) -> None:
@@ -578,3 +829,95 @@ def test_run_agent_step_emits_tool_error_notification(monkeypatch) -> None:
             )
         )
     assert any(evt == "tool.call.end" and "error" in payload for evt, payload in notifications)
+
+
+def test_run_agent_step_enqueues_full_tool_memory_payload(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    captured: list[dict[str, object]] = []
+
+    def _capture_memory(**kwargs: object) -> None:
+        captured.append(dict(kwargs))
+
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", _capture_memory)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="calling tool",
+                    tool_calls=[{"name": "echo", "arguments": {"x": 1}}],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="done", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550877")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "run tool")
+        _ = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_tool_mem")
+        )
+    tool_entries = [
+        item for item in captured if item.get("metadata", {}).get("source") == "tool.call.end"
+    ]
+    assert tool_entries
+    first = tool_entries[0]
+    metadata = first["metadata"]
+    assert isinstance(metadata, dict)
+    assert "result_sha256" in metadata
+    assert "result_char_count" in metadata
+    text = str(first["text"])
+    assert '"type": "tool.call.end"' in text
+    assert '"status": "success"' in text
+
+
+def test_run_agent_step_enqueues_thought_memory_payload(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    captured: list[dict[str, object]] = []
+
+    def _capture_memory(**kwargs: object) -> None:
+        captured.append(dict(kwargs))
+
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", _capture_memory)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="answer",
+                    tool_calls=[],
+                    reasoning_text="reasoned thoughts",
+                    reasoning_parts=[{"text": "reasoned thoughts"}],
+                ),
+                "primary",
+            )
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550876")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "hello")
+        _ = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_thought_mem",
+            )
+        )
+    thought_entries = [
+        item for item in captured if item.get("metadata", {}).get("source") == "agent.thought"
+    ]
+    assert thought_entries
+    metadata = thought_entries[0]["metadata"]
+    assert isinstance(metadata, dict)
+    assert "thought_sha256" in metadata
+    assert "thought_char_count" in metadata
+    assert '"type": "agent.thought"' in str(thought_entries[0]["text"])

@@ -18,7 +18,7 @@ export default function LoginPage() {
     setError("");
     try {
       const result = await login(password);
-      setAuth(result.token, result.user_id);
+      setAuth(result.user_id);
       navigate("/chat");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");

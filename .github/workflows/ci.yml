@@ -6,36 +6,42 @@ on:
   pull_request:
     branches: [main, master, dev]
 
+permissions:
+  contents: read
+
+env:
+  SELFUPDATE_TEST_GATE_MODE: enforce
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: astral-sh/setup-uv@eac588a2f8b00de12f7fef2f0d0bf7afac16e1e7
       - run: uv sync --frozen --all-groups
       - run: uv run ruff check src tests
 
   typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: astral-sh/setup-uv@eac588a2f8b00de12f7fef2f0d0bf7afac16e1e7
       - run: uv sync --frozen --all-groups
       - run: uv run mypy src
 
   test-unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: astral-sh/setup-uv@eac588a2f8b00de12f7fef2f0d0bf7afac16e1e7
       - run: uv sync --frozen --all-groups
       - run: uv run pytest tests/unit -q
 
   test-integration:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: astral-sh/setup-uv@eac588a2f8b00de12f7fef2f0d0bf7afac16e1e7
       - run: uv sync --frozen --all-groups
       - run: uv run pytest tests/integration -q
 
@@ -43,21 +49,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test-unit, test-integration]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: astral-sh/setup-uv@eac588a2f8b00de12f7fef2f0d0bf7afac16e1e7
       - run: uv sync --frozen --all-groups
       - name: Run tests with coverage
         run: |
           uv run pytest --cov=src --cov-report=term-missing --cov-report=xml:coverage.xml \
             --cov-report=json:/tmp/jarvis_coverage.json tests/unit tests/integration -q
       - run: uv run python scripts/check_coverage.py /tmp/jarvis_coverage.json
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: coverage.xml
-          fail_ci_if_error: false
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Diff coverage (PRs only)
         if: github.event_name == 'pull_request'
         run: uv run diff-cover coverage.xml --compare-branch=origin/dev --fail-under=80
@@ -65,37 +64,38 @@ jobs:
   validate-agents:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: astral-sh/setup-uv@eac588a2f8b00de12f7fef2f0d0bf7afac16e1e7
       - run: uv sync --frozen --all-groups
       - run: uv run python scripts/validate_agents.py
 
   test-migrations:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
       - run: python3 scripts/test_migrations.py
 
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: astral-sh/setup-uv@eac588a2f8b00de12f7fef2f0d0bf7afac16e1e7
       - run: uv sync --frozen --all-groups
       - name: Bandit security scan
         run: uv run bandit -r src/jarvis -c pyproject.toml -ll
       - name: Pip audit
         run: uv run pip-audit
       - name: TruffleHog secrets scan
-        uses: trufflesecurity/trufflehog@main
-        with:
-          extra_args: --only-verified
+        run: |
+          docker run --rm -v "$PWD:/workdir" \
+            ghcr.io/trufflesecurity/trufflehog:3.92.4@sha256:c28ab4a11e01d6fcc10776f65cce015bdf9795f2393cffa2ec0a7c8464ee58b6 \
+            filesystem /workdir --only-verified
 
   web-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 20
           cache: npm
@@ -110,8 +110,8 @@ jobs:
   web-typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 20
           cache: npm
@@ -124,8 +124,8 @@ jobs:
   web-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 20
           cache: npm

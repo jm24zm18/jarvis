@@ -40,3 +40,25 @@ async def test_shutdown_drains_inflight_tasks() -> None:
     assert runner.send_task("demo.async", kwargs={}) is True
     await runner.shutdown(timeout_s=1)
     assert completed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_runtimeerror_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = TaskRunner(max_concurrent=1)
+    completed = asyncio.Event()
+
+    def _task() -> None:
+        completed.set()
+
+    async def _raise_runtimeerror(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("cannot schedule new futures after shutdown")
+
+    monkeypatch.setattr("jarvis.tasks.runner.asyncio.to_thread", _raise_runtimeerror)
+
+    runner.register("demo.sync", _task)
+    assert runner.send_task("demo.sync", kwargs={}) is True
+    await asyncio.sleep(0.05)
+    assert runner.in_flight == 0
+    assert not completed.is_set()
+    await runner.shutdown(timeout_s=1)

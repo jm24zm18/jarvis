@@ -17,6 +17,9 @@ def test_env(tmp_path: Path):
     os.environ["APP_DB"] = str(db)
     os.environ["SELFUPDATE_PATCH_DIR"] = str(patch_dir)
     os.environ["WHATSAPP_VERIFY_TOKEN"] = "test-token"
+    os.environ["EVOLUTION_API_URL"] = ""
+    os.environ["WHATSAPP_AUTO_CREATE_ON_STARTUP"] = "0"
+    os.environ["MAINTENANCE_ENABLED"] = "0"
     get_settings.cache_clear()
     run_migrations()
     _reset_channels()

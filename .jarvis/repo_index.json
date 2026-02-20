@@ -1,0 +1,525 @@
+{
+  "agents": {
+    "api_guardian": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read",
+      "skill_write"
+    ],
+    "coder": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read",
+      "skill_write"
+    ],
+    "data_migrator": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read",
+      "skill_write"
+    ],
+    "dependency_steward": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read"
+    ],
+    "docs_keeper": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read",
+      "skill_write"
+    ],
+    "lintfixer": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read",
+      "skill_write"
+    ],
+    "main": [
+      "echo",
+      "exec_host",
+      "session_history",
+      "session_list",
+      "session_send",
+      "skill_list",
+      "skill_read",
+      "skill_write",
+      "update_persona",
+      "web_search"
+    ],
+    "planner": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read",
+      "skill_write"
+    ],
+    "release_candidate": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read"
+    ],
+    "release_ops": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read",
+      "skill_write"
+    ],
+    "researcher": [
+      "echo",
+      "session_send",
+      "skill_list",
+      "skill_read",
+      "skill_write",
+      "web_search"
+    ],
+    "security_reviewer": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read",
+      "skill_write",
+      "web_search"
+    ],
+    "tester": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read",
+      "skill_write"
+    ],
+    "user_simulator": [
+      "echo",
+      "skill_list",
+      "skill_read"
+    ],
+    "web_builder": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read",
+      "skill_write"
+    ]
+  },
+  "api_routes": [
+    "src/jarvis/routes/api/__init__.py",
+    "src/jarvis/routes/api/agents.py",
+    "src/jarvis/routes/api/auth.py",
+    "src/jarvis/routes/api/bugs.py",
+    "src/jarvis/routes/api/channels.py",
+    "src/jarvis/routes/api/events.py",
+    "src/jarvis/routes/api/governance.py",
+    "src/jarvis/routes/api/memory.py",
+    "src/jarvis/routes/api/messages.py",
+    "src/jarvis/routes/api/permissions.py",
+    "src/jarvis/routes/api/schedules.py",
+    "src/jarvis/routes/api/selfupdate.py",
+    "src/jarvis/routes/api/stories.py",
+    "src/jarvis/routes/api/system.py",
+    "src/jarvis/routes/api/threads.py",
+    "src/jarvis/routes/api/webhooks.py"
+  ],
+  "commands": [
+    {
+      "recipe": [],
+      "target": ".PHONY"
+    },
+    {
+      "recipe": [
+        "uv run uvicorn jarvis.main:app --reload --app-dir src"
+      ],
+      "target": "api"
+    },
+    {
+      "recipe": [
+        "docker compose up -d"
+      ],
+      "target": "dev"
+    },
+    {
+      "recipe": [
+        "uv run python scripts/docs_check.py"
+      ],
+      "target": "docs-check"
+    },
+    {
+      "recipe": [
+        "uv run python scripts/generate_api_docs.py"
+      ],
+      "target": "docs-generate"
+    },
+    {
+      "recipe": [
+        "uv run jarvis doctor"
+      ],
+      "target": "doctor"
+    },
+    {
+      "recipe": [
+        "uv run pre-commit install"
+      ],
+      "target": "hooks"
+    },
+    {
+      "recipe": [
+        "uv run ruff check src tests"
+      ],
+      "target": "lint"
+    },
+    {
+      "recipe": [
+        "uv run python -m jarvis.db.migrations.runner"
+      ],
+      "target": "migrate"
+    },
+    {
+      "recipe": [
+        "python3 scripts/dev_preflight_ports.py"
+      ],
+      "target": "preflight-dev-ports"
+    },
+    {
+      "recipe": [
+        "@if [ -x /tmp/sec-tools/bin/gitleaks ]; then /tmp/sec-tools/bin/gitleaks detect --source . --no-git --redact; else gitleaks detect --source . --no-git --redact; fi",
+        "@if [ -x /tmp/sec-tools/bin/trufflehog ]; then /tmp/sec-tools/bin/trufflehog filesystem . --only-verified; else trufflehog filesystem . --only-verified; fi"
+      ],
+      "target": "secret-scan"
+    },
+    {
+      "recipe": [
+        "uv run bandit -r src/jarvis -c pyproject.toml -ll",
+        "uv run pip-audit"
+      ],
+      "target": "security"
+    },
+    {
+      "recipe": [
+        "uv run jarvis setup"
+      ],
+      "target": "setup"
+    },
+    {
+      "recipe": [
+        "python3 scripts/new_user_smoke.py"
+      ],
+      "target": "setup-smoke"
+    },
+    {
+      "recipe": [
+        "python3 scripts/new_user_smoke.py --skip-dev-preflight"
+      ],
+      "target": "setup-smoke-running"
+    },
+    {
+      "recipe": [
+        "uv run pytest tests"
+      ],
+      "target": "test"
+    },
+    {
+      "recipe": [
+        "uv run ruff check src tests",
+        "uv run mypy src",
+        "uv run python scripts/validate_agents.py",
+        "python3 scripts/test_migrations.py",
+        "uv run pytest tests/unit -q",
+        "uv run pytest tests/integration -q",
+        "uv run pytest tests --cov=jarvis.orchestrator --cov=jarvis.policy --cov=jarvis.tools.runtime --cov-report=json:/tmp/jarvis_coverage.json -q",
+        "uv run python scripts/check_coverage.py /tmp/jarvis_coverage.json"
+      ],
+      "target": "test-gates"
+    },
+    {
+      "recipe": [
+        "python3 scripts/test_migrations.py"
+      ],
+      "target": "test-migrations"
+    },
+    {
+      "recipe": [
+        "uv run mypy src"
+      ],
+      "target": "typecheck"
+    },
+    {
+      "recipe": [
+        "uv run python scripts/validate_agents.py"
+      ],
+      "target": "validate-agents"
+    },
+    {
+      "recipe": [
+        "cd web && npm run build"
+      ],
+      "target": "web-build"
+    },
+    {
+      "recipe": [
+        "cd web && npm run dev"
+      ],
+      "target": "web-dev"
+    },
+    {
+      "recipe": [
+        "python3 scripts/web_install.py"
+      ],
+      "target": "web-install"
+    },
+    {
+      "recipe": [
+        "cd web && npm run lint"
+      ],
+      "target": "web-lint"
+    },
+    {
+      "recipe": [
+        "cd web && npm test"
+      ],
+      "target": "web-test"
+    },
+    {
+      "recipe": [
+        "cd web && npm run typecheck"
+      ],
+      "target": "web-typecheck"
+    }
+  ],
+  "entrypoints": [
+    "src/jarvis/cli/main.py",
+    "src/jarvis/main.py",
+    "web/src/App.tsx"
+  ],
+  "generated_at": "2026-02-20T01:08:31.348083+00:00",
+  "invariant_checks": [
+    "append-only database migrations",
+    "deny-by-default tool policy",
+    "no direct master writes",
+    "ownership/rbac boundaries",
+    "traceable events schema"
+  ],
+  "migrations": [
+    {
+      "file": "src/jarvis/db/migrations/001_initial.sql",
+      "number": 1
+    },
+    {
+      "file": "src/jarvis/db/migrations/002_memory.sql",
+      "number": 2
+    },
+    {
+      "file": "src/jarvis/db/migrations/003_sessions.sql",
+      "number": 3
+    },
+    {
+      "file": "src/jarvis/db/migrations/004_policy.sql",
+      "number": 4
+    },
+    {
+      "file": "src/jarvis/db/migrations/005_scheduler.sql",
+      "number": 5
+    },
+    {
+      "file": "src/jarvis/db/migrations/006_scheduler_dispatches.sql",
+      "number": 6
+    },
+    {
+      "file": "src/jarvis/db/migrations/007_scheduler_max_catchup.sql",
+      "number": 7
+    },
+    {
+      "file": "src/jarvis/db/migrations/008_thread_summaries.sql",
+      "number": 8
+    },
+    {
+      "file": "src/jarvis/db/migrations/009_ops_state.sql",
+      "number": 9
+    },
+    {
+      "file": "src/jarvis/db/migrations/010_search_fts.sql",
+      "number": 10
+    },
+    {
+      "file": "src/jarvis/db/migrations/011_vector_tables.sql",
+      "number": 11
+    },
+    {
+      "file": "src/jarvis/db/migrations/012_vector_runtime_metadata.sql",
+      "number": 12
+    },
+    {
+      "file": "src/jarvis/db/migrations/013_ops_exec_host_and_migration_lock.sql",
+      "number": 13
+    },
+    {
+      "file": "src/jarvis/db/migrations/014_web_ui.sql",
+      "number": 14
+    },
+    {
+      "file": "src/jarvis/db/migrations/015_onboarding.sql",
+      "number": 15
+    },
+    {
+      "file": "src/jarvis/db/migrations/016_knowledge_base.sql",
+      "number": 16
+    },
+    {
+      "file": "src/jarvis/db/migrations/017_onboarding_v2.sql",
+      "number": 17
+    },
+    {
+      "file": "src/jarvis/db/migrations/018_skills.sql",
+      "number": 18
+    },
+    {
+      "file": "src/jarvis/db/migrations/019_bug_reports.sql",
+      "number": 19
+    },
+    {
+      "file": "src/jarvis/db/migrations/020_user_roles.sql",
+      "number": 20
+    },
+    {
+      "file": "src/jarvis/db/migrations/021_skill_packages.sql",
+      "number": 21
+    },
+    {
+      "file": "src/jarvis/db/migrations/022_thread_compaction_threshold.sql",
+      "number": 22
+    },
+    {
+      "file": "src/jarvis/db/migrations/023_webhook_triggers.sql",
+      "number": 23
+    },
+    {
+      "file": "src/jarvis/db/migrations/024_bug_reports_kinds_and_github_issue.sql",
+      "number": 24
+    },
+    {
+      "file": "src/jarvis/db/migrations/025_state_items.sql",
+      "number": 25
+    },
+    {
+      "file": "src/jarvis/db/migrations/026_failure_capsules.sql",
+      "number": 26
+    },
+    {
+      "file": "src/jarvis/db/migrations/027_agent_governance.sql",
+      "number": 27
+    },
+    {
+      "file": "src/jarvis/db/migrations/028_approval_scoping.sql",
+      "number": 28
+    },
+    {
+      "file": "src/jarvis/db/migrations/029_memory_governance.sql",
+      "number": 29
+    },
+    {
+      "file": "src/jarvis/db/migrations/030_story_runs.sql",
+      "number": 30
+    },
+    {
+      "file": "src/jarvis/db/migrations/031_selfupdate_runs.sql",
+      "number": 31
+    },
+    {
+      "file": "src/jarvis/db/migrations/032_system_fitness.sql",
+      "number": 32
+    },
+    {
+      "file": "src/jarvis/db/migrations/033_state_reconciliation_ops.sql",
+      "number": 33
+    },
+    {
+      "file": "src/jarvis/db/migrations/034_governance_runs.sql",
+      "number": 34
+    },
+    {
+      "file": "src/jarvis/db/migrations/035_learning_loop.sql",
+      "number": 35
+    },
+    {
+      "file": "src/jarvis/db/migrations/036_recursive_guardrails.sql",
+      "number": 36
+    },
+    {
+      "file": "src/jarvis/db/migrations/037_fitness_gate_config.sql",
+      "number": 37
+    },
+    {
+      "file": "src/jarvis/db/migrations/038_failure_remediation_feedback.sql",
+      "number": 38
+    },
+    {
+      "file": "src/jarvis/db/migrations/043_state_items_tiers_importance.sql",
+      "number": 43
+    },
+    {
+      "file": "src/jarvis/db/migrations/044_memory_embedding_cache.sql",
+      "number": 44
+    },
+    {
+      "file": "src/jarvis/db/migrations/045_memory_archive.sql",
+      "number": 45
+    },
+    {
+      "file": "src/jarvis/db/migrations/046_state_relations.sql",
+      "number": 46
+    },
+    {
+      "file": "src/jarvis/db/migrations/047_memory_review_queue.sql",
+      "number": 47
+    },
+    {
+      "file": "src/jarvis/db/migrations/048_failure_bridge.sql",
+      "number": 48
+    },
+    {
+      "file": "src/jarvis/db/migrations/049_whatsapp_evolution_state.sql",
+      "number": 49
+    },
+    {
+      "file": "src/jarvis/db/migrations/050_memory_consistency_reports.sql",
+      "number": 50
+    },
+    {
+      "file": "src/jarvis/db/migrations/051_webhook_replay_guard.sql",
+      "number": 51
+    },
+    {
+      "file": "src/jarvis/db/migrations/052_users_external_id_guard.sql",
+      "number": 52
+    },
+    {
+      "file": "src/jarvis/db/migrations/053_state_reconciliation_tokens_saved.sql",
+      "number": 53
+    },
+    {
+      "file": "src/jarvis/db/migrations/054_evolution_instance_contract.sql",
+      "number": 54
+    },
+    {
+      "file": "src/jarvis/db/migrations/055_evolution_items.sql",
+      "number": 55
+    },
+    {
+      "file": "src/jarvis/db/migrations/056_whatsapp_sender_review_queue.sql",
+      "number": 56
+    }
+  ],
+  "protected_modules": [
+    "src/jarvis/auth",
+    "src/jarvis/db/migrations",
+    "src/jarvis/policy/engine.py",
+    "src/jarvis/tools/runtime.py"
+  ],
+  "repo_root": "/home/justin/jarvis2"
+}

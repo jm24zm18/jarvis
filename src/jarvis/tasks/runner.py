@@ -144,7 +144,14 @@ class TaskRunner:
                 if inspect.iscoroutinefunction(func):
                     await func(**payload)
                     return
-                result = await asyncio.to_thread(func, **payload)
+                try:
+                    result = await asyncio.to_thread(func, **payload)
+                except RuntimeError as exc:
+                    # During app reload/shutdown, asyncio may reject new threadpool work.
+                    if "cannot schedule new futures after shutdown" in str(exc).lower():
+                        logger.warning("Task dropped during shutdown: %s", name)
+                        return
+                    raise
                 if inspect.isawaitable(result):
                     await result
             except Exception:

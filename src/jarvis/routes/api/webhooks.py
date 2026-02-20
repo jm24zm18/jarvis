@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
@@ -122,11 +123,39 @@ def _extract_chat_trigger(body: str, bot_login: str) -> tuple[str, str] | None:
     return None
 
 
-@router.post("/webhooks/github")
+def _record_delivery_once(source: str, delivery_id: str, window_minutes: int) -> bool:
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(minutes=max(1, int(window_minutes)))
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM webhook_delivery_receipts WHERE expires_at <= ?",
+            (now.isoformat(),),
+        )
+        conn.execute(
+            (
+                "INSERT OR IGNORE INTO webhook_delivery_receipts("
+                "source, delivery_id, received_at, expires_at"
+                ") VALUES(?,?,?,?)"
+            ),
+            (source, delivery_id, now.isoformat(), expires_at.isoformat()),
+        )
+        changes = conn.execute("SELECT changes() AS n").fetchone()
+    return bool(changes and int(changes["n"]) == 1)
+
+
+@router.post(
+    "/webhooks/github",
+    responses={
+        400: {"description": "missing delivery ID or invalid payload"},
+        401: {"description": "invalid github signature"},
+        409: {"description": "replay detected"},
+    },
+)
 async def github_webhook(
     request: Request,
     x_github_event: str | None = Header(default=None),
     x_hub_signature_256: str | None = Header(default=None),
+    x_github_delivery: str | None = Header(default=None),
 ) -> dict[str, object]:
     settings = get_settings()
     body = await request.body()
@@ -136,6 +165,15 @@ async def github_webhook(
         x_hub_signature_256,
     ):
         raise HTTPException(status_code=401, detail="invalid github signature")
+    delivery_id = (x_github_delivery or "").strip()
+    if not delivery_id:
+        raise HTTPException(status_code=400, detail="missing github delivery id")
+    if not _record_delivery_once(
+        "github",
+        delivery_id,
+        settings.webhook_replay_window_minutes,
+    ):
+        raise HTTPException(status_code=409, detail="replay detected")
 
     event_type = (x_github_event or "").strip()
     if event_type == "ping":

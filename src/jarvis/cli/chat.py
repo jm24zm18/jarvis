@@ -143,9 +143,20 @@ def format_reply(reply: AssistantReply, json_output: bool) -> str:
         return reply.assistant_text
     return json.dumps(
         {
+            "ok": True,
             "thread_id": reply.thread_id,
             "user_message_id": reply.user_message_id,
             "assistant_message_id": reply.assistant_message_id,
             "assistant": reply.assistant_text,
+        }
+    )
+
+
+def format_json_error(thread_id: str, code: str, message: str) -> str:
+    return json.dumps(
+        {
+            "ok": False,
+            "thread_id": thread_id,
+            "error": {"code": code, "message": message},
         }
     )

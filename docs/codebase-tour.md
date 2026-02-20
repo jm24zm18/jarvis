@@ -98,3 +98,4 @@
 - `docs/architecture.md`
 - `docs/configuration.md`
 - `docs/change-safety.md`
+- `docs/api-reference.md`

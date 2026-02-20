@@ -1,14 +1,17 @@
 [Unit]
 Description=Jarvis Worker
-After=network.target
+After=network.target jarvis-api.service
 
 [Service]
 Type=simple
-WorkingDirectory=/srv/agent-framework
-EnvironmentFile=/etc/jarvis/jarvis.env
-ExecStart=/usr/bin/env uv run celery -A jarvis.celery_app worker -Q agent_priority,agent_default,tools_io,local_llm --loglevel=info
+User=justin
+WorkingDirectory=/home/justin/jarvis2
+EnvironmentFile=/home/justin/jarvis2/deploy/.env.prod
+ExecStart=/home/justin/.local/bin/uv run celery -A jarvis.celery_app worker -Q agent_priority,agent_default,tools_io,local_llm --loglevel=info
 Restart=always
-RestartSec=2
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

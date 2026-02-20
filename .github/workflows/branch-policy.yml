@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Enforce PR branch policy
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c8e3f9d8fb0019ca2f5ce7b4d4af1055ed
         with:
           script: |
             const pr = context.payload.pull_request;

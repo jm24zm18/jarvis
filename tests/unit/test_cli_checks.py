@@ -6,6 +6,8 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
+
 from jarvis.cli.checks import (
     CheckResult,
     check_agent_bundles,
@@ -79,23 +81,57 @@ class TestCheckEnvFile:
 class TestCheckHttpService:
     def test_ok(self) -> None:
         mock_resp = MagicMock(status_code=200)
-        with patch("jarvis.cli.checks.httpx") as mock_httpx:
-            mock_httpx.get.return_value = mock_resp
+        with patch("jarvis.cli.checks.httpx.get", return_value=mock_resp):
             result = check_http_service("Ollama", "http://localhost:11434", "/api/tags")
         assert result.passed is True
 
     def test_server_error(self) -> None:
         mock_resp = MagicMock(status_code=500)
-        with patch("jarvis.cli.checks.httpx") as mock_httpx:
-            mock_httpx.get.return_value = mock_resp
+        with patch("jarvis.cli.checks.httpx.get", return_value=mock_resp):
             result = check_http_service("Ollama", "http://localhost:11434", "/api/tags")
         assert result.passed is False
 
     def test_connection_error(self) -> None:
-        with patch("jarvis.cli.checks.httpx") as mock_httpx:
-            mock_httpx.get.side_effect = ConnectionError("refused")
+        with patch("jarvis.cli.checks.httpx.get", side_effect=ConnectionError("refused")):
             result = check_http_service("Ollama", "http://localhost:11434", "/api/tags")
         assert result.passed is False
+
+    def test_dns_error_classification(self) -> None:
+        request = httpx.Request("GET", "http://example.invalid/health")
+        err = httpx.ConnectError(
+            "Temporary failure in name resolution",
+            request=request,
+        )
+        with patch("jarvis.cli.checks.httpx.get", side_effect=err):
+            result = check_http_service("SGLang", "http://example.invalid", "/health")
+        assert result.passed is False
+        assert "[dns_resolution]" in result.message
+        assert "DNS lookup failed" in result.fix_hint
+
+    def test_timeout_error_classification(self) -> None:
+        request = httpx.Request("GET", "http://localhost:11434/api/tags")
+        err = httpx.ConnectTimeout("timed out", request=request)
+        with patch("jarvis.cli.checks.httpx.get", side_effect=err):
+            result = check_http_service("Ollama", "http://localhost:11434", "/api/tags")
+        assert result.passed is False
+        assert "[timeout]" in result.message
+        assert "timed out" in result.fix_hint.lower()
+
+    def test_network_unreachable_error_classification(self) -> None:
+        request = httpx.Request("GET", "http://localhost:11434/api/tags")
+        err = httpx.ConnectError("network is unreachable", request=request)
+        with patch("jarvis.cli.checks.httpx.get", side_effect=err):
+            result = check_http_service("Ollama", "http://localhost:11434", "/api/tags")
+        assert result.passed is False
+        assert "[network_unreachable]" in result.message
+
+    def test_provider_unavailable_error_classification(self) -> None:
+        request = httpx.Request("GET", "http://localhost:11434/api/tags")
+        err = httpx.ConnectError("connection refused", request=request)
+        with patch("jarvis.cli.checks.httpx.get", side_effect=err):
+            result = check_http_service("Ollama", "http://localhost:11434", "/api/tags")
+        assert result.passed is False
+        assert "[provider_unavailable]" in result.message
 
 
 class TestCheckDatabase:

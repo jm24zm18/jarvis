@@ -6,6 +6,11 @@ import type {
   DispatchItem,
   EventItem,
   MemoryItem,
+  MemoryConsistencyReportItem,
+  MemoryFailureItem,
+  MemoryReviewItem,
+  MemoryGraph,
+  MemoryStateStats,
   MemoryStats,
   MessageItem,
   PatchDetail,
@@ -21,10 +26,14 @@ import type {
   ProviderConfigUpdateResult,
   GoogleOAuthStartResult,
   GoogleOAuthStatus,
+  FitnessSnapshot,
+  GovernanceSlo,
+  GovernanceSloHistoryItem,
+  EvolutionItem,
 } from "../types";
 
 export const login = (password: string) =>
-  apiFetch<{ token: string; user_id: string }>("/api/v1/auth/login", {
+  apiFetch<{ session_id: string; user_id: string; role: string }>("/api/v1/auth/login", {
     method: "POST",
     body: JSON.stringify({ password }),
   });
@@ -171,6 +180,18 @@ export const approvePatch = (traceId: string) =>
     body: "{}",
   });
 
+export const patchChecks = (traceId: string) =>
+  apiFetch<{ trace_id: string; items: Array<Record<string, unknown>> }>(
+    `/api/v1/selfupdate/patches/${traceId}/checks`,
+  );
+
+export const patchTimeline = (traceId: string) =>
+  apiFetch<{
+    trace_id: string;
+    transitions: Array<Record<string, unknown>>;
+    checks: Array<Record<string, unknown>>;
+  }>(`/api/v1/selfupdate/patches/${traceId}/timeline`);
+
 export const listPermissions = () =>
   apiFetch<{ items: PermissionGroup[] }>("/api/v1/permissions");
 
@@ -252,3 +273,150 @@ export const deleteBug = (bugId: string) =>
   apiFetch<{ ok: boolean }>(`/api/v1/bugs/${bugId}`, {
     method: "DELETE",
   });
+
+export const latestFitness = () =>
+  apiFetch<{ item: FitnessSnapshot | null }>("/api/v1/governance/fitness/latest");
+
+export const fitnessHistory = (limit = 12) =>
+  apiFetch<{ items: FitnessSnapshot[]; limit: number }>(
+    `/api/v1/governance/fitness/history?limit=${encodeURIComponent(String(limit))}`,
+  );
+
+export const dependencyStewardStatus = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/governance/dependency-steward");
+
+export const releaseCandidateStatus = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/governance/release-candidate");
+
+export const governanceDecisionTimeline = (params: {
+  trace_id?: string;
+  thread_id?: string;
+  limit?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params.trace_id) qs.set("trace_id", params.trace_id);
+  if (params.thread_id) qs.set("thread_id", params.thread_id);
+  if (typeof params.limit === "number") qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<Record<string, unknown>>(`/api/v1/governance/decision-timeline${suffix}`);
+};
+
+export const governancePatchLifecycle = (traceId: string) =>
+  apiFetch<Record<string, unknown>>(`/api/v1/governance/patch-lifecycle/${encodeURIComponent(traceId)}`);
+
+export const governanceEvolutionItems = (params?: {
+  status?: string;
+  trace_id?: string;
+  thread_id?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.trace_id) qs.set("trace_id", params.trace_id);
+  if (params?.thread_id) qs.set("thread_id", params.thread_id);
+  if (params?.from) qs.set("from", params.from);
+  if (params?.to) qs.set("to", params.to);
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ items: EvolutionItem[]; filters: Record<string, unknown> }>(
+    `/api/v1/governance/evolution/items${suffix}`,
+  );
+};
+
+export const governanceLearningLoop = (windowDays = 14, refresh = true) =>
+  apiFetch<Record<string, unknown>>(
+    `/api/v1/governance/learning-loop?window_days=${encodeURIComponent(String(windowDays))}&refresh=${refresh ? "true" : "false"}`,
+  );
+
+export const governanceSlo = () =>
+  apiFetch<GovernanceSlo>("/api/v1/governance/slo");
+
+export const governanceSloHistory = (limit = 12) =>
+  apiFetch<{ items: GovernanceSloHistoryItem[]; thresholds: Record<string, unknown>; limit: number }>(
+    `/api/v1/governance/slo/history?limit=${encodeURIComponent(String(limit))}`,
+  );
+
+export const governanceRemediationFeedback = (remediationId: string, feedback: "accepted" | "rejected") =>
+  apiFetch<Record<string, unknown>>(`/api/v1/governance/remediations/${encodeURIComponent(remediationId)}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ feedback }),
+  });
+
+export const runMemoryMaintenance = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/memory/maintenance/run", {
+    method: "POST",
+    body: "{}",
+  });
+
+export const memoryConsistencyReport = (params?: {
+  limit?: number;
+  thread_id?: string;
+  from_ts?: string;
+  to_ts?: string;
+}) => {
+  const qs = new URLSearchParams();
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  if (params?.thread_id) qs.set("thread_id", params.thread_id);
+  if (params?.from_ts) qs.set("from_ts", params.from_ts);
+  if (params?.to_ts) qs.set("to_ts", params.to_ts);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ items: MemoryConsistencyReportItem[]; avg_consistency: number }>(
+    `/api/v1/memory/state/consistency/report${suffix}`,
+  );
+};
+
+export const memoryStateFailures = (params?: { similar_to?: string; k?: number }) => {
+  const qs = new URLSearchParams();
+  if (params?.similar_to) qs.set("similar_to", params.similar_to);
+  if (typeof params?.k === "number") qs.set("k", String(params.k));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ items: MemoryFailureItem[] }>(`/api/v1/memory/state/failures${suffix}`);
+};
+
+export const memoryReviewConflicts = (limit = 50) =>
+  apiFetch<{ items: MemoryReviewItem[] }>(
+    `/api/v1/memory/state/review/conflicts?limit=${encodeURIComponent(String(limit))}`,
+  );
+
+export const resolveMemoryReview = (uid: string, resolution: string) =>
+  apiFetch<{ ok: boolean; uid: string }>(`/api/v1/memory/state/review/${encodeURIComponent(uid)}/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ resolution }),
+  });
+
+export const memoryStateGraph = (uid: string, depth = 2) =>
+  apiFetch<MemoryGraph>(
+    `/api/v1/memory/state/graph/${encodeURIComponent(uid)}?depth=${encodeURIComponent(String(depth))}`,
+  );
+
+export const memoryStateStats = () =>
+  apiFetch<MemoryStateStats>("/api/v1/memory/state/stats");
+
+export const whatsappStatus = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/status");
+
+export const whatsappCreate = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/create", {
+    method: "POST",
+    body: "{}",
+  });
+
+export const whatsappQrCode = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/qrcode");
+
+export const whatsappPairingCode = (number: string) =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/pairing-code", {
+    method: "POST",
+    body: JSON.stringify({ number }),
+  });
+
+export const whatsappDisconnect = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/disconnect", {
+    method: "POST",
+    body: "{}",
+  });
+
+export const telegramStatus = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/telegram/status");

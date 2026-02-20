@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -19,14 +19,18 @@ from jarvis.agents.registry import sync_tool_permissions
 from jarvis.agents.seed import ensure_main_agent_seed, sync_seed_skills
 from jarvis.channels.generic_webhook import router as generic_webhook_router
 from jarvis.channels.registry import register_channel
+from jarvis.channels.telegram.adapter import TelegramAdapter
+from jarvis.channels.telegram.router import router as telegram_router
 from jarvis.channels.whatsapp.adapter import WhatsAppAdapter
+from jarvis.channels.whatsapp.baileys_client import BaileysClient
 from jarvis.channels.whatsapp.router import router as whatsapp_router
 from jarvis.config import get_settings, validate_settings_for_env
 from jarvis.db.connection import get_conn
 from jarvis.db.migrations.runner import run_migrations
-from jarvis.db.queries import ensure_root_user, ensure_system_state
+from jarvis.db.queries import ensure_root_user, ensure_system_state, upsert_whatsapp_instance
 from jarvis.logging import configure_logging
 from jarvis.memory.service import MemoryService
+from jarvis.repo_index import write_repo_index
 from jarvis.routes.api import router as api_router
 from jarvis.routes.health import router as health_router
 from jarvis.routes.ws import router as ws_router
@@ -42,7 +46,45 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     validate_settings_for_env(settings)
     configure_logging(settings.log_level)
     run_migrations()
+    write_repo_index(Path.cwd())
     register_channel(WhatsAppAdapter())
+    if settings.telegram_bot_token.strip():
+        register_channel(TelegramAdapter())
+        logger.info("Telegram channel adapter registered")
+    baileys = BaileysClient()
+    if baileys.enabled and int(settings.whatsapp_auto_create_on_startup) == 1:
+        status_code, payload = await baileys.create_instance()
+        callback_status_code: int | None = None
+        callback_payload: dict[str, object] = {}
+        callback_ok = False
+        callback_error = ""
+        if evolution.webhook_enabled:
+            callback_status_code, callback_payload = await evolution.configure_webhook()
+            callback_ok = callback_status_code < 400
+            if not callback_ok:
+                callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
+        with get_conn() as conn:
+            evo_state = str(
+                payload.get("instance", {}).get("state")
+                or payload.get("state")
+                or "unknown"
+            )
+            upsert_whatsapp_instance(
+                conn,
+                instance=evolution.instance,
+                status=evo_state,
+                metadata={
+                    "status_code": status_code,
+                    "payload": payload,
+                    "callback_status_code": callback_status_code,
+                    "callback_payload": callback_payload,
+                },
+                callback_url=evolution.webhook_url,
+                callback_by_events=evolution.webhook_by_events,
+                callback_events=evolution.webhook_events,
+                callback_configured=callback_ok,
+                callback_last_error=callback_error,
+            )
     if ensure_main_agent_seed(Path("agents")):
         logger.info("Seeded default main agent bundle files at startup")
     bundles = {}
@@ -89,6 +131,16 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONR
         status_code=429,
         content={"error": "rate limit exceeded", "detail": str(exc.detail)},
     )
+
+@app.exception_handler(404)
+async def spa_fallback(request: Request, exc: Exception) -> FileResponse | JSONResponse:
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    index_path = Path("web/dist/index.html")
+    if index_path.exists():
+        return FileResponse(index_path)
+    return JSONResponse({"detail": "Not Found"}, status_code=404)
+
 settings = get_settings()
 cors_origins = [item.strip() for item in settings.web_cors_origins.split(",") if item.strip()]
 if cors_origins:
@@ -101,6 +153,7 @@ if cors_origins:
     )
 app.include_router(health_router)
 app.include_router(whatsapp_router)
+app.include_router(telegram_router)
 app.include_router(generic_webhook_router)
 app.include_router(api_router)
 app.include_router(ws_router)

@@ -1,12 +1,16 @@
 .PHONY: dev api test test-gates lint typecheck migrate setup doctor \
        web-install web-build web-dev web-lint web-typecheck web-test \
-       hooks validate-agents test-migrations security
+       hooks validate-agents test-migrations security secret-scan docs-generate docs-check \
+       preflight-dev-ports setup-smoke setup-smoke-running
 
-dev:
+dev: preflight-dev-ports
 	docker compose up -d
 
+preflight-dev-ports:
+	python3 scripts/dev_preflight_ports.py
+
 api:
-	uv run uvicorn jarvis.main:app --reload --app-dir src
+	uv run uvicorn jarvis.main:app --host 0.0.0.0 --reload --app-dir src
 
 test:
 	uv run pytest tests
@@ -49,8 +53,12 @@ security:
 	uv run bandit -r src/jarvis -c pyproject.toml -ll
 	uv run pip-audit
 
+secret-scan:
+	@if [ -x /tmp/sec-tools/bin/gitleaks ]; then /tmp/sec-tools/bin/gitleaks detect --source . --no-git --redact; else gitleaks detect --source . --no-git --redact; fi
+	@if [ -x /tmp/sec-tools/bin/trufflehog ]; then /tmp/sec-tools/bin/trufflehog filesystem . --only-verified; else trufflehog filesystem . --only-verified; fi
+
 web-install:
-	cd web && npm install
+	python3 scripts/web_install.py
 
 web-build:
 	cd web && npm run build
@@ -66,3 +74,15 @@ web-typecheck:
 
 web-test:
 	cd web && npm test
+
+docs-generate:
+	uv run python scripts/generate_api_docs.py
+
+docs-check:
+	uv run python scripts/docs_check.py
+
+setup-smoke:
+	python3 scripts/new_user_smoke.py
+
+setup-smoke-running:
+	python3 scripts/new_user_smoke.py --skip-dev-preflight

@@ -1,7 +1,15 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { RefreshCw, CheckCircle, Clock, AlertTriangle } from "lucide-react";
-import { approvePatch, getPatch, listPatches } from "../../../api/endpoints";
+import { Link } from "react-router-dom";
+import {
+  approvePatch,
+  getPatch,
+  governanceSlo,
+  listPatches,
+  patchChecks,
+  patchTimeline,
+} from "../../../api/endpoints";
 import Header from "../../../components/layout/Header";
 import Button from "../../../components/ui/Button";
 import Badge from "../../../components/ui/Badge";
@@ -47,9 +55,20 @@ export default function AdminSelfUpdatePage() {
   const [selectedTraceId, setSelectedTraceId] = useState("");
   const [page, setPage] = useState(1);
   const patches = useQuery({ queryKey: ["patches"], queryFn: listPatches });
+  const slo = useQuery({ queryKey: ["governance-slo"], queryFn: governanceSlo });
   const detail = useQuery({
     queryKey: ["patch", selectedTraceId],
     queryFn: () => getPatch(selectedTraceId),
+    enabled: !!selectedTraceId,
+  });
+  const checks = useQuery({
+    queryKey: ["patch-checks", selectedTraceId],
+    queryFn: () => patchChecks(selectedTraceId),
+    enabled: !!selectedTraceId,
+  });
+  const timeline = useQuery({
+    queryKey: ["patch-timeline", selectedTraceId],
+    queryFn: () => patchTimeline(selectedTraceId),
     enabled: !!selectedTraceId,
   });
   const approve = useMutation({
@@ -70,6 +89,22 @@ export default function AdminSelfUpdatePage() {
         subtitle="Review proposed and tested patches, then issue approval"
         icon={<RefreshCw className="h-6 w-6" />}
       />
+      <Card className="mb-6">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge
+            variant={
+              slo.data?.status === "safe" ? "success" : slo.data?.status === "blocked" ? "danger" : "warning"
+            }
+          >
+            SLO {String(slo.data?.status ?? "unknown")}
+          </Badge>
+          <span className="text-xs text-[var(--text-secondary)]">
+            {Array.isArray(slo.data?.reasons) && slo.data?.reasons.length > 0
+              ? slo.data?.reasons.join(" | ")
+              : "No active SLO degradation reasons."}
+          </span>
+        </div>
+      </Card>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_1fr]">
         {/* Patch List Sidebar */}
@@ -176,6 +211,16 @@ export default function AdminSelfUpdatePage() {
                 >
                   {approve.isPending ? "Approving..." : "Approve Tested Patch"}
                 </Button>
+                <Link
+                  className="rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-xs hover:bg-[var(--bg-mist)]"
+                  to={`/admin/events?trace_id=${encodeURIComponent(detail.data.trace_id)}`}
+                >
+                  View In Events
+                </Link>
+                <Badge variant="default">
+                  {timeline.data?.transitions?.length ?? 0} transitions
+                </Badge>
+                <Badge variant="default">{checks.data?.items?.length ?? 0} checks</Badge>
               </div>
 
               {detail.data.detail && (

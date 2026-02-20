@@ -13,6 +13,7 @@
 cp .env.example .env
 uv sync
 make migrate
+make setup-smoke
 ```
 
 Verify:
@@ -23,6 +24,9 @@ make migrate
 ```
 
 Expected: Python 3.12 and successful migration run.
+`make setup-smoke` should pass for a deterministic API + web bootstrap baseline.
+If dependency services are already running and occupying `11434`/`30000`/`8080`,
+use `make setup-smoke-running` to skip the dev-port preflight step.
 
 ## 2. Start Dependencies
 
@@ -59,10 +63,13 @@ uv run jarvis chat
 ## 5. Optional Web UI
 
 ```bash
+make web-install
 make web-dev
 ```
 
 Open `http://localhost:5173`.
+Run `make web-install` once before the first `make web-dev`, `make web-build`,
+`make web-typecheck`, or `make web-lint`.
 
 ## 6. Optional GitHub Integration
 
@@ -87,7 +94,10 @@ Then restart API and configure repository webhook to:
 
 ## Next Docs
 
+- `docs/README.md`
 - `docs/local-development.md`
 - `docs/configuration.md`
+- `docs/cli-reference.md`
+- `docs/api-usage-guide.md`
 - `docs/github-pr-automation.md`
 - `docs/testing.md`

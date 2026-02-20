@@ -41,13 +41,14 @@ def test_upsert_merge_roundtrip_and_last_seen_derivation() -> None:
             status="active",
             type_tag="decision",
             topic_tags=["cache", "performance"],
-            refs=["msg_2"],
+            refs=["msg_1", "msg_2", "msg_2"],
             confidence="high",
         )
         updated = store.upsert_item(conn, thread_id, newer)
     assert updated.confidence == "high"
     assert updated.topic_tags == ["cache", "performance"]
     assert "msg_1" in updated.refs and "msg_2" in updated.refs
+    assert updated.refs.count("msg_2") == 1
     assert updated.last_seen_at == "2026-02-02T00:00:00+00:00"
 
 
@@ -109,3 +110,97 @@ def test_watermark_tiebreaker_query() -> None:
             10,
         )
     assert [row["id"] for row in rows] == ["msg_b"]
+
+
+def test_get_active_items_uses_stable_uid_tiebreaker() -> None:
+    store = StateStore()
+    with get_conn() as conn:
+        thread_id = _seed_thread(conn)
+        now = "2026-02-05T00:00:00+00:00"
+        for uid in ("d_b", "d_a"):
+            conn.execute(
+                (
+                    "INSERT INTO state_items("
+                    "uid, thread_id, text, status, type_tag, topic_tags_json, refs_json, "
+                    "confidence, replaced_by, supersession_evidence, conflict, pinned, source, "
+                    "created_at, last_seen_at, updated_at, tier, importance_score, "
+                    "access_count, conflict_count, "
+                    "agent_id, last_accessed_at"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                ),
+                (
+                    uid,
+                    thread_id,
+                    uid,
+                    "active",
+                    "decision",
+                    "[]",
+                    "[]",
+                    "high",
+                    None,
+                    None,
+                    0,
+                    0,
+                    "extraction",
+                    now,
+                    now,
+                    now,
+                    "working",
+                    0.7,
+                    0,
+                    0,
+                    "main",
+                    now,
+                ),
+            )
+        rows = store.get_active_items(conn, thread_id, limit=10)
+    assert [row.uid for row in rows[:2]] == ["d_a", "d_b"]
+
+
+def test_superseded_item_stays_superseded_on_reconcile_update() -> None:
+    store = StateStore()
+    with get_conn() as conn:
+        thread_id = _seed_thread(conn)
+        conn.execute(
+            "INSERT INTO messages(id, thread_id, role, content, created_at) VALUES(?,?,?,?,?)",
+            ("msg_sup_1", thread_id, "user", "old", "2026-02-06T00:00:00+00:00"),
+        )
+        store.upsert_item(
+            conn,
+            thread_id,
+            StateItem(
+                uid="d_sup_1",
+                text="Use sqlite",
+                status="active",
+                type_tag="decision",
+                refs=["msg_sup_1"],
+                confidence="medium",
+            ),
+        )
+        store.mark_superseded(
+            conn,
+            "d_sup_1",
+            thread_id,
+            "d_sup_2",
+            {"trigger": "replaced", "ref_msg_id": "msg_sup_1"},
+        )
+        store.upsert_item(
+            conn,
+            thread_id,
+            StateItem(
+                uid="d_sup_1",
+                text="Use sqlite",
+                status="active",
+                type_tag="decision",
+                refs=["msg_sup_1"],
+                confidence="high",
+                conflict=True,
+            ),
+        )
+        row = conn.execute(
+            "SELECT status, conflict_count FROM state_items WHERE uid='d_sup_1' AND thread_id=?",
+            (thread_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["status"]) == "superseded"
+    assert int(row["conflict_count"]) >= 1

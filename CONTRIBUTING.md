@@ -12,7 +12,6 @@ uv sync
 make migrate
 make dev
 make api
-make worker
 ```
 
 ## Code Style

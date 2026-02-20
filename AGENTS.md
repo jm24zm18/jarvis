@@ -5,8 +5,9 @@ Primary AI-agent operating guide for this repository.
 ## Quick Facts
 
 - Stack: FastAPI + in-process asyncio task runner + SQLite + React/Vite web UI.
+- Channels: WhatsApp (Evolution API) + Telegram (Bot API).
 - Runtime: API (`make api`) + Docker services (`make dev`).
-- DB migrations: `src/jarvis/db/migrations/001..023` auto-run at startup and via `make migrate`.
+- DB migrations: `src/jarvis/db/migrations/001..055` auto-run at startup and via `make migrate`.
 - Tool runtime is deny-by-default (`src/jarvis/tools/runtime.py`, `src/jarvis/policy/engine.py`).
 - Auth/RBAC: bearer session tokens with `user`/`admin` roles and ownership scoping.
 
@@ -28,6 +29,8 @@ make lint
 make typecheck
 make test
 make test-gates
+make docs-generate
+make docs-check
 
 # targeted tests
 uv run pytest tests/unit -v
@@ -54,6 +57,7 @@ uv run jarvis skill list
   - Unknown tool: deny
   - During lockdown: deny all but safe tools
   - Session tools: `main` agent only
+- Self-update evidence is mandatory and must include path+line references.
 - Ownership boundaries must hold for non-admin users across API and WebSocket subscriptions.
 
 ## Decision Trees
@@ -85,6 +89,7 @@ uv run jarvis skill list
 - Auth and RBAC: `src/jarvis/auth/`, `src/jarvis/routes/api/auth.py`
 - Web UI: `web/src/App.tsx`, `web/src/pages/admin/*`, `web/src/pages/chat/*`
 - Operations: `docs/runbook.md`, `docs/build-release.md`, `deploy/*`
+- Documentation index: `docs/README.md`
 
 ## Safety Rules
 
@@ -93,6 +98,8 @@ uv run jarvis skill list
 - Do not introduce non-additive migration rollouts without explicit rollback strategy.
 - Do not commit real credentials into docs or `.env.example`.
 - Keep `AGENTS.md` and `CLAUDE.md` operationally consistent.
+- Documentation updates are mandatory: any behavior, API, schema, config, tooling, or operational workflow change MUST update corresponding docs in the same PR before handoff.
+- Always update `docs/PLAN.md` with any missing tasks discovered during work and any remaining tasks before handoff.
 - Git flow policy:
   - Agent changes must be done on a dedicated work branch.
   - Agent PRs target `dev` (never `master` directly).
@@ -104,6 +111,7 @@ uv run jarvis skill list
 make lint
 make typecheck
 make test-gates
+make docs-check
 uv run jarvis doctor
 ```
 
@@ -118,8 +126,14 @@ If `make test-gates` is too slow during iteration, run targeted tests and then f
 ## Related Docs
 
 - `README.md`
+- `docs/README.md`
 - `docs/getting-started.md`
 - `docs/local-development.md`
+- `docs/cli-reference.md`
+- `docs/api-reference.md`
+- `docs/api-usage-guide.md`
+- `docs/web-admin-guide.md`
+- `docs/deploy-operations.md`
 - `docs/git-workflow.md`
 - `docs/architecture.md`
 - `docs/testing.md`

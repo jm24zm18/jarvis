@@ -87,6 +87,7 @@ export default function ChatPage() {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
   const [showThinking, setShowThinking] = useState(false);
+  const [showAllThreads, setShowAllThreads] = useState(false);
   const [panelTraceId, setPanelTraceId] = useState("");
   const [threadFilter, setThreadFilter] = useState("");
   const panelTraceIdRef = useRef(panelTraceId);
@@ -109,8 +110,8 @@ export default function ChatPage() {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const threads = useQuery({
-    queryKey: ["threads"],
-    queryFn: () => listThreads(),
+    queryKey: ["threads", showAllThreads],
+    queryFn: () => listThreads(showAllThreads),
   });
   const messages = useQuery({
     queryKey: ["messages", threadId],
@@ -124,10 +125,10 @@ export default function ChatPage() {
       threadId
         ? getOnboardingStatus(threadId)
         : Promise.resolve<OnboardingStatus>({
-            status: "not_required",
-            required: false,
-            question: null,
-          }),
+          status: "not_required",
+          required: false,
+          question: null,
+        }),
     enabled: !!threadId,
     refetchInterval: (query) => {
       const data = query.state.data as OnboardingStatus | undefined;
@@ -256,7 +257,7 @@ export default function ChatPage() {
     if (!threadId) return;
     ws.subscribe(threadId);
     return () => ws.unsubscribe(threadId);
-  }, [threadId, ws.subscribe, ws.unsubscribe]);
+  }, [threadId, ws]);
 
   useEffect(() => {
     if (!threadId) {
@@ -431,23 +432,34 @@ export default function ChatPage() {
                 className="w-full rounded-lg border border-[var(--border-strong)] bg-surface py-1.5 pl-8 pr-2 text-xs text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] focus:border-ember"
               />
             </div>
-            <button
-              onClick={() => createThreadMutation.mutate()}
-              className="rounded-lg bg-[#13293d] p-1.5 text-white hover:bg-[#13293d]/90 dark:bg-slate-200 dark:text-slate-900"
-            >
-              <Plus size={16} />
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                onClick={() => setShowAllThreads((v) => !v)}
+                title="Toggle All Threads (Admin)"
+                className={`rounded-lg p-1.5 transition-colors ${showAllThreads
+                    ? "bg-ember text-white"
+                    : "bg-[var(--bg-mist)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                  }`}
+              >
+                <Eye size={16} />
+              </button>
+              <button
+                onClick={() => createThreadMutation.mutate()}
+                className="rounded-lg bg-[#13293d] p-1.5 text-white hover:bg-[#13293d]/90 dark:bg-slate-200 dark:text-slate-900"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
           </div>
         </div>
         <div className="flex-1 space-y-0.5 overflow-y-auto p-2">
           {filteredThreads.map((thread) => (
             <button
               key={thread.id}
-              className={`w-full rounded-lg p-2.5 text-left transition ${
-                threadId === thread.id
+              className={`w-full rounded-lg p-2.5 text-left transition ${threadId === thread.id
                   ? "border-l-2 border-l-ember bg-mist"
                   : "hover:bg-mist/60"
-              }`}
+                }`}
               onClick={() => navigate(`/chat/${thread.id}`)}
             >
               <div className="text-sm font-medium text-[var(--text-primary)] truncate">
@@ -512,11 +524,10 @@ export default function ChatPage() {
                     {group.messages.map((msg) => (
                       <div
                         key={msg.id}
-                        className={`group relative rounded-2xl px-3.5 py-2.5 text-sm shadow-sm ${
-                          msg.role === "user"
+                        className={`group relative rounded-2xl px-3.5 py-2.5 text-sm shadow-sm ${msg.role === "user"
                             ? "bg-[#13293d] text-white dark:bg-slate-200 dark:text-slate-900"
                             : "bg-mist text-[var(--text-primary)]"
-                        }`}
+                          }`}
                       >
                         <div className="max-h-[32rem] overflow-x-auto break-words">
                           <MarkdownLite content={msg.content} />

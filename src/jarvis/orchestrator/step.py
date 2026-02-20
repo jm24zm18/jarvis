@@ -10,13 +10,16 @@ import sqlite3
 import unicodedata
 from collections.abc import Callable
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from jarvis.agents.loader import load_agent_bundle_cached, load_agent_registry
+from jarvis.agents.types import AgentBundle
 from jarvis.commands.service import maybe_execute_command
 from jarvis.config import get_settings
 from jarvis.db.queries import get_system_state, insert_message
+from jarvis.errors import ProviderError
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
@@ -29,6 +32,7 @@ from jarvis.memory.state_store import StateStore
 from jarvis.orchestrator.prompt_builder import build_prompt_with_report, estimate_tokens
 from jarvis.providers.factory import resolve_primary_provider_name
 from jarvis.providers.router import ProviderRouter
+from jarvis.repo_index import read_repo_index
 from jarvis.tools.runtime import ToolRuntime
 
 MAX_TOOL_ITERATIONS = 8
@@ -156,6 +160,21 @@ def _extract_primary_failure_fields(primary_error: str) -> dict[str, object]:
         kind = "model_not_found"
     elif "invalid argument" in lower:
         kind = "invalid_argument"
+    elif (
+        "temporary failure in name resolution" in lower
+        or "name or service not known" in lower
+        or "nodename nor servname provided" in lower
+        or "getaddrinfo failed" in lower
+    ):
+        kind = "dns_resolution"
+    elif (
+        "connecterror" in lower
+        or "connection refused" in lower
+        or "failed to establish a new connection" in lower
+        or "connection reset" in lower
+        or "network is unreachable" in lower
+    ):
+        kind = "transport_unavailable"
 
     status_code: int | None = None
     status_match = re.search(r"\b([1-5]\d{2})\b", text)
@@ -269,6 +288,33 @@ def _load_agent_context(actor_id: str) -> str:
         return "\n\n".join(fallback_parts).strip()
 
 
+def _load_agent_bundle(actor_id: str) -> AgentBundle | None:
+    root = Path("agents") / actor_id
+    if not root.is_dir():
+        return None
+    try:
+        return load_agent_bundle_cached(root)
+    except RuntimeError:
+        return None
+
+
+def _repo_index_context() -> str:
+    payload = read_repo_index(Path.cwd())
+    if not isinstance(payload, dict):
+        return ""
+    entrypoints = payload.get("entrypoints")
+    protected = payload.get("protected_modules")
+    invariants = payload.get("invariant_checks")
+    lines = ["[repo_index]"]
+    if isinstance(entrypoints, list) and entrypoints:
+        lines.append("entrypoints: " + ", ".join(str(item) for item in entrypoints[:8]))
+    if isinstance(protected, list) and protected:
+        lines.append("protected_modules: " + ", ".join(str(item) for item in protected[:10]))
+    if isinstance(invariants, list) and invariants:
+        lines.append("invariants: " + ", ".join(str(item) for item in invariants[:10]))
+    return "\n".join(lines)
+
+
 def _build_environment_context(conn: sqlite3.Connection) -> str:
     now = datetime.now(UTC).isoformat()
     disk_free_gb = shutil.disk_usage("/").free // (1024**3)
@@ -297,6 +343,9 @@ def _build_environment_context(conn: sqlite3.Connection) -> str:
         "security_reviewer": "security audits",
         "docs_keeper": "documentation",
         "release_ops": "release operations",
+        "dependency_steward": "dependency management",
+        "release_candidate": "release readiness",
+        "user_simulator": "user-story simulation",
     }
     roster_line = "none"
     try:
@@ -356,6 +405,17 @@ def _enqueue_memory_index(
         )
     except Exception:
         logger.debug("failed to enqueue assistant memory indexing", exc_info=True)
+
+
+def _memory_text(payload: dict[str, object]) -> str:
+    return json.dumps(redact_payload(payload), ensure_ascii=True, sort_keys=True)
+
+
+def _tool_loop_terminal_fallback_message(trace_id: str) -> str:
+    return (
+        "I completed tool execution but could not synthesize a final summary. "
+        f"Trace: {trace_id}. Review /admin/events for details and retry."
+    )
 
 
 async def run_agent_step(
@@ -459,6 +519,7 @@ async def run_agent_step(
                 thread_id=thread_id,
                 router=router,
                 memory=memory,
+                actor_id=actor_id,
             )
             extraction_payload = {
                 "thread_id": thread_id,
@@ -491,13 +552,42 @@ async def run_agent_step(
                     payload_redacted_json=json.dumps(redact_payload(extraction_payload)),
                 ),
             )
-        except Exception:
-            logger.exception("Structured state extraction failed for thread %s", thread_id)
+        except Exception as exc:
+            extraction_failure_payload: dict[str, object] = {
+                "thread_id": thread_id,
+                "actor_id": actor_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            extraction_failure_payload.update(
+                _extract_primary_failure_fields(str(extraction_failure_payload["error"]))
+            )
+            logger.warning(
+                "Structured state extraction failed thread=%s error=%s",
+                thread_id,
+                extraction_failure_payload["error"],
+            )
+            if notify_fn is not None:
+                notify_fn("state.extraction.failed", extraction_failure_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="state.extraction.failed",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(extraction_failure_payload),
+                    payload_redacted_json=json.dumps(redact_payload(extraction_failure_payload)),
+                ),
+            )
     active_state_items = state_store.get_active_items(
         conn, thread_id, limit=max(1, int(settings.state_max_active_items))
     )
     structured_state = render_state_section(active_state_items)
-    retrieved = [item["text"] for item in memory.search(conn, thread_id, limit=8)]
+    retrieved = [str(item.get("text", "")) for item in memory.search(conn, thread_id, limit=8)]
     kb_context: list[str] = []
     if actor_id == "main":
         kb = KnowledgeBaseService()
@@ -539,9 +629,15 @@ async def run_agent_step(
                     "pinned": bool(item.get("pinned", False)),
                 }
             )
+    bundle = _load_agent_bundle(actor_id)
     agent_context = _load_agent_context(actor_id) or f"You are Jarvis {actor_id} agent."
+    max_actions_per_step = bundle.max_actions_per_step if bundle is not None else 6
+    action_calls_used = 0
     agent_context = f"{agent_context}\n\n{IDENTITY_POLICY}"
     agent_context = f"{agent_context}\n\n[environment]\n{_build_environment_context(conn)}"
+    repo_idx = _repo_index_context()
+    if repo_idx:
+        agent_context = f"{agent_context}\n\n{repo_idx}"
 
     primary_provider = resolve_primary_provider_name(settings)
     token_budget = (
@@ -635,6 +731,8 @@ async def run_agent_step(
     lane = "primary"
     primary_error: str | None = None
     final_text = ""
+    tool_iteration_exhausted = False
+    degraded_reason: str | None = None
     for step_idx in range(MAX_TOOL_ITERATIONS + 1):
         if notify_fn is not None:
             notify_fn("model.run.start", {"iteration": step_idx})
@@ -655,11 +753,38 @@ async def run_agent_step(
                 ),
             ),
         )
-        model_resp, lane, primary_error = await router.generate(
-            convo,
-            tools=tool_schemas,
-            priority="normal" if actor_id == "main" else "low",
-        )
+        try:
+            model_resp, lane, primary_error = await router.generate(
+                convo,
+                tools=tool_schemas,
+                priority="normal" if actor_id == "main" else "low",
+            )
+        except ProviderError as exc:
+            run_error_payload: dict[str, object] = {
+                "iteration": step_idx,
+                "error": str(exc),
+            }
+            run_error_payload.update(_extract_primary_failure_fields(str(exc)))
+            if notify_fn is not None:
+                notify_fn("model.run.error", run_error_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="model.run.error",
+                    component="orchestrator",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(run_error_payload),
+                    payload_redacted_json=json.dumps(redact_payload(run_error_payload)),
+                ),
+            )
+            final_text = DEGRADED_RESPONSE
+            lane = "degraded"
+            break
         run_end_payload: dict[str, object] = {"iteration": step_idx, "lane": lane}
         if primary_error:
             run_end_payload["primary_error"] = primary_error[:500]
@@ -756,13 +881,67 @@ async def run_agent_step(
                 payload_redacted_json=json.dumps(redact_payload(thought_payload)),
             ),
         )
+        thought_memory_text = _memory_text(
+            {
+                "type": "agent.thought",
+                "actor_id": actor_id,
+                "iteration": step_idx,
+                "lane": lane,
+                "thought_source": thought_payload.get("thought_source", ""),
+                "text": thought_text,
+                "reasoning_parts": reasoning_parts,
+                "tool_calls_preview": thought_payload.get("tool_calls_preview", []),
+            }
+        )
+        _enqueue_memory_index(
+            trace_id=trace_id,
+            thread_id=thread_id,
+            text=thought_memory_text,
+            metadata={
+                "role": "system",
+                "actor_id": actor_id,
+                "source": "agent.thought",
+                "iteration": step_idx,
+                "lane": lane,
+                "thought_source": str(thought_payload.get("thought_source", "")),
+                "thought_sha256": sha256(thought_memory_text.encode("utf-8")).hexdigest(),
+                "thought_char_count": len(thought_memory_text),
+            },
+        )
         final_text = _strip_control_tokens(_enforce_identity_policy(stripped_text))
 
-        if not parsed_tool_calls or step_idx >= MAX_TOOL_ITERATIONS:
+        if not parsed_tool_calls:
+            break
+        if step_idx >= MAX_TOOL_ITERATIONS:
+            tool_iteration_exhausted = True
             break
 
         convo.append({"role": "assistant", "content": stripped_text})
         for tool_call in parsed_tool_calls:
+            if action_calls_used >= max_actions_per_step:
+                deny_payload = {
+                    "tool": str(tool_call.get("name", "")),
+                    "allowed": False,
+                    "reason": "governance.max_actions_per_step",
+                    "max_actions_per_step": max_actions_per_step,
+                }
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id,
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="policy.decision",
+                        component="policy",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(deny_payload),
+                        payload_redacted_json=json.dumps(redact_payload(deny_payload)),
+                    ),
+                )
+                break
+            action_calls_used += 1
             tool_name = str(tool_call.get("name", ""))
             raw_args = tool_call.get("arguments", {})
             arguments = raw_args if isinstance(raw_args, dict) else {}
@@ -794,10 +973,19 @@ async def run_agent_step(
                         },
                     )
                 payload = json.dumps({"tool": tool_name, "result": result})
+                tool_memory_text = _memory_text(
+                    {
+                        "type": "tool.call.end",
+                        "status": "success",
+                        "tool": tool_name,
+                        "iteration": step_idx + 1,
+                        "result": result,
+                    }
+                )
                 _enqueue_memory_index(
                     trace_id=trace_id,
                     thread_id=thread_id,
-                    text=f"Tool {tool_name} succeeded on iteration {step_idx + 1}.",
+                    text=tool_memory_text,
                     metadata={
                         "role": "system",
                         "actor_id": actor_id,
@@ -805,6 +993,8 @@ async def run_agent_step(
                         "tool": tool_name,
                         "status": "success",
                         "iteration": step_idx,
+                        "result_sha256": sha256(tool_memory_text.encode("utf-8")).hexdigest(),
+                        "result_char_count": len(tool_memory_text),
                     },
                 )
             except Exception as exc:
@@ -819,10 +1009,19 @@ async def run_agent_step(
                         },
                     )
                 payload = json.dumps({"tool": tool_name, "error": str(exc)})
+                tool_error_memory_text = _memory_text(
+                    {
+                        "type": "tool.call.end",
+                        "status": "error",
+                        "tool": tool_name,
+                        "iteration": step_idx + 1,
+                        "error": str(exc),
+                    }
+                )
                 _enqueue_memory_index(
                     trace_id=trace_id,
                     thread_id=thread_id,
-                    text=f"Tool {tool_name} failed on iteration {step_idx + 1}: {str(exc)[:240]}",
+                    text=tool_error_memory_text,
                     metadata={
                         "role": "system",
                         "actor_id": actor_id,
@@ -830,16 +1029,25 @@ async def run_agent_step(
                         "tool": tool_name,
                         "status": "error",
                         "iteration": step_idx,
+                        "result_sha256": sha256(
+                            tool_error_memory_text.encode("utf-8")
+                        ).hexdigest(),
+                        "result_char_count": len(tool_error_memory_text),
                     },
                 )
             convo.append({"role": "user", "content": f"[tool_result] {payload}"})
 
-    if lane == "fallback" and final_text.strip() == PLACEHOLDER_RESPONSE:
+    if final_text.strip() == PLACEHOLDER_RESPONSE or tool_iteration_exhausted:
         for retry_idx in range(FALLBACK_ONLY_RETRIES):
             synthetic_iteration = MAX_TOOL_ITERATIONS + 1 + retry_idx
             start_payload: dict[str, object] = {
                 "iteration": synthetic_iteration,
-                "fallback_only": True,
+                "terminal_synthesis": True,
+                "reason": (
+                    "tool_loop_exhausted"
+                    if tool_iteration_exhausted
+                    else "placeholder_response"
+                ),
             }
             if notify_fn is not None:
                 notify_fn("model.run.start", start_payload)
@@ -858,15 +1066,44 @@ async def run_agent_step(
                     payload_redacted_json=json.dumps(redact_payload(start_payload)),
                 ),
             )
-            retry_resp, retry_lane, retry_primary_error = await router.generate(
-                convo,
-                tools=None,
-                priority="normal" if actor_id == "main" else "low",
-            )
+            try:
+                retry_resp, retry_lane, retry_primary_error = await router.generate(
+                    convo,
+                    tools=None,
+                    priority="normal" if actor_id == "main" else "low",
+                )
+            except ProviderError as exc:
+                retry_error_payload: dict[str, object] = {
+                    "iteration": synthetic_iteration,
+                    "terminal_synthesis": True,
+                    "error": str(exc),
+                }
+                retry_error_payload.update(_extract_primary_failure_fields(str(exc)))
+                if notify_fn is not None:
+                    notify_fn("model.run.error", retry_error_payload)
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id,
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="model.run.error",
+                        component="orchestrator",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(retry_error_payload),
+                        payload_redacted_json=json.dumps(redact_payload(retry_error_payload)),
+                    ),
+                )
+                final_text = PLACEHOLDER_RESPONSE
+                degraded_reason = "provider_error_terminal_synthesis"
+                lane = "degraded"
+                break
             run_end_payload = {
                 "iteration": synthetic_iteration,
                 "lane": retry_lane,
-                "fallback_only": True,
+                "terminal_synthesis": True,
             }
             if retry_primary_error:
                 run_end_payload["primary_error"] = retry_primary_error[:500]
@@ -891,7 +1128,7 @@ async def run_agent_step(
             if retry_lane == "fallback":
                 fallback_retry_payload: dict[str, object] = {
                     "iteration": synthetic_iteration,
-                    "fallback_only": True,
+                    "terminal_synthesis": True,
                 }
                 if retry_primary_error:
                     fallback_retry_payload["primary_error"] = retry_primary_error[:500]
@@ -933,7 +1170,7 @@ async def run_agent_step(
             retry_thought_payload: dict[str, object] = {
                 "iteration": synthetic_iteration,
                 "lane": retry_lane,
-                "fallback_only": True,
+                "terminal_synthesis": True,
                 "text": retry_reasoning or _strip_control_tokens(retry_resp.text),
                 "thought_source": (
                     "provider_reasoning"
@@ -962,6 +1199,33 @@ async def run_agent_step(
                     payload_redacted_json=json.dumps(redact_payload(retry_thought_payload)),
                 ),
             )
+            retry_memory_text = _memory_text(
+                {
+                    "type": "agent.thought",
+                    "actor_id": actor_id,
+                    "iteration": synthetic_iteration,
+                    "lane": retry_lane,
+                    "thought_source": retry_thought_payload.get("thought_source", ""),
+                    "text": retry_thought_payload.get("text", ""),
+                    "reasoning_parts": retry_reasoning_parts,
+                    "tool_calls_preview": retry_thought_payload.get("tool_calls_preview", []),
+                }
+            )
+            _enqueue_memory_index(
+                trace_id=trace_id,
+                thread_id=thread_id,
+                text=retry_memory_text,
+                metadata={
+                    "role": "system",
+                    "actor_id": actor_id,
+                    "source": "agent.thought",
+                    "iteration": synthetic_iteration,
+                    "lane": retry_lane,
+                    "thought_source": str(retry_thought_payload.get("thought_source", "")),
+                    "thought_sha256": sha256(retry_memory_text.encode("utf-8")).hexdigest(),
+                    "thought_char_count": len(retry_memory_text),
+                },
+            )
             if retry_text and retry_text != PLACEHOLDER_RESPONSE:
                 final_text = retry_text
                 lane = retry_lane
@@ -970,9 +1234,20 @@ async def run_agent_step(
                 break
 
     if final_text.strip() == PLACEHOLDER_RESPONSE:
-        final_text = DEGRADED_RESPONSE
+        reason = (
+            degraded_reason
+            or (
+                "placeholder_response_after_tool_loop"
+                if tool_iteration_exhausted
+                else "placeholder_response_after_terminal_synthesis"
+            )
+        )
+        if reason == "placeholder_response_after_tool_loop":
+            final_text = _tool_loop_terminal_fallback_message(trace_id)
+        else:
+            final_text = DEGRADED_RESPONSE
         degraded_payload: dict[str, object] = {
-            "reason": "placeholder_response",
+            "reason": reason,
             "actor_id": actor_id,
         }
         if notify_fn is not None:

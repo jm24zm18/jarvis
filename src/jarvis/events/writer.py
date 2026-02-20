@@ -5,6 +5,7 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from jarvis.events.envelope import enforce_action_envelope
 from jarvis.events.models import EventInput
 from jarvis.ids import new_id
 from jarvis.memory.service import MemoryService
@@ -16,6 +17,10 @@ SENSITIVE_KEYS = {
     "api_key",
     "authorization",
     "phone",
+    "qrcode",
+    "qr_code",
+    "pairing_code",
+    "code",
 }
 
 
@@ -39,6 +44,17 @@ def redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def emit_event(conn: sqlite3.Connection, event: EventInput) -> str:
+    payload_raw = event.payload_json
+    payload_redacted_raw = event.payload_redacted_json
+    try:
+        payload = json.loads(payload_raw)
+    except json.JSONDecodeError:
+        payload = {}
+    if isinstance(payload, dict):
+        payload = enforce_action_envelope(event.event_type, payload)
+        payload_raw = json.dumps(payload)
+        payload_redacted_raw = json.dumps(redact_payload(payload))
+
     event_id = new_id("evt")
     conn.execute(
         """
@@ -58,14 +74,14 @@ def emit_event(conn: sqlite3.Connection, event: EventInput) -> str:
             event.component,
             event.actor_type,
             event.actor_id,
-            event.payload_json,
-            event.payload_redacted_json,
+            payload_raw,
+            payload_redacted_raw,
             now_iso(),
         ),
     )
 
     try:
-        redacted_payload = json.loads(event.payload_redacted_json)
+        redacted_payload = json.loads(payload_redacted_raw)
     except json.JSONDecodeError:
         redacted_payload = {}
     text_value = redacted_payload.get("text")

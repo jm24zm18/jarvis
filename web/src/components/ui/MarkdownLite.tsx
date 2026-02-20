@@ -1,16 +1,6 @@
 import type { ReactNode } from "react";
 import { parseBlocks } from "./markdownParser";
 
-type Block =
-  | { type: "heading"; level: number; text: string }
-  | { type: "paragraph"; text: string }
-  | { type: "blockquote"; text: string }
-  | { type: "ul"; items: string[] }
-  | { type: "ol"; items: string[] }
-  | { type: "code"; lang: string; code: string }
-  | { type: "table"; header: string[]; rows: string[][] }
-  | { type: "hr" };
-
 function parseInline(text: string): ReactNode[] {
   const parts: ReactNode[] = [];
   const tokenRe = /(\*\*(?:[^*]|\*(?!\*))+\*\*|\*(?:[^*])+\*|`[^`]+`|\[[^\]]+\]\(([^\s)]+)\))/g;

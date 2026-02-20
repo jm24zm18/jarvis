@@ -72,6 +72,75 @@ def _parse_allowed_tools(identity_markdown: str) -> list[str]:
     return allowed
 
 
+def _parse_identity_frontmatter(identity_markdown: str) -> dict[str, object]:
+    if not identity_markdown.startswith("---"):
+        return {}
+    end = identity_markdown.find("\n---", 3)
+    if end == -1:
+        return {}
+    block = identity_markdown[3:end].strip()
+    parsed: dict[str, object] = {}
+    current_list_key: str | None = None
+    current_list_values: list[str] = []
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if current_list_key and stripped.startswith("- "):
+            item = stripped[2:].strip()
+            if item:
+                current_list_values.append(item)
+            continue
+        if current_list_key:
+            parsed[current_list_key] = current_list_values
+            current_list_key = None
+            current_list_values = []
+        if ":" not in stripped:
+            continue
+        key, raw = stripped.split(":", 1)
+        key = key.strip()
+        value = raw.strip()
+        if not value:
+            current_list_key = key
+            current_list_values = []
+            continue
+        lowered = value.lower()
+        if lowered in {"true", "false"}:
+            parsed[key] = lowered == "true"
+        elif value.isdigit():
+            parsed[key] = int(value)
+        else:
+            parsed[key] = value
+    if current_list_key:
+        parsed[current_list_key] = current_list_values
+    return parsed
+
+
+def _parse_governance(identity_markdown: str) -> tuple[str, int, tuple[str, ...], bool]:
+    frontmatter = _parse_identity_frontmatter(identity_markdown)
+    risk_tier = str(frontmatter.get("risk_tier", "")).strip().lower()
+    if risk_tier not in {"low", "medium", "high"}:
+        raise RuntimeError("identity frontmatter missing valid risk_tier")
+
+    max_actions_raw = frontmatter.get("max_actions_per_step")
+    if not isinstance(max_actions_raw, int) or max_actions_raw < 1:
+        raise RuntimeError("identity frontmatter missing valid max_actions_per_step")
+
+    allowed_paths_raw = frontmatter.get("allowed_paths")
+    if not isinstance(allowed_paths_raw, list) or not allowed_paths_raw:
+        raise RuntimeError("identity frontmatter missing non-empty allowed_paths")
+    allowed_paths: list[str] = []
+    for item in allowed_paths_raw:
+        if not isinstance(item, str) or not item.strip():
+            raise RuntimeError("identity frontmatter has invalid allowed_paths entry")
+        allowed_paths.append(item.strip())
+
+    can_request = frontmatter.get("can_request_privileged_change")
+    if not isinstance(can_request, bool):
+        raise RuntimeError("identity frontmatter missing can_request_privileged_change")
+    return risk_tier, max_actions_raw, tuple(allowed_paths), can_request
+
+
 def _get_bundle_mtime(agent_dir: Path) -> float:
     """Get the maximum mtime of all files in an agent bundle directory."""
     max_mtime = 0.0
@@ -99,6 +168,9 @@ def load_agent_bundle(agent_dir: Path) -> AgentBundle:
     tools = _parse_allowed_tools(identity)
     if not tools:
         tools = ["echo"]
+    risk_tier, max_actions_per_step, allowed_paths, can_request_privileged_change = (
+        _parse_governance(identity)
+    )
 
     bundle = AgentBundle(
         agent_id=agent_dir.name,
@@ -106,6 +178,10 @@ def load_agent_bundle(agent_dir: Path) -> AgentBundle:
         soul_markdown=soul,
         heartbeat_markdown=heartbeat,
         allowed_tools=tools,
+        risk_tier=risk_tier,
+        max_actions_per_step=max_actions_per_step,
+        allowed_paths=allowed_paths,
+        can_request_privileged_change=can_request_privileged_change,
         tools_markdown=tools_md,
     )
     # Update cache

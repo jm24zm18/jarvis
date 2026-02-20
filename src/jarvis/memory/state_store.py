@@ -6,9 +6,12 @@ import json
 import logging
 import sqlite3
 from datetime import UTC, datetime
-from math import sqrt
+from math import exp, log1p, sqrt
 
 from jarvis.config import get_settings
+from jarvis.ids import new_id
+from jarvis.memory.policy import apply_memory_policy, record_memory_governance_decision
+from jarvis.memory.scope import can_agent_access_thread_memory, normalize_agent_id
 from jarvis.memory.state_items import (
     DEFAULT_STATUS,
     TYPE_PRIORITY,
@@ -25,6 +28,37 @@ class StateStore:
     BACKFILL_BATCH_SIZE = 200
 
     @staticmethod
+    def _emit_state_event(
+        conn: sqlite3.Connection,
+        thread_id: str,
+        event_type: str,
+        payload: dict[str, object],
+    ) -> None:
+        encoded = json.dumps(payload, sort_keys=True)
+        conn.execute(
+            (
+                "INSERT INTO events("
+                "id, trace_id, span_id, parent_span_id, thread_id, event_type, component, "
+                "actor_type, actor_id, payload_json, payload_redacted_json, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                new_id("evt"),
+                new_id("trc"),
+                new_id("spn"),
+                None,
+                thread_id,
+                event_type,
+                "memory.state",
+                "system",
+                "state_store",
+                encoded,
+                encoded,
+                StateStore._now_iso(),
+            ),
+        )
+
+    @staticmethod
     def _now_iso() -> str:
         return datetime.now(UTC).isoformat()
 
@@ -38,6 +72,31 @@ class StateStore:
         if length == 0:
             return vector
         return [item / length for item in vector]
+
+    @staticmethod
+    def _confidence_score(confidence: str) -> float:
+        return {"low": 0.3, "medium": 0.6, "high": 0.9}.get(confidence, 0.6)
+
+    def _importance_from_item(self, item: StateItem, now_iso: str) -> float:
+        recency_score = 0.5
+        try:
+            stamp = item.last_seen_at or item.created_at
+            seen_dt = datetime.fromisoformat(stamp)
+            now_dt = datetime.fromisoformat(now_iso)
+            age_days = max(0.0, (now_dt - seen_dt).total_seconds() / 86400.0)
+            recency_score = exp(-age_days / 14.0)
+        except Exception:
+            recency_score = 0.5
+        access_count_norm = min(1.0, log1p(max(0, int(item.access_count))) / log1p(25))
+        llm_self_assess = self._confidence_score(item.confidence)
+        user_feedback = 0.5
+        importance = (
+            0.4 * recency_score
+            + 0.3 * access_count_norm
+            + 0.2 * llm_self_assess
+            + 0.1 * user_feedback
+        )
+        return min(1.0, max(0.0, importance))
 
     @staticmethod
     def _cosine(left: list[float], right: list[float]) -> float:
@@ -73,14 +132,46 @@ class StateStore:
             ordered.append(clean)
         return ordered
 
-    def upsert_item(self, conn: sqlite3.Connection, thread_id: str, item: StateItem) -> StateItem:
+    def upsert_item(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        item: StateItem,
+        agent_id: str = "main",
+    ) -> StateItem:
         now = self._now_iso()
+        item.agent_id = normalize_agent_id(item.agent_id or agent_id)
+        allowed, scope_reason = can_agent_access_thread_memory(
+            conn, thread_id=thread_id, agent_id=item.agent_id
+        )
+        if not allowed:
+            record_memory_governance_decision(
+                conn,
+                thread_id=thread_id,
+                actor_id=item.agent_id,
+                target_kind="state_item",
+                target_id=item.uid,
+                decision="deny",
+                reason=scope_reason,
+            )
+            raise PermissionError(f"state write blocked: {scope_reason}")
+        governed_text, _decision, _reason = apply_memory_policy(
+            conn,
+            text=item.text,
+            thread_id=thread_id,
+            actor_id=item.agent_id,
+            target_kind="state_item",
+            target_id=item.uid,
+        )
+        item.text = governed_text
+        item.importance_score = self._importance_from_item(item, now)
         candidate_last_seen = self._max_ref_timestamp(conn, item.refs)
         row = conn.execute(
             (
                 "SELECT uid, text, status, type_tag, topic_tags_json, refs_json, confidence, "
                 "replaced_by, supersession_evidence, conflict, pinned, source, created_at, "
-                "last_seen_at FROM state_items WHERE thread_id=? AND uid=?"
+                "last_seen_at, tier, importance_score, access_count, conflict_count, "
+                "agent_id, last_accessed_at FROM state_items WHERE thread_id=? AND uid=?"
             ),
             (thread_id, item.uid),
         ).fetchone()
@@ -91,8 +182,9 @@ class StateStore:
                     "INSERT INTO state_items("
                     "uid, thread_id, text, status, type_tag, topic_tags_json, refs_json, "
                     "confidence, replaced_by, supersession_evidence, conflict, pinned, source, "
-                    "created_at, last_seen_at, updated_at"
-                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                    "created_at, last_seen_at, updated_at, tier, importance_score, access_count, "
+                    "conflict_count, agent_id, last_accessed_at"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
                 ),
                 (
                     item.uid,
@@ -111,10 +203,22 @@ class StateStore:
                     created_at,
                     item.last_seen_at or candidate_last_seen,
                     now,
+                    item.tier,
+                    item.importance_score,
+                    max(0, int(item.access_count)),
+                    1 if item.conflict else 0,
+                    item.agent_id,
+                    item.last_accessed_at,
                 ),
             )
             item.created_at = created_at
             item.last_seen_at = item.last_seen_at or candidate_last_seen
+            self._emit_state_event(
+                conn,
+                thread_id,
+                "memory.reconcile",
+                {"uid": item.uid, "action": "insert", "type_tag": item.type_tag},
+            )
             return item
 
         old_topic_tags = json.loads(str(row["topic_tags_json"]) or "[]")
@@ -138,6 +242,8 @@ class StateStore:
             if self._confidence_rank(item.confidence) >= self._confidence_rank(old_confidence)
             else old_confidence
         )
+        merged_conflict_count = int(row["conflict_count"] or 0) + (1 if item.conflict else 0)
+        merged_access_count = max(int(row["access_count"] or 0), int(item.access_count))
         merged_last_seen = max(str(row["last_seen_at"]), candidate_last_seen)
         merged_replaced_by = item.replaced_by or row["replaced_by"]
         merged_evidence = (
@@ -153,7 +259,9 @@ class StateStore:
             (
                 "UPDATE state_items SET text=?, status=?, topic_tags_json=?, refs_json=?, "
                 "confidence=?, replaced_by=?, supersession_evidence=?, conflict=?, pinned=?, "
-                "source=?, last_seen_at=?, updated_at=? "
+                "source=?, last_seen_at=?, updated_at=?, tier=?, importance_score=?, "
+                "access_count=?, "
+                "conflict_count=?, agent_id=?, last_accessed_at=? "
                 "WHERE uid=? AND thread_id=?"
             ),
             (
@@ -169,9 +277,23 @@ class StateStore:
                 item.source or str(row["source"]) or "extraction",
                 merged_last_seen,
                 now,
+                item.tier or str(row["tier"]) or "working",
+                self._importance_from_item(item, now),
+                merged_access_count,
+                merged_conflict_count,
+                item.agent_id or str(row["agent_id"]) or "main",
+                item.last_accessed_at or row["last_accessed_at"],
                 item.uid,
                 thread_id,
             ),
+        )
+        if bool(int(row["conflict"])) or item.conflict:
+            self._enqueue_conflict_review(conn, thread_id, item.uid, item.agent_id)
+        self._emit_state_event(
+            conn,
+            thread_id,
+            "memory.reconcile",
+            {"uid": item.uid, "action": "update", "type_tag": item.type_tag},
         )
         return StateItem(
             uid=item.uid,
@@ -188,35 +310,60 @@ class StateStore:
             source=item.source or str(row["source"]) or "extraction",
             created_at=str(row["created_at"]),
             last_seen_at=merged_last_seen,
+            tier=item.tier or str(row["tier"]) or "working",
+            importance_score=self._importance_from_item(item, now),
+            access_count=merged_access_count,
+            conflict_count=merged_conflict_count,
+            agent_id=item.agent_id or str(row["agent_id"]) or "main",
+            last_accessed_at=item.last_accessed_at or row["last_accessed_at"],
         )
 
     def get_active_items(
-        self, conn: sqlite3.Connection, thread_id: str, limit: int = 50
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        limit: int = 50,
+        agent_id: str = "main",
     ) -> list[StateItem]:
         rows = conn.execute(
             (
                 "SELECT uid, text, status, type_tag, topic_tags_json, refs_json, confidence, "
                 "replaced_by, supersession_evidence, conflict, pinned, source, created_at, "
-                "last_seen_at "
+                "last_seen_at, tier, importance_score, access_count, conflict_count, agent_id, "
+                "last_accessed_at "
                 "FROM state_items "
-                "WHERE thread_id=? AND status!='superseded' "
+                "WHERE thread_id=? AND agent_id=? AND status!='superseded' "
                 "ORDER BY pinned DESC, "
                 "CASE type_tag "
                 "WHEN 'decision' THEN 0 "
                 "WHEN 'constraint' THEN 1 "
                 "WHEN 'action' THEN 2 "
                 "WHEN 'risk' THEN 3 "
-                "WHEN 'question' THEN 4 "
-                "ELSE 5 END ASC, "
+                "WHEN 'failure' THEN 4 "
+                "WHEN 'question' THEN 5 "
+                "ELSE 6 END ASC, "
                 "CASE confidence "
                 "WHEN 'high' THEN 2 "
                 "WHEN 'medium' THEN 1 "
                 "ELSE 0 END DESC, "
-                "last_seen_at DESC "
+                "last_seen_at DESC, "
+                "uid ASC "
                 "LIMIT ?"
             ),
-            (thread_id, max(0, int(limit))),
+            (thread_id, agent_id, max(0, int(limit))),
         ).fetchall()
+        now = self._now_iso()
+        if rows:
+            conn.execute(
+                (
+                    "UPDATE state_items SET access_count = access_count + 1, last_accessed_at=? "
+                    f"WHERE (uid, thread_id) IN ({','.join('(?,?)' for _ in rows)})"
+                ),
+                tuple(
+                    [now]
+                    + [v for row in rows for v in (str(row["uid"]), thread_id)]
+                ),
+            )
         return [self._row_to_state_item(row) for row in rows]
 
     def get_items_by_uids(
@@ -230,7 +377,8 @@ class StateStore:
                 (
                     "SELECT uid, text, status, type_tag, topic_tags_json, refs_json, confidence, "
                     "replaced_by, supersession_evidence, conflict, pinned, source, created_at, "
-                    "last_seen_at "
+                    "last_seen_at, tier, importance_score, access_count, conflict_count, agent_id, "
+                    "last_accessed_at "
                     f"FROM state_items WHERE uid IN ({placeholders})"
                 ),
                 uids,
@@ -240,12 +388,40 @@ class StateStore:
                 (
                     "SELECT uid, text, status, type_tag, topic_tags_json, refs_json, confidence, "
                     "replaced_by, supersession_evidence, conflict, pinned, source, created_at, "
-                    "last_seen_at "
+                    "last_seen_at, tier, importance_score, access_count, conflict_count, agent_id, "
+                    "last_accessed_at "
                     f"FROM state_items WHERE thread_id=? AND uid IN ({placeholders})"
                 ),
                 [thread_id, *uids],
             ).fetchall()
         return [self._row_to_state_item(row) for row in rows]
+
+    def _enqueue_conflict_review(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        uid: str,
+        agent_id: str,
+    ) -> None:
+        row = conn.execute(
+            (
+                "SELECT 1 FROM memory_review_queue WHERE uid=? AND thread_id=? "
+                "AND status='open' LIMIT 1"
+            ),
+            (uid, thread_id),
+        ).fetchone()
+        if row is not None:
+            return
+        now = self._now_iso()
+        conn.execute(
+            (
+                "INSERT INTO memory_review_queue("
+                "id, uid, thread_id, agent_id, reason, status, reviewer_id, resolution_json, "
+                "created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (new_id("rvw"), uid, thread_id, agent_id, "conflict", "open", None, None, now, now),
+        )
 
     def mark_superseded(
         self,
@@ -336,14 +512,17 @@ class StateStore:
         thread_id: str,
         embedding: list[float],
         type_tag: str,
+        agent_id: str = "main",
         limit: int = 10,
     ) -> list[dict[str, object]]:
+        scoped_agent = normalize_agent_id(agent_id)
         normalized = self._normalize(embedding)
         sqlite_vec = self._search_state_vec_index(
             conn=conn,
             thread_id=thread_id,
             query_vec=normalized,
             type_tag=type_tag,
+            agent_id=scoped_agent,
             limit=limit,
         )
         if sqlite_vec:
@@ -355,9 +534,10 @@ class StateStore:
                 "sie.vector_json "
                 "FROM state_item_embeddings sie "
                 "JOIN state_items si ON si.uid=sie.uid AND si.thread_id=sie.thread_id "
-                "WHERE si.thread_id=? AND si.type_tag=? AND si.status!='superseded'"
+                "WHERE si.thread_id=? AND si.type_tag=? AND si.status!='superseded' "
+                "AND si.agent_id=?"
             ),
-            (thread_id, type_tag),
+            (thread_id, type_tag, scoped_agent),
         ).fetchall()
         scored: list[tuple[float, dict[str, object]]] = []
         for row in rows:
@@ -558,6 +738,7 @@ class StateStore:
         thread_id: str,
         query_vec: list[float],
         type_tag: str,
+        agent_id: str,
         limit: int,
     ) -> list[dict[str, object]]:
         if not self._ensure_vec_runtime(conn):
@@ -573,9 +754,10 @@ class StateStore:
                     "JOIN state_item_embeddings sie "
                     "ON sie.uid=si.uid AND sie.thread_id=si.thread_id "
                     "WHERE idx.embedding MATCH ? AND k = ? "
-                    "AND sm.thread_id=? AND si.type_tag=? AND si.status!='superseded'"
+                    "AND sm.thread_id=? AND si.type_tag=? AND si.status!='superseded' "
+                    "AND si.agent_id=?"
                 ),
-                (json.dumps(query_vec), max(1, int(limit)), thread_id, type_tag),
+                (json.dumps(query_vec), max(1, int(limit)), thread_id, type_tag, agent_id),
             ).fetchall()
         except sqlite3.OperationalError:
             logger.debug("state vector index search failed", exc_info=True)
@@ -637,6 +819,14 @@ class StateStore:
             source=str(row["source"]),
             created_at=str(row["created_at"]),
             last_seen_at=str(row["last_seen_at"]),
+            tier=str(row["tier"]) if row["tier"] is not None else "working",
+            importance_score=float(row["importance_score"] or 0.5),
+            access_count=int(row["access_count"] or 0),
+            conflict_count=int(row["conflict_count"] or 0),
+            agent_id=str(row["agent_id"]) if row["agent_id"] is not None else "main",
+            last_accessed_at=(
+                str(row["last_accessed_at"]) if row["last_accessed_at"] is not None else None
+            ),
         )
 
 

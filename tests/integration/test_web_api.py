@@ -2,7 +2,9 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 
+import pytest
 from fastapi.testclient import TestClient
 
 from jarvis.config import get_settings
@@ -10,6 +12,22 @@ from jarvis.db.connection import get_conn
 from jarvis.db.queries import insert_message, now_iso
 from jarvis.ids import new_id
 from jarvis.main import app
+
+_MANAGED_CLIENTS: list[TestClient] = []
+
+
+def _managed_client() -> TestClient:
+    client = TestClient(app)
+    client.__enter__()
+    _MANAGED_CLIENTS.append(client)
+    return client
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_managed_clients():
+    yield
+    while _MANAGED_CLIENTS:
+        _MANAGED_CLIENTS.pop().__exit__(None, None, None)
 
 
 def _login(client: TestClient) -> str:
@@ -20,10 +38,19 @@ def _login(client: TestClient) -> str:
     return str(payload["token"])
 
 
+def _login_payload(client: TestClient, external_id: str = "web_admin") -> dict[str, object]:
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"password": "secret", "external_id": external_id},
+    )
+    assert response.status_code == 200
+    return dict(response.json())
+
+
 def test_web_auth_login_me_logout_flow() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
 
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -56,9 +83,15 @@ def test_provider_config_get_and_update(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.routes.api.auth._save_env_values", fake_save_env_values)
     monkeypatch.setattr("jarvis.routes.api.auth.enqueue_settings_reload", lambda: True)
 
-    client = TestClient(app)
-    token = _login(client)
-    headers = {"Authorization": f"Bearer {token}"}
+    client = _managed_client()
+    first_login = _login_payload(client, "bootstrap-admin")
+    bootstrap_user_id = str(first_login["user_id"])
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET role='admin' WHERE id=?", (bootstrap_user_id,))
+
+    admin_login = _login_payload(client, "bootstrap-admin")
+    assert admin_login["role"] == "admin"
+    headers = {"Authorization": f"Bearer {admin_login['token']}"}
 
     before = client.get("/api/v1/auth/providers/config", headers=headers)
     assert before.status_code == 200
@@ -85,6 +118,53 @@ def test_provider_config_get_and_update(monkeypatch) -> None:
     get_settings.cache_clear()
 
 
+def test_provider_config_requires_admin() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.get("/api/v1/auth/providers/config", headers=headers)
+    assert response.status_code == 403
+
+
+def test_login_rejects_oversized_external_id() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"password": "secret", "external_id": "x" * 257},
+    )
+    assert response.status_code == 422
+    assert "external_id" in str(response.json().get("detail", "")).lower()
+
+
+def test_login_accepts_max_sized_external_id() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"password": "secret", "external_id": "x" * 256},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["user_id"].startswith("usr_")
+
+
+def test_users_external_id_db_guard_rejects_oversized_value() -> None:
+    with get_conn() as conn:
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO users(id, external_id, created_at) VALUES(?,?,?)",
+                (new_id("usr"), "x" * 257, now_iso()),
+            )
+
+
 def test_web_thread_and_message_flow(monkeypatch) -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
@@ -98,7 +178,7 @@ def test_web_thread_and_message_flow(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.routes.api.messages._send_task", fake_send_task)
     monkeypatch.setattr("jarvis.routes.api.messages.is_onboarding_active", lambda *_a, **_k: False)
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -143,7 +223,7 @@ def test_web_message_routes_to_onboarding_when_requested(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.routes.api.messages._send_task", fake_send_task)
     monkeypatch.setattr("jarvis.routes.api.messages.is_onboarding_active", lambda *_a, **_k: True)
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -186,7 +266,7 @@ def test_web_message_onboarding_enqueue_failure_still_persists_user_message(monk
     monkeypatch.setattr("jarvis.routes.api.messages._send_task", fake_send_task)
     monkeypatch.setattr("jarvis.routes.api.messages.is_onboarding_active", lambda *_a, **_k: True)
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -219,7 +299,7 @@ def test_web_messages_hide_non_main_assistant_history() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -287,7 +367,7 @@ def test_trace_endpoint_supports_redacted_and_raw_views() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -337,7 +417,7 @@ def test_get_thread_onboarding_status() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -365,7 +445,7 @@ def test_start_thread_onboarding_inserts_assistant_prompt(monkeypatch) -> None:
     )
     monkeypatch.setattr("jarvis.routes.api.messages.get_assistant_name", lambda: "Jarvis")
 
-    client = TestClient(app)
+    client = _managed_client()
     token = _login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -396,17 +476,101 @@ def test_start_thread_onboarding_inserts_assistant_prompt(monkeypatch) -> None:
 def test_github_webhook_rejects_bad_signature() -> None:
     os.environ["GITHUB_WEBHOOK_SECRET"] = "shh"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     payload = {"action": "opened"}
     response = client.post(
         "/api/v1/webhooks/github",
         json=payload,
         headers={
             "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-bad-signature",
             "X-Hub-Signature-256": "sha256=bad",
         },
     )
     assert response.status_code == 401
+
+
+def test_github_webhook_requires_delivery_id() -> None:
+    os.environ["GITHUB_WEBHOOK_SECRET"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    payload = {
+        "action": "opened",
+        "repository": {"name": "jarvis", "owner": {"login": "justin"}},
+        "pull_request": {"number": 13, "base": {"ref": "dev"}},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+    response = client.post(
+        "/api/v1/webhooks/github",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": f"sha256={sig}",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "missing github delivery id"
+
+
+def test_github_webhook_rejects_replayed_delivery() -> None:
+    os.environ["GITHUB_WEBHOOK_SECRET"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    payload = {
+        "action": "opened",
+        "repository": {"name": "jarvis", "owner": {"login": "justin"}},
+        "pull_request": {"number": 14, "base": {"ref": "dev"}},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+    headers = {
+        "Content-Type": "application/json",
+        "X-GitHub-Event": "pull_request",
+        "X-GitHub-Delivery": "delivery-replay",
+        "X-Hub-Signature-256": f"sha256={sig}",
+    }
+    first = client.post("/api/v1/webhooks/github", content=body, headers=headers)
+    second = client.post("/api/v1/webhooks/github", content=body, headers=headers)
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["detail"] == "replay detected"
+
+
+def test_github_webhook_accepts_distinct_delivery_ids() -> None:
+    os.environ["GITHUB_WEBHOOK_SECRET"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    payload = {
+        "action": "opened",
+        "repository": {"name": "jarvis", "owner": {"login": "justin"}},
+        "pull_request": {"number": 15, "base": {"ref": "dev"}},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+    response_a = client.post(
+        "/api/v1/webhooks/github",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-unique-a",
+            "X-Hub-Signature-256": f"sha256={sig}",
+        },
+    )
+    response_b = client.post(
+        "/api/v1/webhooks/github",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-unique-b",
+            "X-Hub-Signature-256": f"sha256={sig}",
+        },
+    )
+    assert response_a.status_code == 200
+    assert response_b.status_code == 200
 
 
 def test_github_webhook_enqueues_summary_task(monkeypatch) -> None:
@@ -420,7 +584,7 @@ def test_github_webhook_enqueues_summary_task(monkeypatch) -> None:
 
     monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
 
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "opened",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -434,6 +598,7 @@ def test_github_webhook_enqueues_summary_task(monkeypatch) -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-enqueue-summary",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )
@@ -456,7 +621,7 @@ def test_github_webhook_degraded_on_enqueue_error(monkeypatch) -> None:
 
     monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
 
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "opened",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -470,6 +635,7 @@ def test_github_webhook_degraded_on_enqueue_error(monkeypatch) -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-degraded-summary",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )
@@ -489,7 +655,7 @@ def test_github_issue_comment_chat_trigger_enqueues_task(monkeypatch) -> None:
         return True
 
     monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "created",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -507,6 +673,7 @@ def test_github_issue_comment_chat_trigger_enqueues_task(monkeypatch) -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-issue-comment-review",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )
@@ -532,7 +699,7 @@ def test_github_issue_comment_mention_uses_chat_mode(monkeypatch) -> None:
         return True
 
     monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "created",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -550,6 +717,7 @@ def test_github_issue_comment_mention_uses_chat_mode(monkeypatch) -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-issue-comment-chat",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )
@@ -570,7 +738,7 @@ def test_github_issue_comment_help_enqueues_help_mode(monkeypatch) -> None:
         return True
 
     monkeypatch.setattr("jarvis.routes.api.webhooks._send_task", fake_send_task)
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "created",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -588,6 +756,7 @@ def test_github_issue_comment_help_enqueues_help_mode(monkeypatch) -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-issue-comment-help",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )
@@ -601,7 +770,7 @@ def test_github_issue_comment_without_trigger_is_ignored() -> None:
     os.environ["GITHUB_WEBHOOK_SECRET"] = "secret"
     os.environ["GITHUB_BOT_LOGIN"] = "jarvis"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     payload = {
         "action": "created",
         "repository": {"name": "jarvis", "owner": {"login": "justin"}},
@@ -619,9 +788,201 @@ def test_github_issue_comment_without_trigger_is_ignored() -> None:
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-issue-comment-ignored",
             "X-Hub-Signature-256": f"sha256={sig}",
         },
     )
     assert response.status_code == 200
     assert response.json()["accepted"] is True
     assert response.json()["ignored"] is True
+
+
+def test_evolution_items_require_admin() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    listing = client.get("/api/v1/governance/evolution/items", headers=headers)
+    assert listing.status_code == 403
+    update = client.post(
+        "/api/v1/governance/evolution/items/evo_1/status",
+        headers=headers,
+        json={
+            "status": "started",
+            "trace_id": "trc_evo_1",
+            "evidence_refs": ["docs/PLAN.md:1"],
+            "result": {"status": "in_progress"},
+        },
+    )
+    assert update.status_code == 403
+
+
+def test_evolution_items_status_flow_and_timeline() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+
+    first_login = _login_payload(client, "evo-admin")
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET role='admin' WHERE id=?", (str(first_login["user_id"]),))
+    admin = _login_payload(client, "evo-admin")
+    headers = {"Authorization": f"Bearer {admin['token']}"}
+
+    start = client.post(
+        "/api/v1/governance/evolution/items/evo_item_1/status",
+        headers=headers,
+        json={
+            "status": "started",
+            "trace_id": "trc_evo_item_1",
+            "thread_id": "",
+            "evidence_refs": ["docs/PLAN.md:150"],
+            "result": {"status": "started"},
+        },
+    )
+    assert start.status_code == 200
+    assert start.json()["ok"] is True
+    assert start.json()["transition"]["to_status"] == "started"
+
+    verify = client.post(
+        "/api/v1/governance/evolution/items/evo_item_1/status",
+        headers=headers,
+        json={
+            "status": "verified",
+            "trace_id": "trc_evo_item_1",
+            "thread_id": "",
+            "evidence_refs": ["tests/integration/test_web_api.py:900"],
+            "result": {"status": "ok"},
+        },
+    )
+    assert verify.status_code == 200
+    verify_payload = verify.json()
+    assert verify_payload["ok"] is True
+    assert verify_payload["item"]["status"] == "verified"
+
+    listing = client.get(
+        "/api/v1/governance/evolution/items?status=verified&trace_id=trc_evo_item_1",
+        headers=headers,
+    )
+    assert listing.status_code == 200
+    items = listing.json()["items"]
+    assert items
+    assert items[0]["id"] == "evo_item_1"
+    assert items[0]["item_id"] == "evo_item_1"
+    assert items[0]["status"] == "verified"
+    assert "span_id" in items[0]
+    assert str(items[0]["span_id"]).startswith("spn_")
+
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE evolution_items SET updated_at=? WHERE id=?",
+            ("2025-01-01T00:00:00+00:00", "evo_item_1"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO evolution_items("
+                "id, trace_id, thread_id, status, evidence_refs_json, result_json, "
+                "updated_by, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                "evo_item_1_recent",
+                "trc_evo_item_1_recent",
+                None,
+                "started",
+                "[]",
+                "{}",
+                str(admin["user_id"]),
+                "2026-02-19T08:00:00+00:00",
+                "2026-02-19T08:00:00+00:00",
+            ),
+        )
+
+    from_to_listing = client.get(
+        "/api/v1/governance/evolution/items",
+        params={
+            "from": "2026-02-19T00:00:00+00:00",
+            "to": "2026-02-20T00:00:00+00:00",
+        },
+        headers=headers,
+    )
+    assert from_to_listing.status_code == 200
+    filtered_ids = {str(item["id"]) for item in from_to_listing.json()["items"]}
+    assert "evo_item_1_recent" in filtered_ids
+    assert "evo_item_1" not in filtered_ids
+
+    timeline = client.get(
+        "/api/v1/governance/decision-timeline?trace_id=trc_evo_item_1",
+        headers=headers,
+    )
+    assert timeline.status_code == 200
+    event_types = [str(item["event_type"]) for item in timeline.json()["items"]]
+    assert "evolution.item.started" in event_types
+    assert "evolution.item.verified" in event_types
+
+    with get_conn() as conn:
+        row = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='evolution.item.verified' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_evo_item_1",),
+        ).fetchone()
+    assert row is not None
+    payload = json.loads(str(row["payload_json"]))
+    assert "item_id" in payload
+    assert "trace_id" in payload
+    assert "status" in payload
+    assert "evidence_refs" in payload
+    assert "result" in payload
+
+
+def test_evolution_items_reject_invalid_transition() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+
+    first_login = _login_payload(client, "evo-admin-2")
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET role='admin' WHERE id=?", (str(first_login["user_id"]),))
+    admin = _login_payload(client, "evo-admin-2")
+    headers = {"Authorization": f"Bearer {admin['token']}"}
+
+    started = client.post(
+        "/api/v1/governance/evolution/items/evo_item_2/status",
+        headers=headers,
+        json={
+            "status": "started",
+            "trace_id": "trc_evo_item_2",
+            "evidence_refs": [],
+            "result": {"status": "started"},
+        },
+    )
+    assert started.status_code == 200
+    verified = client.post(
+        "/api/v1/governance/evolution/items/evo_item_2/status",
+        headers=headers,
+        json={
+            "status": "verified",
+            "trace_id": "trc_evo_item_2",
+            "evidence_refs": [],
+            "result": {"status": "ok"},
+        },
+    )
+    assert verified.status_code == 200
+
+    blocked_after_verified = client.post(
+        "/api/v1/governance/evolution/items/evo_item_2/status",
+        headers=headers,
+        json={
+            "status": "blocked",
+            "trace_id": "trc_evo_item_2",
+            "evidence_refs": ["tests/integration/test_web_api.py:972"],
+            "result": {"status": "should_fail"},
+        },
+    )
+    assert blocked_after_verified.status_code == 200
+    payload = blocked_after_verified.json()
+    assert payload["ok"] is False
+    assert payload["error"] == "invalid_transition"

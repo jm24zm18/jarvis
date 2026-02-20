@@ -16,6 +16,9 @@ Use this as the routing map for specialized work in this repository.
 - `security_reviewer`: Security review, least-privilege checks, policy hardening.
 - `docs_keeper`: Documentation drift fixes, cross-linking, doc operability.
 - `release_ops`: Build/release gates, deploy/rollback/runbook validation.
+- `dependency_steward`: Dependency freshness checks and upgrade evidence generation.
+- `release_candidate`: Release-readiness evidence and checklist synthesis.
+- `user_simulator`: Synthetic user journey/story execution and acceptance reports.
 
 ## Existing Generalists
 

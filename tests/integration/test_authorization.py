@@ -1,11 +1,28 @@
 import os
 
+import pytest
 from fastapi.testclient import TestClient
 
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import insert_message, now_iso
 from jarvis.main import app
+
+_MANAGED_CLIENTS: list[TestClient] = []
+
+
+def _managed_client() -> TestClient:
+    client = TestClient(app)
+    client.__enter__()
+    _MANAGED_CLIENTS.append(client)
+    return client
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_managed_clients():
+    yield
+    while _MANAGED_CLIENTS:
+        _MANAGED_CLIENTS.pop().__exit__(None, None, None)
 
 
 def _login(client: TestClient, external_id: str) -> tuple[str, str]:
@@ -41,7 +58,7 @@ def _create_thread(client: TestClient, token: str) -> str:
 def test_user_cannot_read_other_users_thread() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     alice, bob = _bootstrap_users(client)
     bob_thread = _create_thread(client, bob["token"])
 
@@ -52,7 +69,7 @@ def test_user_cannot_read_other_users_thread() -> None:
 def test_user_cannot_list_other_users_threads() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     alice, bob = _bootstrap_users(client)
     _ = _create_thread(client, bob["token"])
 
@@ -64,7 +81,7 @@ def test_user_cannot_list_other_users_threads() -> None:
 def test_user_cannot_send_message_to_other_users_thread() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     alice, bob = _bootstrap_users(client)
     bob_thread = _create_thread(client, bob["token"])
 
@@ -79,7 +96,7 @@ def test_user_cannot_send_message_to_other_users_thread() -> None:
 def test_user_cannot_patch_other_users_thread() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     alice, bob = _bootstrap_users(client)
     bob_thread = _create_thread(client, bob["token"])
 
@@ -94,7 +111,7 @@ def test_user_cannot_patch_other_users_thread() -> None:
 def test_user_cannot_read_messages_from_other_users_thread() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     alice, bob = _bootstrap_users(client)
     bob_thread = _create_thread(client, bob["token"])
     with get_conn() as conn:
@@ -110,11 +127,13 @@ def test_user_cannot_read_messages_from_other_users_thread() -> None:
 def test_websocket_subscribe_to_other_users_thread_rejected() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     alice, bob = _bootstrap_users(client)
     bob_thread = _create_thread(client, bob["token"])
 
-    with client.websocket_connect(f"/ws?token={alice['token']}") as ws:
+    with client.websocket_connect(
+        "/ws", headers={"Authorization": f"Bearer {alice['token']}"}
+    ) as ws:
         auth_event = ws.receive_json()
         assert auth_event["type"] == "auth.ok"
         ws.send_json({"action": "subscribe", "thread_id": bob_thread})
@@ -123,10 +142,28 @@ def test_websocket_subscribe_to_other_users_thread_rejected() -> None:
         assert error["detail"] == "forbidden"
 
 
+def test_non_admin_websocket_subscribe_system_rejected() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+
+    with client.websocket_connect(
+        "/ws", headers={"Authorization": f"Bearer {alice['token']}"}
+    ) as ws:
+        auth_event = ws.receive_json()
+        assert auth_event["type"] == "auth.ok"
+        assert auth_event["role"] == "user"
+        ws.send_json({"action": "subscribe_system"})
+        error = ws.receive_json()
+        assert error["type"] == "error"
+        assert error["detail"] == "forbidden"
+
+
 def test_non_admin_cannot_toggle_lockdown() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     alice, _bob = _bootstrap_users(client)
 
     response = client.post(
@@ -137,10 +174,24 @@ def test_non_admin_cannot_toggle_lockdown() -> None:
     assert response.status_code == 403
 
 
+def test_lockdown_route_is_reachable_after_successful_login() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+
+    token, _user_id = _login(client, "alice")
+    response = client.post(
+        "/api/v1/system/lockdown",
+        headers=_headers(token),
+        json={"lockdown": True},
+    )
+    assert response.status_code == 403
+
+
 def test_non_admin_cannot_modify_permissions() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     alice, _bob = _bootstrap_users(client)
 
     response = client.put(
@@ -154,7 +205,7 @@ def test_non_admin_cannot_modify_permissions() -> None:
 def test_non_admin_cannot_approve_selfupdate() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     alice, _bob = _bootstrap_users(client)
 
     response = client.post(
@@ -165,10 +216,117 @@ def test_non_admin_cannot_approve_selfupdate() -> None:
     assert response.status_code == 403
 
 
+def test_non_admin_cannot_read_governance_fitness() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+
+    response = client.get(
+        "/api/v1/governance/fitness/latest",
+        headers=_headers(alice["token"]),
+    )
+    assert response.status_code == 403
+
+
+def test_non_admin_cannot_read_governance_slo() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+
+    response = client.get(
+        "/api/v1/governance/slo",
+        headers=_headers(alice["token"]),
+    )
+    assert response.status_code == 403
+
+
+def test_non_admin_cannot_read_governance_decision_timeline() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+
+    response = client.get(
+        "/api/v1/governance/decision-timeline",
+        headers=_headers(alice["token"]),
+    )
+    assert response.status_code == 403
+
+
+def test_non_admin_cannot_submit_remediation_feedback() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+
+    response = client.post(
+        "/api/v1/governance/remediations/frm_demo/feedback",
+        headers=_headers(alice["token"]),
+        json={"feedback": "accepted"},
+    )
+    assert response.status_code == 403
+
+
+def test_non_admin_cannot_run_memory_maintenance() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+
+    response = client.post(
+        "/api/v1/memory/maintenance/run",
+        headers=_headers(alice["token"]),
+        json={},
+    )
+    assert response.status_code == 403
+
+
+def test_non_admin_cannot_manage_whatsapp_channels() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+    headers = _headers(alice["token"])
+
+    assert client.get("/api/v1/channels/whatsapp/status", headers=headers).status_code == 403
+    assert (
+        client.post("/api/v1/channels/whatsapp/create", headers=headers, json={}).status_code
+        == 403
+    )
+    assert client.get("/api/v1/channels/whatsapp/qrcode", headers=headers).status_code == 403
+    assert (
+        client.post(
+            "/api/v1/channels/whatsapp/pairing-code",
+            headers=headers,
+            json={"number": "15555550123"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/api/v1/channels/whatsapp/disconnect",
+            headers=headers,
+            json={},
+        ).status_code
+        == 403
+    )
+    assert client.get("/api/v1/channels/whatsapp/review-queue", headers=headers).status_code == 403
+    assert (
+        client.post(
+            "/api/v1/channels/whatsapp/review-queue/sch_demo/resolve",
+            headers=headers,
+            json={"decision": "deny", "reason": "blocked"},
+        ).status_code
+        == 403
+    )
+
+
 def test_user_memory_search_scoped() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     alice, bob = _bootstrap_users(client)
     alice_thread = _create_thread(client, alice["token"])
     bob_thread = _create_thread(client, bob["token"])
@@ -190,15 +348,17 @@ def test_user_memory_search_scoped() -> None:
 
     response = client.get("/api/v1/memory", headers=_headers(alice["token"]))
     assert response.status_code == 200
-    thread_ids = {item["thread_id"] for item in response.json()["items"]}
+    items = response.json()["items"]
+    thread_ids = {item["thread_id"] for item in items}
     assert alice_thread in thread_ids
     assert bob_thread not in thread_ids
+    assert all(isinstance(item.get("metadata"), dict) for item in items)
 
 
 def test_user_bugs_list_scoped() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
-    client = TestClient(app)
+    client = _managed_client()
     alice, bob = _bootstrap_users(client)
 
     create_alice = client.post(
@@ -219,3 +379,100 @@ def test_user_bugs_list_scoped() -> None:
     items = listing.json()["items"]
     assert len(items) == 1
     assert items[0]["reporter_id"] == alice["user_id"]
+
+
+def test_non_admin_cannot_access_stories() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+    headers = _headers(alice["token"])
+
+    assert client.post("/api/v1/stories/run", headers=headers).status_code == 403
+    assert client.get("/api/v1/stories/runs", headers=headers).status_code == 403
+    assert client.get("/api/v1/stories/runs/run_demo", headers=headers).status_code == 403
+
+
+def test_non_admin_cannot_access_system_admin_routes() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+    headers = _headers(alice["token"])
+
+    assert client.post("/api/v1/system/reset-db", headers=headers).status_code == 403
+    assert client.post("/api/v1/system/reload-agents", headers=headers).status_code == 403
+    assert client.get("/api/v1/system/repo-index", headers=headers).status_code == 403
+
+
+def test_non_admin_cannot_list_selfupdate_patches() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+    headers = _headers(alice["token"])
+
+    assert client.get("/api/v1/selfupdate/patches", headers=headers).status_code == 403
+    assert (
+        client.get("/api/v1/selfupdate/patches/trc_demo", headers=headers).status_code == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/selfupdate/patches/trc_demo/checks", headers=headers
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/selfupdate/patches/trc_demo/timeline", headers=headers
+        ).status_code
+        == 403
+    )
+
+
+def test_user_schedule_list_scoped() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, bob = _bootstrap_users(client)
+    alice_thread = _create_thread(client, alice["token"])
+    bob_thread = _create_thread(client, bob["token"])
+
+    # Alice creates a schedule on her thread
+    resp_a = client.post(
+        "/api/v1/schedules",
+        headers=_headers(alice["token"]),
+        json={"cron_expr": "0 * * * *", "thread_id": alice_thread},
+    )
+    assert resp_a.status_code == 200
+
+    # Bob creates a schedule on his thread
+    resp_b = client.post(
+        "/api/v1/schedules",
+        headers=_headers(bob["token"]),
+        json={"cron_expr": "0 * * * *", "thread_id": bob_thread},
+    )
+    assert resp_b.status_code == 200
+
+    # Alice should only see her own schedule
+    listing = client.get("/api/v1/schedules", headers=_headers(alice["token"]))
+    assert listing.status_code == 200
+    items = listing.json()["items"]
+    thread_ids = {item["thread_id"] for item in items}
+    assert alice_thread in thread_ids
+    assert bob_thread not in thread_ids
+
+
+def test_user_cannot_create_schedule_on_other_users_thread() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, bob = _bootstrap_users(client)
+    bob_thread = _create_thread(client, bob["token"])
+
+    response = client.post(
+        "/api/v1/schedules",
+        headers=_headers(alice["token"]),
+        json={"cron_expr": "0 * * * *", "thread_id": bob_thread},
+    )
+    assert response.status_code == 403

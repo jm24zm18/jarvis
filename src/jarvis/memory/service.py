@@ -7,11 +7,15 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from math import sqrt
 from random import Random
+from typing import Any
 
 import httpx
 
 from jarvis.config import get_settings
 from jarvis.ids import new_id
+from jarvis.memory.policy import apply_memory_policy, record_memory_governance_decision
+from jarvis.memory.scope import can_agent_access_thread_memory, is_known_agent, normalize_agent_id
+from jarvis.memory.state_store import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +26,58 @@ class MemoryService:
     EVENT_VEC_INDEX_TABLE = "event_vec_index"
     EVENT_VEC_INDEX_MAP_TABLE = "event_vec_index_map"
     BACKFILL_BATCH_SIZE = 200
+    DEFAULT_CHUNK_SIZE = 8192
+    _MESSAGE_LINKED_SOURCES = frozenset({"agent.step.end", "command.executed", "onboarding.step"})
+
+    @staticmethod
+    def _memory_write_schema_ok(metadata: dict[str, object] | None) -> tuple[bool, str]:
+        if metadata is None:
+            return True, "none"
+        source = str(metadata.get("source", "")).strip().lower()
+        if source in MemoryService._MESSAGE_LINKED_SOURCES:
+            message_id = metadata.get("message_id")
+            evidence_refs = metadata.get("evidence_refs")
+            has_message_id = isinstance(message_id, str) and bool(message_id.strip())
+            has_evidence_refs = (
+                isinstance(evidence_refs, list)
+                and any(isinstance(item, str) and item.strip() for item in evidence_refs)
+            )
+            if not has_message_id and not has_evidence_refs:
+                return False, "missing_evidence_ref"
+        return True, "none"
+
+    def _emit_memory_event(
+        self,
+        conn: sqlite3.Connection,
+        event_type: str,
+        payload: dict[str, object],
+        thread_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> None:
+        event_trace = trace_id or new_id("trc")
+        serialized = json.dumps(payload, sort_keys=True)
+        conn.execute(
+            (
+                "INSERT INTO events("
+                "id, trace_id, span_id, parent_span_id, thread_id, event_type, component, "
+                "actor_type, actor_id, payload_json, payload_redacted_json, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                new_id("evt"),
+                event_trace,
+                new_id("spn"),
+                None,
+                thread_id,
+                event_type,
+                "memory",
+                "system",
+                "memory",
+                serialized,
+                serialized,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
 
     def ensure_vector_indexes(self, conn: sqlite3.Connection) -> bool:
         return self._ensure_vec_runtime(conn)
@@ -41,6 +97,43 @@ class MemoryService:
         metadata: dict[str, object] | None = None,
     ) -> str:
         settings = get_settings()
+        actor_id = "system"
+        if metadata and isinstance(metadata.get("actor_id"), str):
+            actor_id = normalize_agent_id(str(metadata["actor_id"]), default="system")
+
+        schema_ok, schema_reason = self._memory_write_schema_ok(metadata)
+        if not schema_ok:
+            record_memory_governance_decision(
+                conn,
+                thread_id=thread_id,
+                actor_id=actor_id,
+                target_kind="memory_item",
+                decision="deny",
+                reason=schema_reason,
+            )
+            raise PermissionError(f"memory write blocked: {schema_reason}")
+
+        if is_known_agent(actor_id):
+            allowed, reason = can_agent_access_thread_memory(
+                conn, thread_id=thread_id, agent_id=actor_id
+            )
+            if not allowed:
+                record_memory_governance_decision(
+                    conn,
+                    thread_id=thread_id,
+                    actor_id=actor_id,
+                    target_kind="memory_item",
+                    decision="deny",
+                    reason=reason,
+                )
+                raise PermissionError(f"memory write blocked: {reason}")
+        governed_text, decision, reason = apply_memory_policy(
+            conn,
+            text=text,
+            thread_id=thread_id,
+            actor_id=actor_id,
+            target_kind="memory_item",
+        )
         memory_id = new_id("mem")
         metadata_json = json.dumps(metadata or {})
         conn.execute(
@@ -49,13 +142,13 @@ class MemoryService:
                 "id, thread_id, text, metadata_json, created_at"
                 ") VALUES(?,?,?,?,?)"
             ),
-            (memory_id, thread_id, text, metadata_json, datetime.now(UTC).isoformat()),
+            (memory_id, thread_id, governed_text, metadata_json, datetime.now(UTC).isoformat()),
         )
         conn.execute(
             "INSERT INTO memory_fts(memory_id, thread_id, text) VALUES(?,?,?)",
-            (memory_id, thread_id, text),
+            (memory_id, thread_id, governed_text),
         )
-        vector = self._embed_text(text)
+        vector = self._embed_text_cached(conn, governed_text)
         vec_json = json.dumps(vector)
         conn.execute(
             (
@@ -75,10 +168,88 @@ class MemoryService:
             (memory_id, vec_json, datetime.now(UTC).isoformat()),
         )
         self._upsert_memory_vec_index(conn, memory_id, vector)
+        self._emit_memory_event(
+            conn,
+            "memory.write",
+            {
+                "memory_id": memory_id,
+                "chars": len(governed_text),
+                "policy_decision": decision,
+                "policy_reason": reason,
+            },
+            thread_id=thread_id,
+        )
         return memory_id
+
+    def write_chunked(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        text: str,
+        metadata: dict[str, object] | None = None,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+    ) -> list[str]:
+        chunk_len = max(1, int(chunk_size))
+        content = str(text)
+        if len(content) <= chunk_len:
+            return [self.write(conn, thread_id, content, metadata=metadata)]
+
+        chunk_group_id = f"mcg_{sha256(content.encode('utf-8')).hexdigest()[:24]}"
+        pieces = [content[idx: idx + chunk_len] for idx in range(0, len(content), chunk_len)]
+        chunk_total = len(pieces)
+        memory_ids: list[str] = []
+        base_metadata = dict(metadata or {})
+        for chunk_idx, piece in enumerate(pieces):
+            chunk_metadata: dict[str, object] = dict(base_metadata)
+            chunk_metadata.update(
+                {
+                    "is_chunked": True,
+                    "chunk_group_id": chunk_group_id,
+                    "chunk_index": chunk_idx,
+                    "chunk_total": chunk_total,
+                    "continued": chunk_idx < (chunk_total - 1),
+                }
+            )
+            memory_ids.append(
+                self.write(conn, thread_id, piece, metadata=chunk_metadata)
+            )
+        return memory_ids
 
     def embed_text(self, text: str) -> list[float]:
         return self._embed_text(text)
+
+    def _embed_text_cached(self, conn: sqlite3.Connection, text: str) -> list[float]:
+        settings = get_settings()
+        model = settings.ollama_embed_model
+        key = sha256(f"{model}\n{text.strip()}".encode()).hexdigest()
+        row = conn.execute(
+            "SELECT vector_json FROM embedding_cache WHERE hash=? LIMIT 1",
+            (key,),
+        ).fetchone()
+        if row is not None and isinstance(row["vector_json"], str):
+            try:
+                decoded = json.loads(str(row["vector_json"]))
+                if isinstance(decoded, list):
+                    vec = [float(item) for item in decoded if isinstance(item, int | float)]
+                    if vec:
+                        conn.execute(
+                            "UPDATE embedding_cache SET hit_count=hit_count+1 WHERE hash=?",
+                            (key,),
+                        )
+                        return self._fit_dims(vec, settings.memory_embed_dims)
+            except json.JSONDecodeError:
+                pass
+        vector = self._embed_text(text)
+        conn.execute(
+            (
+                "INSERT OR REPLACE INTO embedding_cache("
+                "hash, model, vector_json, created_at, hit_count"
+                ") "
+                "VALUES(?,?,?,?,COALESCE((SELECT hit_count FROM embedding_cache WHERE hash=?), 0))"
+            ),
+            (key, model, json.dumps(vector), datetime.now(UTC).isoformat(), key),
+        )
+        return vector
 
     def upsert_event_vector(
         self,
@@ -111,7 +282,7 @@ class MemoryService:
         vector_weight: float = 0.4,
         bm25_weight: float = 0.35,
         recency_weight: float = 0.25,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, object]]:
         """Hybrid retrieval using Reciprocal Rank Fusion (vector + BM25 + recency)."""
         rrf_k = 60  # RRF smoothing constant
         pool_size = max(limit * 3, 15)
@@ -164,6 +335,12 @@ class MemoryService:
 
         # If no results from any source, return empty
         if not vector_ranking and not bm25_ranking and not recency_ranking:
+            self._emit_memory_event(
+                conn,
+                "memory.retrieve",
+                {"result_count": 0, "query_present": bool(query and query.strip())},
+                thread_id=thread_id,
+            )
             return []
 
         # --- Reciprocal Rank Fusion ---
@@ -184,10 +361,95 @@ class MemoryService:
 
         # Sort by fused score
         ranked = sorted(rrf_scores.items(), key=lambda kv: kv[1], reverse=True)
-        return [
-            {"id": mid, "text": all_texts.get(mid, "")}
-            for mid, _ in ranked[:limit]
-        ]
+        results: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for mid, _ in ranked:
+            stitched_id, stitched_text, stitched_metadata = self._materialize_memory_hit(
+                conn,
+                thread_id=thread_id,
+                memory_id=mid,
+                fallback_text=all_texts.get(mid, ""),
+            )
+            if stitched_id in seen:
+                continue
+            seen.add(stitched_id)
+            results.append(
+                {"id": stitched_id, "text": stitched_text, "metadata": stitched_metadata}
+            )
+            if len(results) >= limit:
+                break
+        self._emit_memory_event(
+            conn,
+            "memory.retrieve",
+            {
+                "result_count": len(results),
+                "query_present": bool(query and query.strip()),
+                "limit": limit,
+            },
+            thread_id=thread_id,
+        )
+        return results
+
+    @staticmethod
+    def _parse_metadata(metadata_raw: object) -> dict[str, object]:
+        if not isinstance(metadata_raw, str) or not metadata_raw:
+            return {}
+        try:
+            parsed = json.loads(metadata_raw)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _materialize_memory_hit(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        memory_id: str,
+        fallback_text: str,
+    ) -> tuple[str, str, dict[str, object]]:
+        row = conn.execute(
+            "SELECT id, text, metadata_json FROM memory_items WHERE id=? LIMIT 1",
+            (memory_id,),
+        ).fetchone()
+        if row is None:
+            return memory_id, fallback_text, {}
+        metadata = self._parse_metadata(row["metadata_json"])
+        group_id = metadata.get("chunk_group_id")
+        if not isinstance(group_id, str) or not group_id.strip():
+            return str(row["id"]), str(row["text"]), metadata
+        try:
+            chunk_rows = conn.execute(
+                (
+                    "SELECT id, text, metadata_json, created_at "
+                    "FROM memory_items "
+                    "WHERE thread_id=? AND json_extract(metadata_json, '$.chunk_group_id')=? "
+                    "ORDER BY CAST(json_extract(metadata_json, '$.chunk_index') AS INTEGER) ASC, "
+                    "created_at ASC"
+                ),
+                (thread_id, group_id),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return str(row["id"]), str(row["text"]), metadata
+        if not chunk_rows:
+            return str(row["id"]), str(row["text"]), metadata
+        ordered = []
+        for chunk_row in chunk_rows:
+            chunk_metadata = self._parse_metadata(chunk_row["metadata_json"])
+            chunk_index_raw = chunk_metadata.get("chunk_index", 0)
+            if isinstance(chunk_index_raw, int | float | str):
+                try:
+                    chunk_index = int(chunk_index_raw)
+                except ValueError:
+                    chunk_index = 0
+            else:
+                chunk_index = 0
+            ordered.append(
+                (chunk_index, str(chunk_row["id"]), str(chunk_row["text"]), chunk_metadata)
+            )
+        ordered.sort(key=lambda item: item[0])
+        stitched = "".join(item[2] for item in ordered)
+        primary = ordered[0]
+        return primary[1], stitched, primary[3]
 
     def _semantic_scored(
         self,
@@ -448,7 +710,315 @@ class MemoryService:
                 return self._fit_dims(parsed, settings.memory_embed_dims)
         except Exception:
             pass
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            model = SentenceTransformer(settings.memory_sentence_transformers_model)
+            output = model.encode([text], normalize_embeddings=False)
+            if len(output) > 0:
+                first = output[0]
+                if hasattr(first, "tolist"):
+                    parsed = [float(item) for item in first.tolist()]
+                else:
+                    parsed = [float(item) for item in first]
+                return self._fit_dims(parsed, settings.memory_embed_dims)
+        except Exception:
+            pass
         return self._deterministic_embedding(text, settings.memory_embed_dims)
+
+    def search_state(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        query: str,
+        *,
+        filters: dict[str, Any] | None = None,
+        k: int = 20,
+        min_score: float = 0.75,
+        actor_id: str = "main",
+    ) -> list[dict[str, object]]:
+        if not query.strip():
+            return []
+        store = StateStore()
+        max_k = max(1, int(k))
+        pool_size = max(max_k * 3, 20)
+        rrf_k = 60
+        flt = filters or {}
+        desired_type = str(flt.get("type_tag") or "decision")
+        allowed_tiers = {
+            str(item)
+            for item in (flt.get("tiers") or [])
+            if isinstance(item, str) and item.strip()
+        }
+
+        scoped_actor_id = normalize_agent_id(actor_id)
+        vector_rows = store.search_similar_items(
+            conn=conn,
+            thread_id=thread_id,
+            embedding=self._embed_text_cached(conn, query),
+            type_tag=desired_type,
+            limit=pool_size,
+            agent_id=scoped_actor_id,
+        )
+        vector_rank: list[str] = []
+        rows_by_uid: dict[str, dict[str, object]] = {}
+        for row in vector_rows:
+            uid = str(row.get("uid", ""))
+            if not uid:
+                continue
+            vector_rank.append(uid)
+            rows_by_uid[uid] = dict(row)
+
+        lexical_rows = conn.execute(
+            (
+                "SELECT uid, text, status, type_tag, topic_tags_json, confidence, tier, "
+                "importance_score, last_seen_at "
+                "FROM state_items WHERE thread_id=? AND status!='superseded' "
+                "AND agent_id=? "
+                "AND LOWER(text) LIKE ? ORDER BY updated_at DESC LIMIT ?"
+            ),
+            (thread_id, scoped_actor_id, f"%{query.strip().lower()}%", pool_size),
+        ).fetchall()
+        lexical_rank: list[str] = []
+        for row in lexical_rows:
+            uid = str(row["uid"])
+            lexical_rank.append(uid)
+            rows_by_uid.setdefault(
+                uid,
+                {
+                    "uid": uid,
+                    "text": str(row["text"]),
+                    "status": str(row["status"]),
+                    "type_tag": str(row["type_tag"]),
+                    "topic_tags": [],
+                    "score": 0.0,
+                    "tier": str(row["tier"]),
+                    "importance_score": float(row["importance_score"] or 0.0),
+                    "last_seen_at": str(row["last_seen_at"]),
+                    "confidence": str(row["confidence"]),
+                },
+            )
+
+        recent_rows = conn.execute(
+            (
+                "SELECT uid, text, status, type_tag, topic_tags_json, confidence, tier, "
+                "importance_score, last_seen_at "
+                "FROM state_items WHERE thread_id=? AND status!='superseded' "
+                "AND agent_id=? "
+                "ORDER BY last_seen_at DESC LIMIT ?"
+            ),
+            (thread_id, scoped_actor_id, pool_size),
+        ).fetchall()
+        recency_rank: list[str] = []
+        for row in recent_rows:
+            uid = str(row["uid"])
+            recency_rank.append(uid)
+            rows_by_uid.setdefault(
+                uid,
+                {
+                    "uid": uid,
+                    "text": str(row["text"]),
+                    "status": str(row["status"]),
+                    "type_tag": str(row["type_tag"]),
+                    "topic_tags": [],
+                    "score": 0.0,
+                    "tier": str(row["tier"]),
+                    "importance_score": float(row["importance_score"] or 0.0),
+                    "last_seen_at": str(row["last_seen_at"]),
+                    "confidence": str(row["confidence"]),
+                },
+            )
+
+        if not (vector_rank or lexical_rank or recency_rank):
+            return []
+        scores: dict[str, float] = {}
+        for idx, uid in enumerate(vector_rank):
+            scores[uid] = scores.get(uid, 0.0) + 0.50 / (rrf_k + idx + 1)
+        for idx, uid in enumerate(lexical_rank):
+            scores[uid] = scores.get(uid, 0.0) + 0.30 / (rrf_k + idx + 1)
+        for idx, uid in enumerate(recency_rank):
+            scores[uid] = scores.get(uid, 0.0) + 0.20 / (rrf_k + idx + 1)
+
+        tier_prior = {
+            "working": 0.040,
+            "episodic": 0.025,
+            "semantic_longterm": 0.010,
+            "procedural": 0.010,
+        }
+        tier_rank = {
+            "working": 3,
+            "episodic": 2,
+            "semantic_longterm": 1,
+            "procedural": 1,
+        }
+
+        filtered: list[dict[str, object]] = []
+        for uid, base_score in scores.items():
+            row = dict(rows_by_uid.get(uid, {}))
+            if not row:
+                continue
+            if row.get("type_tag") != desired_type:
+                continue
+            tier = str(row.get("tier") or "working")
+            if allowed_tiers and tier not in allowed_tiers:
+                continue
+            prior = tier_prior.get(tier, 0.0)
+            combined = base_score + prior
+            if combined < min_score * 0.05:
+                continue
+            row["score"] = combined
+            row["agent_id"] = scoped_actor_id
+            filtered.append(row)
+        def _recency_sort_value(value: object) -> float:
+            try:
+                return datetime.fromisoformat(str(value)).timestamp()
+            except Exception:
+                return 0.0
+
+        def _score_sort_value(value: object) -> float:
+            if isinstance(value, int | float):
+                return float(value)
+            try:
+                return float(str(value))
+            except Exception:
+                return 0.0
+
+        filtered.sort(
+            key=lambda row: (
+                -_score_sort_value(row.get("score")),
+                -tier_rank.get(str(row.get("tier") or "working"), 0),
+                -_recency_sort_value(row.get("last_seen_at")),
+                str(row.get("uid") or ""),
+            )
+        )
+        filtered = filtered[:max_k]
+        self._emit_memory_event(
+            conn,
+            "memory.search.executed",
+            {
+                "scope": "state",
+                "result_count": len(filtered),
+                "query": query[:120],
+                "filters": filters or {},
+            },
+            thread_id=thread_id,
+        )
+        return filtered
+
+    def get_failures(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        similar_to: str,
+        k: int = 10,
+        actor_id: str = "main",
+    ) -> list[dict[str, object]]:
+        del actor_id
+        text = similar_to.strip().lower()
+        if not text:
+            rows = conn.execute(
+                (
+                    "SELECT id, trace_id, phase, error_summary, error_details_json, "
+                    "attempt, created_at "
+                    "FROM failure_capsules ORDER BY created_at DESC LIMIT ?"
+                ),
+                (max(1, int(k)),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                (
+                    "SELECT id, trace_id, phase, error_summary, error_details_json, "
+                    "attempt, created_at "
+                    "FROM failure_capsules WHERE LOWER(error_summary) LIKE ? "
+                    "ORDER BY created_at DESC LIMIT ?"
+                ),
+                (f"%{text}%", max(1, int(k))),
+            ).fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "trace_id": str(row["trace_id"]),
+                "phase": str(row["phase"]),
+                "summary": str(row["error_summary"]),
+                "details_json": str(row["error_details_json"]),
+                "attempt": int(row["attempt"]),
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]
+
+    def graph_traverse(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        uid: str,
+        depth: int = 2,
+        relation_types: list[str] | None = None,
+        actor_id: str = "main",
+    ) -> dict[str, object]:
+        del actor_id
+        max_depth = max(1, min(5, int(depth)))
+        rel_filter = ""
+        params: list[object] = [uid, max_depth]
+        if relation_types:
+            placeholders = ",".join("?" for _ in relation_types)
+            rel_filter = f"AND sr.relation_type IN ({placeholders})"
+            params.extend(relation_types)
+        rows = conn.execute(
+            (
+                "WITH RECURSIVE walk(source_uid, target_uid, relation_type, depth) AS ("
+                "  SELECT sr.source_uid, sr.target_uid, sr.relation_type, 1 "
+                "  FROM state_relations sr WHERE sr.source_uid=? "
+                "  UNION ALL "
+                "  SELECT sr.source_uid, sr.target_uid, sr.relation_type, w.depth + 1 "
+                "  FROM state_relations sr JOIN walk w ON sr.source_uid=w.target_uid "
+                "  WHERE w.depth < ? "
+                f"  {rel_filter}"
+                ") "
+                "SELECT source_uid, target_uid, relation_type, depth FROM walk"
+            ),
+            tuple(params),
+        ).fetchall()
+        edges = [
+            {
+                "source_uid": str(row["source_uid"]),
+                "target_uid": str(row["target_uid"]),
+                "relation_type": str(row["relation_type"]),
+                "depth": int(row["depth"]),
+            }
+            for row in rows
+        ]
+        nodes: set[str] = {uid}
+        for edge in edges:
+            nodes.add(str(edge["source_uid"]))
+            nodes.add(str(edge["target_uid"]))
+        return {"root_uid": uid, "nodes": sorted(nodes), "edges": edges}
+
+    def evaluate_consistency(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        thread_id: str,
+        sample_size: int = 50,
+    ) -> dict[str, object]:
+        row = conn.execute(
+            (
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN conflict=1 THEN 1 ELSE 0 END) AS conflicted "
+                "FROM state_items WHERE thread_id=? LIMIT ?"
+            ),
+            (thread_id, max(1, int(sample_size))),
+        ).fetchone()
+        total = int(row["total"]) if row is not None else 0
+        conflicted = int(row["conflicted"] or 0) if row is not None else 0
+        score = 1.0 if total == 0 else max(0.0, 1.0 - (conflicted / total))
+        return {
+            "thread_id": thread_id,
+            "sample_size": max(1, int(sample_size)),
+            "total_items": total,
+            "conflicted_items": conflicted,
+            "consistency_score": score,
+        }
 
     @staticmethod
     def _fit_dims(vector: list[float], dims: int) -> list[float]:
@@ -718,6 +1288,12 @@ class MemoryService:
                 "updated_at=excluded.updated_at"
             ),
             (thread_id, short_summary, long_summary, datetime.now(UTC).isoformat()),
+        )
+        self._emit_memory_event(
+            conn,
+            "memory.compact",
+            {"short_chars": len(short_summary), "long_chars": len(long_summary)},
+            thread_id=thread_id,
         )
         return {"thread_id": thread_id, "short_chars": str(len(short_summary))}
 

@@ -14,28 +14,35 @@ import AdminSelfUpdatePage from "./pages/admin/selfupdate";
 import AdminPermissionsPage from "./pages/admin/permissions";
 import AdminProvidersPage from "./pages/admin/providers";
 import AdminBugsPage from "./pages/admin/bugs";
+import AdminGovernancePage from "./pages/admin/governance";
+import AdminChannelsPage from "./pages/admin/channels";
 import { me } from "./api/endpoints";
 import { useAuthStore } from "./stores/auth";
 
 function Protected({ children }: { children: JSX.Element }) {
-  const token = useAuthStore((s) => s.token);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const setAuth = useAuthStore((s) => s.setAuth);
   const clearAuth = useAuthStore((s) => s.clearAuth);
   const location = useLocation();
   const authCheck = useQuery({
-    queryKey: ["auth-me", token],
+    queryKey: ["auth-me"],
     queryFn: () => me(),
-    enabled: !!token,
     retry: false,
     staleTime: 60_000,
   });
 
   useEffect(() => {
+    if (authCheck.isSuccess) {
+      setAuth(authCheck.data.user_id);
+      return;
+    }
     if (authCheck.isError) clearAuth();
-  }, [authCheck.isError, clearAuth]);
+  }, [authCheck.data, authCheck.isError, authCheck.isSuccess, clearAuth, setAuth]);
 
-  if (!token) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   if (authCheck.isLoading) return <div className="p-4 text-sm text-ink/70">Checking session...</div>;
-  if (authCheck.isError) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (authCheck.isError || !isAuthenticated) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
   return children;
 }
 
@@ -61,6 +68,8 @@ export default function App() {
                 <Route path="admin/permissions" element={<AdminPermissionsPage />} />
                 <Route path="admin/providers" element={<AdminProvidersPage />} />
                 <Route path="admin/bugs" element={<AdminBugsPage />} />
+                <Route path="admin/governance" element={<AdminGovernancePage />} />
+                <Route path="admin/channels" element={<AdminChannelsPage />} />
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Routes>
             </Shell>

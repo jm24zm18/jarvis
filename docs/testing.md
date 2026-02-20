@@ -2,8 +2,8 @@
 
 ## Test Layout
 
-- Unit tests: `tests/unit/` (30 files currently)
-- Integration tests: `tests/integration/` (13 files currently)
+- Unit tests: `tests/unit/`
+- Integration tests: `tests/integration/`
 - Shared fixtures: `tests/conftest.py`
 
 ## Core Fixture Behavior (`tests/conftest.py`)
@@ -23,6 +23,17 @@ uv run pytest tests/unit/test_foo.py -v
 uv run pytest tests/unit/test_foo.py::test_bar -v
 ```
 
+Targeted governance/memory/channel checks:
+
+```bash
+uv run pytest tests/unit/test_memory_policy.py -v
+uv run pytest tests/integration/test_memory_api_state_surfaces.py -v
+uv run pytest tests/integration/test_whatsapp_webhook.py -v
+uv run pytest tests/unit/test_whatsapp_media_security.py -v
+uv run pytest tests/unit/test_whatsapp_transcription.py -v
+uv run pytest tests/integration/test_admin_api.py -v
+```
+
 ## CI Test Pipeline
 
 CI workflow `.github/workflows/ci.yml` runs:
@@ -36,6 +47,11 @@ CI workflow `.github/workflows/ci.yml` runs:
 7. `test-migrations` — applies all SQL migrations to a fresh SQLite DB
 8. `security` — bandit + pip-audit + TruffleHog
 9. `web-lint` / `web-typecheck` / `web-test` — frontend quality gates
+
+CI default for self-update test-first gate behavior:
+
+- `SELFUPDATE_TEST_GATE_MODE=enforce` is set in CI to keep merge-time behavior strict.
+- Local/default runtime remains `warn` unless explicitly overridden.
 
 ## Coverage Gates
 
@@ -67,6 +83,7 @@ via `scripts/check_coverage.py` and `/tmp/jarvis_coverage.json`.
 
 ## Related Docs
 
+- `docs/README.md`
 - `docs/change-safety.md`
 - `docs/build-release.md`
 - `docs/local-development.md`

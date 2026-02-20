@@ -36,3 +36,18 @@ def test_supersession_signal_and_status_precedence() -> None:
     assert has_supersession_signal("Switch to postgres instead of sqlite")
     merged = resolve_status_merge("action", "open", "done")
     assert merged == "done"
+
+
+def test_failure_type_uid_prefix_and_default_status() -> None:
+    item = StateItem(
+        uid="",
+        text="socket timeout during deploy",
+        status="",
+        type_tag="failure",
+        topic_tags=["deploy"],
+        refs=["msg_9"],
+    )
+    errors = validate_item(item)
+    assert "invalid type_tag" not in errors
+    assert item.uid.startswith("f_")
+    assert item.status == "open"

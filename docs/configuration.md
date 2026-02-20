@@ -6,7 +6,7 @@ Source of truth: `src/jarvis/config.py`.
 
 1. Copy `.env.example` to `.env`.
 2. Set environment values.
-3. Restart API/worker after changes.
+3. Restart API after changes (`make api` in local dev).
 
 ## Environment Variables
 
@@ -16,8 +16,6 @@ Source of truth: `src/jarvis/config.py`.
 |---|---|---|---|
 | `APP_ENV` | str | `dev` | Runtime environment (`dev`/`prod`). |
 | `APP_DB` | str | `/tmp/jarvis.db` | SQLite DB path. |
-| `BROKER_URL` | str | `amqp://guest:guest@localhost:5672//` | Celery broker URL. |
-| `RESULT_BACKEND` | str | `rpc://` | Celery result backend. |
 | `LOG_LEVEL` | str | `INFO` | Logging level. |
 | `TRACE_SAMPLE_RATE` | float | `1.0` | Event trace sampling fraction. |
 
@@ -75,6 +73,27 @@ Source of truth: `src/jarvis/config.py`.
 | `WHATSAPP_VERIFY_TOKEN` | str | `dev-verify-token` | WhatsApp webhook verification token. |
 | `WHATSAPP_ACCESS_TOKEN` | str | `` | WhatsApp API access token. |
 | `WHATSAPP_PHONE_NUMBER_ID` | str | `` | WhatsApp phone number ID. |
+| `WHATSAPP_INSTANCE` | str | `personal` | Evolution instance name. |
+| `WHATSAPP_AUTO_CREATE_ON_STARTUP` | int | `0` | Auto-create Evolution instance on API startup. |
+| `WHATSAPP_WEBHOOK_SECRET` | str | `` | Shared secret header required by WhatsApp webhook route when set. |
+| `WHATSAPP_MEDIA_DIR` | str | `/tmp/jarvis/whatsapp-media` | Local media staging directory for inbound WhatsApp media/voice notes. |
+| `WHATSAPP_MEDIA_MAX_BYTES` | int | `10485760` | Max bytes accepted per inbound media download; oversized payloads are blocked. |
+| `WHATSAPP_MEDIA_ALLOWED_MIME_PREFIXES` | str | `audio/,image/,video/,application/pdf` | Comma-separated MIME prefixes allowed for inbound media persistence. |
+| `WHATSAPP_MEDIA_ALLOWED_HOSTS` | str | `` | Optional comma-separated HTTPS host allowlist for inbound media URLs. |
+| `WHATSAPP_VOICE_TRANSCRIBE_ENABLED` | int | `1` | Enable voice-note transcript generation for inbound audio messages. |
+| `WHATSAPP_VOICE_TRANSCRIBE_BACKEND` | str | `stub` | Voice-note transcription backend selector (`stub`, `faster_whisper`). |
+| `WHATSAPP_VOICE_TRANSCRIBE_TIMEOUT_SECONDS` | int | `20` | Timeout for media download/transcription operations on voice notes. |
+| `WHATSAPP_VOICE_MODEL` | str | `base` | Faster-Whisper model name when `WHATSAPP_VOICE_TRANSCRIBE_BACKEND=faster_whisper`. |
+| `WHATSAPP_VOICE_DEVICE` | str | `cpu` | Faster-Whisper device target (for example `cpu`, `cuda`). |
+| `WHATSAPP_VOICE_COMPUTE_TYPE` | str | `int8` | Faster-Whisper compute profile (for example `int8`, `float16`). |
+| `WHATSAPP_VOICE_LANGUAGE` | str | `` | Optional fixed language code for transcription; empty enables auto-detect. |
+| `WHATSAPP_REVIEW_MODE` | str | `unknown_only` | Sender review policy mode (`off`, `unknown_only`, `strict`) for WhatsApp ingress gating. |
+| `WHATSAPP_ALLOWED_SENDERS` | str | `` | Comma-separated sender allowlist for strict sender review mode. |
+| `EVOLUTION_API_URL` | str | `` | Evolution API base URL for Baileys sidecar. |
+| `EVOLUTION_API_KEY` | str | `` | Evolution API key header value. |
+| `EVOLUTION_WEBHOOK_URL` | str | `` | Callback URL Evolution should post inbound events to (usually `/webhooks/whatsapp`). |
+| `EVOLUTION_WEBHOOK_BY_EVENTS` | int | `1` | When `1`, Evolution filters callback delivery to configured events only. |
+| `EVOLUTION_WEBHOOK_EVENTS` | str | `messages.upsert` | Comma-separated Evolution event names allowed for callback delivery. |
 | `GOOGLE_OAUTH_CLIENT_ID` | str | `` | Google OAuth client ID. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | str | `` | Google OAuth client secret. |
 | `GOOGLE_OAUTH_REFRESH_TOKEN` | str | `` | OAuth refresh token. |
@@ -97,6 +116,21 @@ Source of truth: `src/jarvis/config.py`.
 | `OLLAMA_EMBED_MODEL` | str | `nomic-embed-text` | Embedding model. |
 | `MEMORY_EMBED_DIMS` | int | `768` | Embedding dimensions. |
 | `SQLITE_VEC_EXTENSION_PATH` | str | `` | Optional sqlite-vec extension path. |
+| `STATE_EXTRACTION_ENABLED` | int | `1` | Enable state extraction pipeline writes to `state_items`. |
+| `STATE_EXTRACTION_MAX_MESSAGES` | int | `20` | Message window used for state extraction candidates. |
+| `STATE_EXTRACTION_MERGE_THRESHOLD` | float | `0.92` | Similarity threshold for state merge decisions. |
+| `STATE_EXTRACTION_CONFLICT_THRESHOLD` | float | `0.85` | Similarity threshold for conflict queue insertion. |
+| `STATE_EXTRACTION_TIMEOUT_SECONDS` | int | `15` | Timeout for state extraction model operations. |
+| `STATE_MAX_ACTIVE_ITEMS` | int | `40` | Max active state items maintained per scope before archival pressure. |
+| `MEMORY_SECRET_SCAN_ENABLED` | int | `1` | Enable secret-pattern scanning before persistence. |
+| `MEMORY_PII_REDACT_MODE` | str | `mask` | PII handling mode for memory text persistence. |
+| `MEMORY_RETENTION_DAYS` | int | `180` | Retention horizon for memory maintenance/archival decisions. |
+| `MEMORY_TIERS_ENABLED` | int | `0` | Enable tiered memory lifecycle (`working/episodic/semantic`). |
+| `MEMORY_IMPORTANCE_ENABLED` | int | `0` | Enable score-based promotion/demotion decisions. |
+| `MEMORY_GRAPH_ENABLED` | int | `0` | Enable graph relation extraction and traversal surfaces. |
+| `MEMORY_REVIEW_QUEUE_ENABLED` | int | `1` | Enable conflict queue generation in `memory_review_queue`. |
+| `MEMORY_FAILURE_BRIDGE_ENABLED` | int | `1` | Enable failure capsule bridge into state memory. |
+| `MEMORY_SENTENCE_TRANSFORMERS_MODEL` | str | `all-MiniLM-L6-v2` | Sentence-transformers model used by memory similarity operations. |
 | `SEARXNG_BASE_URL` | str | `http://localhost:8080` | SearXNG base URL. |
 | `SEARXNG_API_KEY` | str | `` | SearXNG API key. |
 | `SEARXNG_API_KEY_HEADER` | str | `X-API-Key` | SearXNG API key header name. |
@@ -165,7 +199,7 @@ Source of truth: `src/jarvis/config.py`.
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `EXEC_HOST_TIMEOUT_MAX_SECONDS` | int | `120` | Max command runtime. |
+| `EXEC_HOST_TIMEOUT_MAX_SECONDS` | int | `600` | Max command runtime. |
 | `EXEC_HOST_LOG_DIR` | str | `/var/lib/agent/exec` | Exec-host log path. |
 | `EXEC_HOST_ENV_ALLOWLIST` | str | `PATH,HOME,LANG,LC_ALL,TZ` | Allowed env pass-through list. |
 | `EXEC_HOST_ALLOWED_CWD_PREFIXES` | str | `/srv/agent-framework,/tmp,/home/justin/jarvis` | Allowed working-directory prefixes. |
@@ -185,8 +219,19 @@ Source of truth: `src/jarvis/config.py`.
 - `APP_DB` must be an absolute path.
 - If `BIND_HOST=0.0.0.0` in prod, runtime emits a security warning.
 
+## Runtime Metrics
+
+`GET /metrics` exposes JSON counters/gauges including memory lifecycle KPIs:
+
+- `memory_items_count`: current `memory_items` row count.
+- `memory_avg_tokens_saved`: average `state_reconciliation_runs.tokens_saved` over the last 7 days.
+- `memory_reconciliation_rate`: fraction of reconciliation runs with non-zero updates/supersessions/dedupes/prunes (7-day window).
+- `memory_hallucination_incidents`: failure capsule count tagged/detected as hallucination.
+
 ## Related Docs
 
+- `docs/README.md`
 - `.env.example`
 - `docs/local-development.md`
 - `docs/change-safety.md`
+- `docs/deploy-operations.md`

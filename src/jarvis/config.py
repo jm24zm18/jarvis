@@ -26,6 +26,34 @@ class Settings(BaseSettings):
     selfupdate_smoke_profile: str = Field(alias="SELFUPDATE_SMOKE_PROFILE", default="dev")
     selfupdate_readyz_url: str = Field(alias="SELFUPDATE_READYZ_URL", default="")
     selfupdate_readyz_attempts: int = Field(alias="SELFUPDATE_READYZ_ATTEMPTS", default=3)
+    selfupdate_critical_paths: str = Field(
+        alias="SELFUPDATE_CRITICAL_PATHS",
+        default=(
+            "src/jarvis/policy/**,src/jarvis/tools/runtime.py,src/jarvis/auth/**,"
+            "src/jarvis/routes/api/**,src/jarvis/db/migrations/**"
+        ),
+    )
+    selfupdate_pr_autoraise: int = Field(alias="SELFUPDATE_PR_AUTORAISE", default=0)
+    selfupdate_fitness_gate_mode: str = Field(alias="SELFUPDATE_FITNESS_GATE_MODE", default="warn")
+    selfupdate_test_gate_mode: str = Field(alias="SELFUPDATE_TEST_GATE_MODE", default="warn")
+    selfupdate_test_gate_min_coverage_pct: float = Field(
+        alias="SELFUPDATE_TEST_GATE_MIN_COVERAGE_PCT", default=0.0
+    )
+    selfupdate_test_gate_require_critical_tests: int = Field(
+        alias="SELFUPDATE_TEST_GATE_REQUIRE_CRITICAL_TESTS", default=1
+    )
+    selfupdate_fitness_max_age_minutes: int = Field(
+        alias="SELFUPDATE_FITNESS_MAX_AGE_MINUTES", default=180
+    )
+    selfupdate_min_build_success_rate: float = Field(
+        alias="SELFUPDATE_MIN_BUILD_SUCCESS_RATE", default=0.80
+    )
+    selfupdate_max_regression_frequency: float = Field(
+        alias="SELFUPDATE_MAX_REGRESSION_FREQ", default=0.40
+    )
+    selfupdate_max_rollback_frequency: int = Field(
+        alias="SELFUPDATE_MAX_ROLLBACK_FREQ", default=3
+    )
     scheduler_max_catchup: int = Field(alias="SCHEDULER_MAX_CATCHUP", default=10)
     task_runner_max_concurrent: int = Field(alias="TASK_RUNNER_MAX_CONCURRENT", default=20)
     task_runner_shutdown_timeout_seconds: int = Field(
@@ -48,6 +76,63 @@ class Settings(BaseSettings):
     whatsapp_verify_token: str = Field(alias="WHATSAPP_VERIFY_TOKEN", default="dev-verify-token")
     whatsapp_access_token: str = Field(alias="WHATSAPP_ACCESS_TOKEN", default="")
     whatsapp_phone_number_id: str = Field(alias="WHATSAPP_PHONE_NUMBER_ID", default="")
+    whatsapp_instance: str = Field(alias="WHATSAPP_INSTANCE", default="personal")
+    whatsapp_auto_create_on_startup: int = Field(
+        alias="WHATSAPP_AUTO_CREATE_ON_STARTUP", default=0
+    )
+    whatsapp_webhook_secret: str = Field(alias="WHATSAPP_WEBHOOK_SECRET", default="")
+    whatsapp_media_dir: str = Field(
+        alias="WHATSAPP_MEDIA_DIR",
+        default="/tmp/jarvis/whatsapp-media",
+    )
+    whatsapp_media_max_bytes: int = Field(alias="WHATSAPP_MEDIA_MAX_BYTES", default=10_485_760)
+    whatsapp_media_allowed_mime_prefixes: str = Field(
+        alias="WHATSAPP_MEDIA_ALLOWED_MIME_PREFIXES",
+        default="audio/,image/,video/,application/pdf",
+    )
+    whatsapp_media_allowed_hosts: str = Field(alias="WHATSAPP_MEDIA_ALLOWED_HOSTS", default="")
+    whatsapp_voice_transcribe_enabled: int = Field(
+        alias="WHATSAPP_VOICE_TRANSCRIBE_ENABLED",
+        default=1,
+    )
+    whatsapp_voice_transcribe_backend: str = Field(
+        alias="WHATSAPP_VOICE_TRANSCRIBE_BACKEND",
+        default="stub",
+    )
+    whatsapp_voice_transcribe_timeout_seconds: int = Field(
+        alias="WHATSAPP_VOICE_TRANSCRIBE_TIMEOUT_SECONDS",
+        default=20,
+    )
+    whatsapp_voice_model: str = Field(
+        alias="WHATSAPP_VOICE_MODEL",
+        default="base",
+    )
+    whatsapp_voice_device: str = Field(
+        alias="WHATSAPP_VOICE_DEVICE",
+        default="cpu",
+    )
+    whatsapp_voice_compute_type: str = Field(
+        alias="WHATSAPP_VOICE_COMPUTE_TYPE",
+        default="int8",
+    )
+    whatsapp_voice_language: str = Field(
+        alias="WHATSAPP_VOICE_LANGUAGE",
+        default="",
+    )
+    whatsapp_review_mode: str = Field(alias="WHATSAPP_REVIEW_MODE", default="unknown_only")
+    whatsapp_allowed_senders: str = Field(alias="WHATSAPP_ALLOWED_SENDERS", default="")
+    evolution_api_url: str = Field(alias="EVOLUTION_API_URL", default="")
+    evolution_api_key: str = Field(alias="EVOLUTION_API_KEY", default="")
+    evolution_webhook_url: str = Field(alias="EVOLUTION_WEBHOOK_URL", default="")
+    evolution_webhook_by_events: int = Field(alias="EVOLUTION_WEBHOOK_BY_EVENTS", default=1)
+    evolution_webhook_events: str = Field(
+        alias="EVOLUTION_WEBHOOK_EVENTS",
+        default="messages.upsert",
+    )
+
+    # Telegram
+    telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN", default="")
+    telegram_allowed_chat_ids: str = Field(alias="TELEGRAM_ALLOWED_CHAT_IDS", default="")
 
     google_oauth_client_id: str = Field(alias="GOOGLE_OAUTH_CLIENT_ID", default="")
     google_oauth_client_secret: str = Field(alias="GOOGLE_OAUTH_CLIENT_SECRET", default="")
@@ -92,6 +177,29 @@ class Settings(BaseSettings):
     state_extraction_timeout_seconds: int = Field(
         alias="STATE_EXTRACTION_TIMEOUT_SECONDS", default=15
     )
+    governance_enforce: int = Field(alias="GOVERNANCE_ENFORCE", default=1)
+    approval_ttl_minutes: int = Field(alias="APPROVAL_TTL_MINUTES", default=30)
+    dependency_steward_enabled: int = Field(alias="DEPENDENCY_STEWARD_ENABLED", default=0)
+    dependency_steward_max_upgrades: int = Field(
+        alias="DEPENDENCY_STEWARD_MAX_UPGRADES", default=10
+    )
+    release_candidate_agent_enabled: int = Field(
+        alias="RELEASE_CANDIDATE_AGENT_ENABLED", default=0
+    )
+    user_simulator_enabled: int = Field(alias="USER_SIMULATOR_ENABLED", default=0)
+    user_simulator_required_pack: str = Field(alias="USER_SIMULATOR_REQUIRED_PACK", default="p0")
+    memory_secret_scan_enabled: int = Field(alias="MEMORY_SECRET_SCAN_ENABLED", default=1)
+    memory_pii_redact_mode: str = Field(alias="MEMORY_PII_REDACT_MODE", default="mask")
+    memory_retention_days: int = Field(alias="MEMORY_RETENTION_DAYS", default=180)
+    memory_tiers_enabled: int = Field(alias="MEMORY_TIERS_ENABLED", default=0)
+    memory_importance_enabled: int = Field(alias="MEMORY_IMPORTANCE_ENABLED", default=0)
+    memory_graph_enabled: int = Field(alias="MEMORY_GRAPH_ENABLED", default=0)
+    memory_review_queue_enabled: int = Field(alias="MEMORY_REVIEW_QUEUE_ENABLED", default=1)
+    memory_failure_bridge_enabled: int = Field(alias="MEMORY_FAILURE_BRIDGE_ENABLED", default=1)
+    memory_sentence_transformers_model: str = Field(
+        alias="MEMORY_SENTENCE_TRANSFORMERS_MODEL",
+        default="all-MiniLM-L6-v2",
+    )
 
     searxng_base_url: str = Field(alias="SEARXNG_BASE_URL", default="http://localhost:8080")
     searxng_api_key: str = Field(alias="SEARXNG_API_KEY", default="")
@@ -132,6 +240,10 @@ class Settings(BaseSettings):
     maintenance_workdir: str = Field(alias="MAINTENANCE_WORKDIR", default="")
     github_token: str = Field(alias="GITHUB_TOKEN", default="")
     github_webhook_secret: str = Field(alias="GITHUB_WEBHOOK_SECRET", default="")
+    webhook_replay_window_minutes: int = Field(
+        alias="WEBHOOK_REPLAY_WINDOW_MINUTES",
+        default=15,
+    )
     github_api_base_url: str = Field(alias="GITHUB_API_BASE_URL", default="https://api.github.com")
     github_repo_allowlist: str = Field(alias="GITHUB_REPO_ALLOWLIST", default="")
     github_bot_login: str = Field(alias="GITHUB_BOT_LOGIN", default="jarvis")
@@ -143,7 +255,7 @@ class Settings(BaseSettings):
         alias="GITHUB_ISSUE_LABELS_FEATURE",
         default="jarvis,feature-request",
     )
-    exec_host_timeout_max_seconds: int = Field(alias="EXEC_HOST_TIMEOUT_MAX_SECONDS", default=120)
+    exec_host_timeout_max_seconds: int = Field(alias="EXEC_HOST_TIMEOUT_MAX_SECONDS", default=600)
     exec_host_log_dir: str = Field(alias="EXEC_HOST_LOG_DIR", default="/var/lib/agent/exec")
     exec_host_env_allowlist: str = Field(
         alias="EXEC_HOST_ENV_ALLOWLIST", default="PATH,HOME,LANG,LC_ALL,TZ"
@@ -197,9 +309,6 @@ def validate_settings_for_env(settings: Settings) -> None:
     missing: list[str] = []
     required_non_empty = {
         "APP_DB": settings.app_db,
-        "WHATSAPP_VERIFY_TOKEN": settings.whatsapp_verify_token,
-        "WHATSAPP_ACCESS_TOKEN": settings.whatsapp_access_token,
-        "WHATSAPP_PHONE_NUMBER_ID": settings.whatsapp_phone_number_id,
         "GOOGLE_OAUTH_CLIENT_ID": settings.google_oauth_client_id,
         "GOOGLE_OAUTH_CLIENT_SECRET": settings.google_oauth_client_secret,
         "PRIMARY_PROVIDER": settings.primary_provider,
@@ -209,7 +318,7 @@ def validate_settings_for_env(settings: Settings) -> None:
         "OLLAMA_BASE_URL": settings.ollama_base_url,
         "OLLAMA_EMBED_MODEL": settings.ollama_embed_model,
         "SEARXNG_BASE_URL": settings.searxng_base_url,
-        "ADMIN_WHATSAPP_IDS": settings.admin_whatsapp_ids,
+
         "BACKUP_S3_ENDPOINT": settings.backup_s3_endpoint,
         "BACKUP_S3_BUCKET": settings.backup_s3_bucket,
         "BACKUP_S3_REGION": settings.backup_s3_region,

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from jarvis.config import get_settings
+from jarvis.memory.scope import can_agent_access_thread_memory, normalize_agent_id
 from jarvis.memory.state_items import (
     DEFAULT_STATUS,
     StateItem,
@@ -117,13 +118,20 @@ async def extract_state_items(
     thread_id: str,
     router: ProviderRouter,
     memory: Any,
+    actor_id: str = "main",
 ) -> ExtractResult:
     settings = get_settings()
     if int(settings.state_extraction_enabled) != 1:
         return ExtractResult(skipped_reason="disabled")
     timeout_seconds = max(1, int(settings.state_extraction_timeout_seconds))
     return await asyncio.wait_for(
-        _extract_state_items_impl(conn=conn, thread_id=thread_id, router=router, memory=memory),
+        _extract_state_items_impl(
+            conn=conn,
+            thread_id=thread_id,
+            router=router,
+            memory=memory,
+            actor_id=actor_id,
+        ),
         timeout=timeout_seconds,
     )
 
@@ -133,10 +141,17 @@ async def _extract_state_items_impl(
     thread_id: str,
     router: ProviderRouter,
     memory: Any,
+    actor_id: str = "main",
 ) -> ExtractResult:
     started = time.perf_counter()
     settings = get_settings()
     store = StateStore()
+    scoped_actor = normalize_agent_id(actor_id)
+    allowed, scope_reason = can_agent_access_thread_memory(
+        conn, thread_id=thread_id, agent_id=scoped_actor
+    )
+    if not allowed:
+        return ExtractResult(skipped_reason=scope_reason)
     max_messages = max(1, int(settings.state_extraction_max_messages))
     watermark = store.get_extraction_watermark(conn, thread_id)
     new_messages = store.get_new_messages_since(conn, thread_id, watermark, max_messages)
@@ -158,7 +173,10 @@ async def _extract_state_items_impl(
         return ExtractResult(skipped_reason="no_user_messages")
 
     existing = store.get_active_items(
-        conn, thread_id, limit=max(1, int(settings.state_max_active_items))
+        conn,
+        thread_id,
+        limit=max(1, int(settings.state_max_active_items)),
+        agent_id=scoped_actor,
     )
     prompt = (
         "You are a structured state extractor. Given conversation messages and existing state, "
@@ -223,6 +241,7 @@ async def _extract_state_items_impl(
                 thread_id=thread_id,
                 embedding=vector,
                 type_tag=item.type_tag,
+                agent_id=scoped_actor,
                 limit=10,
             )
             best: dict[str, object] | None = similar[0] if similar else None
@@ -244,7 +263,7 @@ async def _extract_state_items_impl(
                     dropped += 1
                     continue
                 item.uid = str(best["uid"])
-                store.upsert_item(conn, thread_id, item)
+                store.upsert_item(conn, thread_id, item, agent_id=scoped_actor)
                 store.upsert_item_embedding(
                     conn, uid=item.uid, thread_id=thread_id, embedding=vector
                 )
@@ -287,7 +306,7 @@ async def _extract_state_items_impl(
                         evidence=evidence,
                     )
                     item.conflict = False
-                    store.upsert_item(conn, thread_id, item)
+                    store.upsert_item(conn, thread_id, item, agent_id=scoped_actor)
                     store.upsert_item_embedding(
                         conn, uid=item.uid, thread_id=thread_id, embedding=vector
                     )
@@ -297,16 +316,16 @@ async def _extract_state_items_impl(
                 if best_items:
                     incumbent = best_items[0]
                     incumbent.conflict = True
-                    store.upsert_item(conn, thread_id, incumbent)
+                    store.upsert_item(conn, thread_id, incumbent, agent_id=scoped_actor)
                 item.conflict = True
-                store.upsert_item(conn, thread_id, item)
+                store.upsert_item(conn, thread_id, item, agent_id=scoped_actor)
                 store.upsert_item_embedding(
                     conn, uid=item.uid, thread_id=thread_id, embedding=vector
                 )
                 conflicted_count += 1
                 continue
 
-            store.upsert_item(conn, thread_id, item)
+            store.upsert_item(conn, thread_id, item, agent_id=scoped_actor)
             store.upsert_item_embedding(conn, uid=item.uid, thread_id=thread_id, embedding=vector)
 
         last = new_messages[-1]

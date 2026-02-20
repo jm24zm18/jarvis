@@ -80,6 +80,7 @@ export interface MemoryItem {
   id: string;
   thread_id?: string;
   text: string;
+  metadata?: Record<string, unknown>;
   created_at?: string;
 }
 
@@ -87,6 +88,59 @@ export interface MemoryStats {
   total_items: number;
   embedded_items: number;
   embedding_coverage_pct: number;
+}
+
+export interface MemoryConsistencyReportItem {
+  id: string;
+  thread_id: string;
+  sample_size: number;
+  total_items: number;
+  conflicted_items: number;
+  consistency_score: number;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface MemoryFailureItem {
+  id: string;
+  trace_id: string;
+  phase: string;
+  summary: string;
+  details_json: string;
+  attempt: number;
+  created_at: string;
+}
+
+export interface MemoryReviewItem {
+  id: string;
+  uid: string;
+  thread_id: string;
+  agent_id: string;
+  reason: string;
+  status: string;
+  reviewer_id?: string | null;
+  resolution?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryGraphEdge {
+  source_uid: string;
+  target_uid: string;
+  relation_type: string;
+  depth: number;
+}
+
+export interface MemoryGraph {
+  root_uid: string;
+  nodes: string[];
+  edges: MemoryGraphEdge[];
+}
+
+export interface MemoryStateStats {
+  tiers: Array<{ tier: string; count: number }>;
+  archive_items: number;
+  open_conflicts: number;
 }
 
 export interface ScheduleItem {
@@ -187,4 +241,42 @@ export interface BugReport {
   trace_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface FitnessSnapshot {
+  id: string;
+  period_start: string;
+  period_end: string;
+  metrics: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface GovernanceSlo {
+  status: "safe" | "degraded" | "blocked" | string;
+  reasons: string[];
+  thresholds: Record<string, unknown>;
+  snapshot: FitnessSnapshot | null;
+  detail: Record<string, unknown>;
+}
+
+export interface GovernanceSloHistoryItem {
+  snapshot_id: string;
+  created_at: string;
+  status: string;
+  reasons: string[];
+  detail: Record<string, unknown>;
+}
+
+export interface EvolutionItem {
+  id: string;
+  item_id: string;
+  trace_id: string;
+  span_id: string;
+  thread_id?: string | null;
+  status: string;
+  evidence_refs?: string[];
+  result?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  updated_by: string;
 }

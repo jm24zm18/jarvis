@@ -26,6 +26,15 @@ from jarvis.tools.runtime import ToolRuntime  # noqa: E402
 from jarvis.tools.session import session_history, session_list, session_send  # noqa: E402
 from jarvis.tools.web_search import web_search  # noqa: E402
 
+_DEFAULT_EXEC_HOST_TIMEOUT_S = 120
+_BUILD_TEST_GATES_TIMEOUT_S = 600
+_BUILD_TEST_GATES_COMMAND = "uv run jarvis test-gates --fail-fast"
+
+
+def _is_build_test_gates_command(command: str) -> bool:
+    normalized = " ".join(command.strip().split()).lower()
+    return normalized == _BUILD_TEST_GATES_COMMAND
+
 
 def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
     clear_context()
@@ -250,11 +259,22 @@ def _build_registry(
             return {"exit_code": 2, "stdout": "", "stderr": "command is required"}
         raw_cwd = args.get("cwd")
         cwd = str(raw_cwd) if isinstance(raw_cwd, str) else None
-        raw_timeout = args.get("timeout_s", 120)
+        has_explicit_timeout = "timeout_s" in args
+        raw_timeout = args.get("timeout_s", _DEFAULT_EXEC_HOST_TIMEOUT_S)
         try:
-            timeout_s = int(raw_timeout) if isinstance(raw_timeout, int | float | str) else 120
+            timeout_s = (
+                int(raw_timeout)
+                if isinstance(raw_timeout, int | float | str)
+                else _DEFAULT_EXEC_HOST_TIMEOUT_S
+            )
         except (TypeError, ValueError):
-            timeout_s = 120
+            timeout_s = _DEFAULT_EXEC_HOST_TIMEOUT_S
+        if (
+            actor_id == "main"
+            and not has_explicit_timeout
+            and _is_build_test_gates_command(command)
+        ):
+            timeout_s = _BUILD_TEST_GATES_TIMEOUT_S
         raw_env = args.get("env")
         env = raw_env if isinstance(raw_env, dict) else None
         return execute_host_command(

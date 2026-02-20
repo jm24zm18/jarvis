@@ -11,4 +11,10 @@ allowed_tools:
   - skill_read
   - skill_write
   - update_persona
+risk_tier: medium
+max_actions_per_step: 8
+allowed_paths:
+  - /home/justin/jarvis
+  - /tmp
+can_request_privileged_change: true
 ---
