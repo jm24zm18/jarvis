@@ -5,8 +5,9 @@ Primary AI-agent operating guide for this repository.
 ## Quick Facts
 
 - Stack: FastAPI + in-process asyncio task runner + SQLite + React/Vite web UI.
+- Channels: WhatsApp (Evolution API) + Telegram (Bot API).
 - Runtime: API (`make api`) + Docker services (`make dev`).
-- DB migrations: `src/jarvis/db/migrations/001..023` auto-run at startup and via `make migrate`.
+- DB migrations: `src/jarvis/db/migrations/001..055` auto-run at startup and via `make migrate`.
 - Tool runtime is deny-by-default (`src/jarvis/tools/runtime.py`, `src/jarvis/policy/engine.py`).
 - Auth/RBAC: bearer session tokens with `user`/`admin` roles and ownership scoping.
 

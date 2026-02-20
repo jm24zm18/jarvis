@@ -1,10 +1,10 @@
-# Jarvis Agent Framework MVP
+# Jarvis Agent Framework
 
-Implementation scaffold for `planv2.md` (SPEC-001).
+Multi-agent async framework with WhatsApp and Telegram integration, event-sourced observability, semantic memory, and controlled self-update. See `docs/PLAN.md` for the execution backlog.
 
 ## What is implemented
 
-- FastAPI app with `/healthz`, `/readyz`, WhatsApp webhook verification + ingestion.
+- FastAPI app with `/healthz`, `/readyz`, WhatsApp + Telegram webhook verification + ingestion.
 - In-process asyncio task runner and task routing.
 - SQLite DB connection + ordered SQL migrations.
 - Event system with trace-aware event emission.
