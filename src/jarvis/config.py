@@ -130,6 +130,10 @@ class Settings(BaseSettings):
         default="messages.upsert",
     )
 
+    # Telegram
+    telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN", default="")
+    telegram_allowed_chat_ids: str = Field(alias="TELEGRAM_ALLOWED_CHAT_IDS", default="")
+
     google_oauth_client_id: str = Field(alias="GOOGLE_OAUTH_CLIENT_ID", default="")
     google_oauth_client_secret: str = Field(alias="GOOGLE_OAUTH_CLIENT_SECRET", default="")
     primary_provider: str = Field(alias="PRIMARY_PROVIDER", default="gemini")
@@ -305,9 +309,6 @@ def validate_settings_for_env(settings: Settings) -> None:
     missing: list[str] = []
     required_non_empty = {
         "APP_DB": settings.app_db,
-        "WHATSAPP_VERIFY_TOKEN": settings.whatsapp_verify_token,
-        "WHATSAPP_ACCESS_TOKEN": settings.whatsapp_access_token,
-        "WHATSAPP_PHONE_NUMBER_ID": settings.whatsapp_phone_number_id,
         "GOOGLE_OAUTH_CLIENT_ID": settings.google_oauth_client_id,
         "GOOGLE_OAUTH_CLIENT_SECRET": settings.google_oauth_client_secret,
         "PRIMARY_PROVIDER": settings.primary_provider,
@@ -317,7 +318,7 @@ def validate_settings_for_env(settings: Settings) -> None:
         "OLLAMA_BASE_URL": settings.ollama_base_url,
         "OLLAMA_EMBED_MODEL": settings.ollama_embed_model,
         "SEARXNG_BASE_URL": settings.searxng_base_url,
-        "ADMIN_WHATSAPP_IDS": settings.admin_whatsapp_ids,
+
         "BACKUP_S3_ENDPOINT": settings.backup_s3_endpoint,
         "BACKUP_S3_BUCKET": settings.backup_s3_bucket,
         "BACKUP_S3_REGION": settings.backup_s3_region,

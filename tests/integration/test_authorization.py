@@ -379,3 +379,100 @@ def test_user_bugs_list_scoped() -> None:
     items = listing.json()["items"]
     assert len(items) == 1
     assert items[0]["reporter_id"] == alice["user_id"]
+
+
+def test_non_admin_cannot_access_stories() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+    headers = _headers(alice["token"])
+
+    assert client.post("/api/v1/stories/run", headers=headers).status_code == 403
+    assert client.get("/api/v1/stories/runs", headers=headers).status_code == 403
+    assert client.get("/api/v1/stories/runs/run_demo", headers=headers).status_code == 403
+
+
+def test_non_admin_cannot_access_system_admin_routes() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+    headers = _headers(alice["token"])
+
+    assert client.post("/api/v1/system/reset-db", headers=headers).status_code == 403
+    assert client.post("/api/v1/system/reload-agents", headers=headers).status_code == 403
+    assert client.get("/api/v1/system/repo-index", headers=headers).status_code == 403
+
+
+def test_non_admin_cannot_list_selfupdate_patches() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+    headers = _headers(alice["token"])
+
+    assert client.get("/api/v1/selfupdate/patches", headers=headers).status_code == 403
+    assert (
+        client.get("/api/v1/selfupdate/patches/trc_demo", headers=headers).status_code == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/selfupdate/patches/trc_demo/checks", headers=headers
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/selfupdate/patches/trc_demo/timeline", headers=headers
+        ).status_code
+        == 403
+    )
+
+
+def test_user_schedule_list_scoped() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, bob = _bootstrap_users(client)
+    alice_thread = _create_thread(client, alice["token"])
+    bob_thread = _create_thread(client, bob["token"])
+
+    # Alice creates a schedule on her thread
+    resp_a = client.post(
+        "/api/v1/schedules",
+        headers=_headers(alice["token"]),
+        json={"cron_expr": "0 * * * *", "thread_id": alice_thread},
+    )
+    assert resp_a.status_code == 200
+
+    # Bob creates a schedule on his thread
+    resp_b = client.post(
+        "/api/v1/schedules",
+        headers=_headers(bob["token"]),
+        json={"cron_expr": "0 * * * *", "thread_id": bob_thread},
+    )
+    assert resp_b.status_code == 200
+
+    # Alice should only see her own schedule
+    listing = client.get("/api/v1/schedules", headers=_headers(alice["token"]))
+    assert listing.status_code == 200
+    items = listing.json()["items"]
+    thread_ids = {item["thread_id"] for item in items}
+    assert alice_thread in thread_ids
+    assert bob_thread not in thread_ids
+
+
+def test_user_cannot_create_schedule_on_other_users_thread() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, bob = _bootstrap_users(client)
+    bob_thread = _create_thread(client, bob["token"])
+
+    response = client.post(
+        "/api/v1/schedules",
+        headers=_headers(alice["token"]),
+        json={"cron_expr": "0 * * * *", "thread_id": bob_thread},
+    )
+    assert response.status_code == 403

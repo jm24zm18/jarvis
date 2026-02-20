@@ -6,6 +6,8 @@ app.db-shm
 .coverage
 workplace/*
 !workplace/.gitkeep
+data/
+deploy/.env.prod
 
 # Python local env/cache artifacts
 .venv/

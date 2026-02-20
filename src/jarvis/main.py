@@ -19,6 +19,8 @@ from jarvis.agents.registry import sync_tool_permissions
 from jarvis.agents.seed import ensure_main_agent_seed, sync_seed_skills
 from jarvis.channels.generic_webhook import router as generic_webhook_router
 from jarvis.channels.registry import register_channel
+from jarvis.channels.telegram.adapter import TelegramAdapter
+from jarvis.channels.telegram.router import router as telegram_router
 from jarvis.channels.whatsapp.adapter import WhatsAppAdapter
 from jarvis.channels.whatsapp.evolution_client import EvolutionClient
 from jarvis.channels.whatsapp.router import router as whatsapp_router
@@ -46,6 +48,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     run_migrations()
     write_repo_index(Path.cwd())
     register_channel(WhatsAppAdapter())
+    if settings.telegram_bot_token.strip():
+        register_channel(TelegramAdapter())
+        logger.info("Telegram channel adapter registered")
     evolution = EvolutionClient()
     if evolution.enabled and int(settings.whatsapp_auto_create_on_startup) == 1:
         status_code, payload = await evolution.create_instance()
@@ -138,6 +143,7 @@ if cors_origins:
     )
 app.include_router(health_router)
 app.include_router(whatsapp_router)
+app.include_router(telegram_router)
 app.include_router(generic_webhook_router)
 app.include_router(api_router)
 app.include_router(ws_router)
