@@ -1,6 +1,7 @@
 """Admin routes for channel integration management."""
 
 import asyncio
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
@@ -21,6 +22,7 @@ from jarvis.db.queries import (
 
 router = APIRouter(prefix="/channels", tags=["api-channels"])
 _limiter = Limiter(key_func=get_remote_address)
+logger = logging.getLogger(__name__)
 
 
 class PairingCodeInput(BaseModel):
@@ -43,17 +45,29 @@ def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
             "instance": settings.whatsapp_instance,
             "status": "cloud_fallback",
         }
-    status_code, payload = asyncio.run(client.status())
+    try:
+        status_code, payload = asyncio.run(client.status())
+    except Exception as exc:
+        logger.warning("Evolution API unreachable: %s", exc)
+        return {
+            "enabled": True,
+            "instance": client.instance,
+            "status": "unreachable",
+            "error": str(exc),
+        }
     evo_state = str(payload.get("instance", {}).get("state") or payload.get("state") or "unknown")
     callback_status_code: int | None = None
     callback_payload: dict[str, object] = {}
     callback_ok = False
     callback_error = ""
     if client.webhook_enabled:
-        callback_status_code, callback_payload = asyncio.run(client.configure_webhook())
-        callback_ok = callback_status_code < 400
-        if not callback_ok:
-            callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
+        try:
+            callback_status_code, callback_payload = asyncio.run(client.configure_webhook())
+            callback_ok = callback_status_code < 400
+            if not callback_ok:
+                callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
+        except Exception as exc:
+            callback_error = f"webhook_unreachable: {exc}"
     with get_conn() as conn:
         upsert_whatsapp_instance(
             conn,
@@ -100,16 +114,23 @@ def whatsapp_create(
     client = EvolutionClient()
     if not client.enabled:
         return {"ok": False, "error": "evolution_api_disabled"}
-    status_code, payload = asyncio.run(client.create_instance())
+    try:
+        status_code, payload = asyncio.run(client.create_instance())
+    except Exception as exc:
+        logger.warning("Evolution API unreachable on create: %s", exc)
+        return {"ok": False, "error": f"evolution_api_unreachable: {exc}"}
     callback_status_code: int | None = None
     callback_payload: dict[str, object] = {}
     callback_ok = False
     callback_error = ""
     if client.webhook_enabled:
-        callback_status_code, callback_payload = asyncio.run(client.configure_webhook())
-        callback_ok = callback_status_code < 400
-        if not callback_ok:
-            callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
+        try:
+            callback_status_code, callback_payload = asyncio.run(client.configure_webhook())
+            callback_ok = callback_status_code < 400
+            if not callback_ok:
+                callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
+        except Exception as exc:
+            callback_error = f"webhook_unreachable: {exc}"
     evo_state = str(payload.get("instance", {}).get("state") or payload.get("state") or "created")
     with get_conn() as conn:
         upsert_whatsapp_instance(
@@ -147,7 +168,11 @@ def whatsapp_qrcode(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
     client = EvolutionClient()
     if not client.enabled:
         return {"ok": False, "error": "evolution_api_disabled"}
-    status_code, payload = asyncio.run(client.qrcode())
+    try:
+        status_code, payload = asyncio.run(client.qrcode())
+    except Exception as exc:
+        logger.warning("Evolution API unreachable on qrcode: %s", exc)
+        return {"ok": False, "error": f"evolution_api_unreachable: {exc}"}
     return {
         "ok": status_code < 400,
         "status_code": status_code,
@@ -167,7 +192,11 @@ def whatsapp_pairing_code(
     client = EvolutionClient()
     if not client.enabled:
         return {"ok": False, "error": "evolution_api_disabled"}
-    status_code, payload = asyncio.run(client.pairing_code(input_data.number))
+    try:
+        status_code, payload = asyncio.run(client.pairing_code(input_data.number))
+    except Exception as exc:
+        logger.warning("Evolution API unreachable on pairing-code: %s", exc)
+        return {"ok": False, "error": f"evolution_api_unreachable: {exc}"}
     code = payload.get("code") if isinstance(payload.get("code"), str) else ""
     return {"ok": status_code < 400, "status_code": status_code, "code": code}
 
@@ -180,7 +209,11 @@ def whatsapp_disconnect(
     client = EvolutionClient()
     if not client.enabled:
         return {"ok": False, "error": "evolution_api_disabled"}
-    status_code, payload = asyncio.run(client.disconnect())
+    try:
+        status_code, payload = asyncio.run(client.disconnect())
+    except Exception as exc:
+        logger.warning("Evolution API unreachable on disconnect: %s", exc)
+        return {"ok": False, "error": f"evolution_api_unreachable: {exc}"}
     with get_conn() as conn:
         upsert_whatsapp_instance(
             conn,

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -131,6 +131,16 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONR
         status_code=429,
         content={"error": "rate limit exceeded", "detail": str(exc.detail)},
     )
+
+@app.exception_handler(404)
+async def spa_fallback(request: Request, exc: Exception) -> FileResponse | JSONResponse:
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    index_path = Path("web/dist/index.html")
+    if index_path.exists():
+        return FileResponse(index_path)
+    return JSONResponse({"detail": "Not Found"}, status_code=404)
+
 settings = get_settings()
 cors_origins = [item.strip() for item in settings.web_cors_origins.split(",") if item.strip()]
 if cors_origins:
