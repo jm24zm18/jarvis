@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from jarvis.channels.base import InboundMessage
-from jarvis.channels.whatsapp.evolution_client import EvolutionClient
+from jarvis.channels.whatsapp.baileys_client import BaileysClient
 from jarvis.config import get_settings
 
 
@@ -17,9 +17,9 @@ class WhatsAppAdapter:
         return "whatsapp"
 
     async def send_text(self, recipient: str, text: str) -> int:
-        evolution = EvolutionClient()
-        if evolution.enabled:
-            return await evolution.send_text(recipient=recipient, text=text)
+        baileys = BaileysClient()
+        if baileys.enabled:
+            return await baileys.send_text(recipient=recipient, text=text)
 
         settings = get_settings()
         url = f"https://graph.facebook.com/v21.0/{settings.whatsapp_phone_number_id}/messages"
@@ -89,9 +89,41 @@ class WhatsAppAdapter:
         self, payload: dict[str, Any], data: dict[str, Any]
     ) -> InboundMessage | None:
         key = data.get("key", {}) if isinstance(data.get("key"), dict) else {}
+
+        # Skip messages sent via the API (bot's own outgoing messages echoed back).
+        # In personal WhatsApp mode, ALL user messages arrive with fromMe=true
+        # because the Baileys session IS the user's phone (linked device).
+        # We distinguish bot-sent msgs by status="PENDING" (set by Baileys sendMessage API).
+        if key.get("fromMe") is True and str(data.get("status", "")).upper() == "PENDING":
+            return None
+
+        # Skip protocol messages (history sync, key distribution, etc.)
         message = data.get("message", {}) if isinstance(data.get("message"), dict) else {}
+
+        # Skip stub-only messages (decryption failures, etc.)
+        if data.get("messageStubType") is not None and not message:
+            return None
+
+        # Skip empty message payloads
+        if not message:
+            return None
+
+        # Skip protocol-only messages (no user-visible text)
+        protocol_only_keys = {"protocolMessage", "senderKeyDistributionMessage"}
+        if message.keys() <= protocol_only_keys:
+            return None
+
         msg_id = str(key.get("id") or data.get("id") or "")
-        remote_jid = str(key.get("remoteJid") or data.get("remoteJid") or "")
+        # Prefer remoteJidAlt (phone number format) over LID format for Baileys compatibility
+        remote_jid_raw = str(key.get("remoteJid") or data.get("remoteJid") or "")
+        remote_jid_alt = str(key.get("remoteJidAlt") or "")
+        # Use the phone number format if available (ends with @s.whatsapp.net)
+        if remote_jid_alt and remote_jid_alt.endswith("@s.whatsapp.net"):
+            remote_jid = remote_jid_alt
+        elif remote_jid_raw.endswith("@lid") and remote_jid_alt:
+            remote_jid = remote_jid_alt
+        else:
+            remote_jid = remote_jid_raw
         participant = str(key.get("participant") or data.get("participant") or "")
         sender = participant or remote_jid or "unknown"
         thread_key = remote_jid or sender

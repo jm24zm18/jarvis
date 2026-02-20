@@ -22,7 +22,7 @@ from jarvis.channels.registry import register_channel
 from jarvis.channels.telegram.adapter import TelegramAdapter
 from jarvis.channels.telegram.router import router as telegram_router
 from jarvis.channels.whatsapp.adapter import WhatsAppAdapter
-from jarvis.channels.whatsapp.evolution_client import EvolutionClient
+from jarvis.channels.whatsapp.baileys_client import BaileysClient
 from jarvis.channels.whatsapp.router import router as whatsapp_router
 from jarvis.config import get_settings, validate_settings_for_env
 from jarvis.db.connection import get_conn
@@ -51,9 +51,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     if settings.telegram_bot_token.strip():
         register_channel(TelegramAdapter())
         logger.info("Telegram channel adapter registered")
-    evolution = EvolutionClient()
-    if evolution.enabled and int(settings.whatsapp_auto_create_on_startup) == 1:
-        status_code, payload = await evolution.create_instance()
+    baileys = BaileysClient()
+    if baileys.enabled and int(settings.whatsapp_auto_create_on_startup) == 1:
+        status_code, payload = await baileys.create_instance()
         callback_status_code: int | None = None
         callback_payload: dict[str, object] = {}
         callback_ok = False

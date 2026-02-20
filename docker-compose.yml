@@ -7,7 +7,7 @@ services:
   searxng:
     image: searxng/searxng:latest
     ports:
-      - "8080:8080"
+      - "8081:8080"
     volumes:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml
 
@@ -16,3 +16,16 @@ services:
     command: ["python3", "-m", "sglang.launch_server", "--model", "openai/gpt-oss-120b", "--reasoning-parser", "gpt-oss"]
     ports:
       - "30000:30000"
+
+  jarvis-baileys:
+    build:
+      context: ./src/jarvis/channels/whatsapp/baileys
+    restart: always
+    ports:
+      - "8081:8081"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    tmpfs:
+      - /tmp/auth
+    environment:
+      - API_KEY=${EVOLUTION_API_KEY}

@@ -10,7 +10,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from jarvis.auth.dependencies import UserContext, require_admin
-from jarvis.channels.whatsapp.evolution_client import EvolutionClient
+from jarvis.channels.whatsapp.baileys_client import BaileysClient
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
@@ -38,7 +38,7 @@ class WhatsAppReviewResolveInput(BaseModel):
 def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
     del ctx
     settings = get_settings()
-    client = EvolutionClient()
+    client = BaileysClient()
     if not client.enabled:
         return {
             "enabled": False,
@@ -111,7 +111,7 @@ def whatsapp_create(
     ctx: UserContext = Depends(require_admin),  # noqa: B008
 ) -> dict[str, object]:
     del request, ctx
-    client = EvolutionClient()
+    client = BaileysClient()
     if not client.enabled:
         return {"ok": False, "error": "evolution_api_disabled"}
     try:
@@ -165,7 +165,7 @@ def whatsapp_create(
 @router.get("/whatsapp/qrcode")
 def whatsapp_qrcode(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
     del ctx
-    client = EvolutionClient()
+    client = BaileysClient()
     if not client.enabled:
         return {"ok": False, "error": "evolution_api_disabled"}
     try:
@@ -189,7 +189,7 @@ def whatsapp_pairing_code(
     ctx: UserContext = Depends(require_admin),  # noqa: B008
 ) -> dict[str, object]:
     del request, ctx
-    client = EvolutionClient()
+    client = BaileysClient()
     if not client.enabled:
         return {"ok": False, "error": "evolution_api_disabled"}
     try:
@@ -206,7 +206,7 @@ def whatsapp_disconnect(
     ctx: UserContext = Depends(require_admin),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
-    client = EvolutionClient()
+    client = BaileysClient()
     if not client.enabled:
         return {"ok": False, "error": "evolution_api_disabled"}
     try:
