@@ -42,12 +42,14 @@ Tier flow: `working -> episodic -> semantic/procedural`, with low-importance sta
 
 | Area | implemented | partial | not_started |
 |---|---:|---:|---:|
-| Foundation + Observability | 3 | 3 | 0 |
+| Foundation + Observability | 7 | 2 | 0 |
 | Self-Coding + Release Loop | 3 | 3 | 0 |
-| Governance + Safety | 1 | 4 | 1 |
-| Memory Intelligence + Retrieval | 1 | 7 | 2 |
-| WhatsApp Channel + Admin UX | 0 | 1 | 6 |
-| Documentation + Ops Hardening | 0 | 1 | 3 |
+| Governance + Safety | 3 | 3 | 1 |
+| Memory Intelligence + Retrieval | 2 | 6 | 2 |
+| WhatsApp Channel + Admin UX | 7 | 0 | 0 |
+| Documentation + Ops Hardening | 2 | 1 | 1 |
+
+_Last updated: 2026-02-20 (Packet 9: framework audit + multi-channel media Phase 1)_
 
 ## Security Audit Update (2026-02-18)
 
@@ -160,6 +162,16 @@ Dependencies: M3
 | BK-032 | Documentation + Ops Hardening | API/schema docs for memory routes and conflict-resolution operator flow | done | P2 | planner | API reference regenerated (`make docs-generate`) and operator conflict-resolution flow documented in `docs/runbook.md`; `make docs-check` |
 | BK-033 | Foundation + Observability | Evolution/governance event contract additions (`evolution.item.*`) | done | P2 | api_guardian | event types + payload minimum key enforcement + admin query/update APIs landed (`055_evolution_items.sql`); `uv run pytest tests/integration/test_web_api.py -k evolution_items -v`; `uv run pytest tests/unit/test_event_envelope_enforcement.py -v` |
 | BK-034 | Governance + Safety | Dependency steward hardening (CVE severity, compatibility bundle, rollback-ready PR context) | partial | P1 | dependency_steward | `uv run pytest tests/unit/test_governance_tasks.py -v` |
+| BK-057 | Foundation + Observability | Multi-channel media: persist `media_path`/`mime_type` on inbound messages (migration 058) and wire write path | done | P0 | api_guardian | `insert_message()` updated with media params; WhatsApp router passes media fields; `tests/unit/test_db_queries.py::test_insert_message_media_round_trip`; `python3 scripts/test_migrations.py` |
+| BK-058 | Governance + Safety | Policy engine: wildcard `*` tool permission support (migration 057) and R8 `max_actions_per_step` enforcement | done | P0 | api_guardian | `is_allowed()` supports `IN (?, '*')`; R8 enforced via event count per trace_id; `tests/unit/test_tools_runtime.py::test_wildcard_permission_allows_any_tool`; `tests/unit/test_tools_runtime.py::test_max_actions_per_step_enforced` |
+| BK-059 | Memory Intelligence + Retrieval | Memory consistency evaluator API surface and historical storage (migration 059) | done | P1 | api_guardian | `GET /api/v1/memory/consistency` endpoint + `memory_consistency_reports` table + `store_consistency_report()` in queries; `tests/integration/test_admin_api.py::test_memory_consistency_endpoint_requires_thread_id` |
+| BK-060 | Foundation + Observability | Scheduler: fix NULL thread_id bug, add transaction on thread creation, per-schedule error isolation | done | P0 | data_migrator | scheduler skips NULL-thread schedules with `schedule.error` event; 3-INSERT transaction uses `BEGIN/COMMIT/ROLLBACK`; per-schedule try/except; `tests/integration/test_scheduler.py::test_scheduler_tick_null_thread_id_skips_gracefully`; `tests/integration/test_scheduler.py::test_scheduler_tick_creates_isolated_thread` |
+| BK-061 | Foundation + Observability | Event retention maintenance task (configurable `EVENT_RETENTION_DAYS`, default 90) | done | P1 | api_guardian | `src/jarvis/tasks/events.py`; registered as weekly periodic task; `EVENT_RETENTION_DAYS` config flag; `.env.example` updated |
+| BK-062 | Foundation + Observability | Fitness snapshot periodic task interval: change from weekly to 30-minute schedule | done | P0 | api_guardian | `compute_system_fitness` interval changed from 604800s to 1800s in `tasks/__init__.py` |
+| BK-063 | Foundation + Observability | Fix `main.py` undefined `evolution` variable (should be `baileys`) and I001 import sort | done | P0 | api_guardian | `evolution.*` -> `baileys.*`; import sort auto-fixed; `make lint` clean; `make typecheck` clean |
+| BK-064 | Documentation + Ops Hardening | Deduplicate soul.md branch policy boilerplate across all agent bundles | done | P2 | docs_keeper | 4 soul.md files now reference CLAUDE.md instead of inline git-flow block (main, coder, data_migrator, planner) |
+| BK-065 | Documentation + Ops Hardening | Add FEATURE_BUILDER_PROMPT.md and DOCS_AGENT_PROMPT.md to docs/prompts/ | done | P2 | docs_keeper | `docs/prompts/FEATURE_BUILDER_PROMPT.md`; `docs/prompts/DOCS_AGENT_PROMPT.md`; `docs/prompts/README.md` updated |
+| BK-066 | Governance + Safety | Self-update guardrail defaults: bound `max_files_per_patch`, `max_risk_score`, `max_patch_attempts_per_day`, `max_prs_per_day` | done | P1 | api_guardian | `SELFUPDATE_MAX_FILES_PER_PATCH=20`, `SELFUPDATE_MAX_RISK_SCORE=100`, `SELFUPDATE_MAX_PATCH_ATTEMPTS_PER_DAY=10`, `SELFUPDATE_MAX_PRS_PER_DAY=5` added to `config.py` and `.env.example`; prevents runaway self-update loops |
 | BK-035 | Governance + Safety | Release-candidate hardening (changelog artifact + runbook evidence) | partial | P1 | release_candidate | `uv run pytest tests/unit/test_governance_tasks.py -v` |
 | BK-036 | Memory Intelligence + Retrieval | Memory admin UI completion (conflicts, tier/archive stats, failure lookup, graph preview) | done | P1 | web_builder | `cd web && npm test` (`web/tests/adminMemoryContracts.test.mjs`) + `uv run pytest tests/integration/test_memory_api_state_surfaces.py -v` |
 | BK-037 | Governance + Safety | Enforce admin-only WS system subscription (`subscribe_system`) and add regression tests | done | P0 | security_reviewer | `uv run pytest tests/integration/test_authorization.py -k websocket -v` |
@@ -210,10 +222,9 @@ Dependencies: M3
 P1:
 1. BK-018 (partial): graph relation extraction confidence/evidence policy completion.
 2. BK-019 (partial): adaptive forgetting/archival calibration harness + threshold tuning.
-3. BK-020 (partial): consistency evaluator historical queryability + UI/API filtering completion.
-4. BK-034 (partial): dependency steward hardening (CVE severity + compatibility bundle + rollback context).
-5. BK-035 (partial): release-candidate hardening (changelog artifact + runbook evidence).
-6. BK-042 (partial): operator-owned local credential rotation execution evidence closure.
+3. BK-034 (partial): dependency steward hardening (CVE severity + compatibility bundle + rollback context).
+4. BK-035 (partial): release-candidate hardening (changelog artifact + runbook evidence).
+5. BK-042 (partial): operator-owned local credential rotation execution evidence closure.
 
 P2:
 1. None.
@@ -640,6 +651,43 @@ Additional follow-up discovered:
    - BK-020
    - BK-034
    - BK-035
+
+### Packet 9 (completed, 2026-02-20): Framework audit + multi-channel media Phase 1
+
+Comprehensive audit across memory, events, scheduler, governance, self-update, test suite, and agent prompts — closing critical bugs, filling architecture gaps, adding missing tests, and fixing documentation drift.
+
+1. Scope completed: BK-057, BK-058, BK-059, BK-060, BK-061, BK-062, BK-063, BK-064, BK-065, BK-066.
+2. Critical bug fixes (P0):
+   - **BK-057**: `insert_message()` now accepts `media_path`/`mime_type`; WhatsApp router passes media fields from inbound handler.
+   - **BK-058**: `is_allowed()` supports wildcard `*` permission; R8 rule enforces `max_actions_per_step` via `tool.call.start` event count per trace.
+   - **BK-060**: Scheduler NULL thread_id: skips dispatch with `schedule.error` event; 3-INSERT creation wrapped in `BEGIN/COMMIT/ROLLBACK`; per-schedule try/except prevents one bad schedule from crashing the tick.
+   - **BK-062**: `compute_system_fitness` rescheduled from weekly (604800s) to 30-minute (1800s) interval so SLO gate works on new deployments.
+   - **BK-063**: `main.py` `evolution.*` references fixed to `baileys.*`; import sort fixed; lint/typecheck clean.
+3. Architecture gaps closed (P1):
+   - **BK-059**: `memory_consistency_reports` table (migration 059) + `store_consistency_report()` + `GET /api/v1/memory/consistency` endpoint with historical queries.
+   - **BK-061**: `src/jarvis/tasks/events.py` with `run_event_maintenance()` — deletes events older than `EVENT_RETENTION_DAYS` (default 90), prunes orphaned FTS/vector rows, registered as weekly periodic task.
+4. Missing tests added (P1):
+   - `tests/unit/test_db_queries.py`: media round-trip, insert-without-media, multi-channel thread unification.
+   - `tests/unit/test_tools_runtime.py`: wildcard `*` permission, `max_actions_per_step` R8 enforcement.
+   - `tests/integration/test_scheduler.py`: thread isolation (threads/sessions/participants created), NULL thread_id graceful skip with `schedule.error`.
+   - `tests/integration/test_events.py`: semantic event search returns list.
+5. Self-update guardrail defaults (P1):
+   - **BK-066**: `SELFUPDATE_MAX_FILES_PER_PATCH=20`, `SELFUPDATE_MAX_RISK_SCORE=100`, `SELFUPDATE_MAX_PATCH_ATTEMPTS_PER_DAY=10`, `SELFUPDATE_MAX_PRS_PER_DAY=5` added to `config.py` and `.env.example`.
+6. Documentation fixes (P2):
+   - **BK-064**: `agents/main/soul.md`, `agents/coder/soul.md`, `agents/data_migrator/soul.md`, `agents/planner/soul.md` — inline git-flow block replaced with CLAUDE.md reference.
+   - **BK-065**: `docs/prompts/FEATURE_BUILDER_PROMPT.md` + `docs/prompts/DOCS_AGENT_PROMPT.md` created; `docs/prompts/README.md` updated.
+   - `MEMORY.md`: Celery/RabbitMQ reference replaced with in-process asyncio task runner.
+7. Validation evidence:
+   - `make lint` — all checks passed.
+   - `make typecheck` — no issues in 135 source files.
+   - `make test-gates` — 420 passed; coverage 86.57% (threshold 80%).
+   - `make docs-generate && make docs-check` — docs check passed.
+8. Remaining tasks discovered during implementation:
+   - None new in repo scope.
+9. Deferred explicitly (scope too large for this pass):
+   - BK-018: graph relation LLM extraction (200–300 lines, separate BK item).
+   - BK-019: adaptive forgetting calibration harness.
+   - Concurrent scheduler deduplication (single-process deployment; low priority).
 
 ## Testing and Acceptance Gates
 

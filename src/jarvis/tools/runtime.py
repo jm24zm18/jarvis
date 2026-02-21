@@ -100,7 +100,9 @@ class ToolRuntime:
             )
             raise PolicyError("tool denied by policy: R3: unknown tool")
 
-        allowed, reason = decision(conn, caller_id, tool_name, arguments=arguments)
+        allowed, reason = decision(
+            conn, caller_id, tool_name, arguments=arguments, trace_id=trace_id
+        )
         if not allowed:
             policy_payload = with_action_envelope(
                 {"tool": tool_name, "allowed": False, "reason": reason}

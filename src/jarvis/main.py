@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -58,8 +58,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         callback_payload: dict[str, object] = {}
         callback_ok = False
         callback_error = ""
-        if evolution.webhook_enabled:
-            callback_status_code, callback_payload = await evolution.configure_webhook()
+        if baileys.webhook_enabled:
+            callback_status_code, callback_payload = await baileys.configure_webhook()
             callback_ok = callback_status_code < 400
             if not callback_ok:
                 callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
@@ -71,7 +71,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             )
             upsert_whatsapp_instance(
                 conn,
-                instance=evolution.instance,
+                instance=baileys.instance,
                 status=evo_state,
                 metadata={
                     "status_code": status_code,
@@ -79,9 +79,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                     "callback_status_code": callback_status_code,
                     "callback_payload": callback_payload,
                 },
-                callback_url=evolution.webhook_url,
-                callback_by_events=evolution.webhook_by_events,
-                callback_events=evolution.webhook_events,
+                callback_url=baileys.webhook_url,
+                callback_by_events=baileys.webhook_by_events,
+                callback_events=baileys.webhook_events,
                 callback_configured=callback_ok,
                 callback_last_error=callback_error,
             )

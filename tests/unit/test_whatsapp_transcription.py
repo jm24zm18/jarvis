@@ -18,7 +18,7 @@ async def test_stub_transcriber_returns_deterministic_text(tmp_path: Path) -> No
     file_path.write_bytes(b"voice")
     transcriber = StubVoiceTranscriber()
     transcript = await transcriber.transcribe(file_path=file_path, mime_type="audio/ogg")
-    assert transcript == "voice note received"
+    assert transcript == "[stub: transcription not configured]"
 
 
 @pytest.mark.asyncio

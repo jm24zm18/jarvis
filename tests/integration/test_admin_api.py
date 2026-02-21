@@ -254,7 +254,7 @@ def test_whatsapp_status_reports_callback_health(monkeypatch) -> None:
         async def configure_webhook(self) -> tuple[int, dict[str, object]]:
             return 200, {"configured": True}
 
-    monkeypatch.setattr("jarvis.routes.api.channels.EvolutionClient", _FakeEvolutionClient)
+    monkeypatch.setattr("jarvis.routes.api.channels.BaileysClient", _FakeEvolutionClient)
 
     response = client.get("/api/v1/channels/whatsapp/status", headers=headers)
     assert response.status_code == 200
@@ -286,7 +286,7 @@ def test_whatsapp_create_includes_callback_result(monkeypatch) -> None:
         async def configure_webhook(self) -> tuple[int, dict[str, object]]:
             return 200, {"configured": True}
 
-    monkeypatch.setattr("jarvis.routes.api.channels.EvolutionClient", _FakeEvolutionClient)
+    monkeypatch.setattr("jarvis.routes.api.channels.BaileysClient", _FakeEvolutionClient)
 
     response = client.post("/api/v1/channels/whatsapp/create", headers=headers, json={})
     assert response.status_code == 200

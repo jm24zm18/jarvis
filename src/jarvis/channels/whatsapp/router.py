@@ -465,9 +465,11 @@ async def inbound(
                             baileys = BaileysClient()
                             if baileys.enabled:
                                 media_root = ensure_media_root(settings.whatsapp_media_dir)
+                                _mime = str(
+                                    raw_message_obj["audioMessage"].get("mimetype", "audio/ogg")
+                                )
                                 file_name = media_filename(
-                                    msg.external_msg_id, "audio",
-                                    str(raw_message_obj["audioMessage"].get("mimetype", "audio/ogg")),
+                                    msg.external_msg_id, "audio", _mime
                                 )
                                 target_path = resolve_media_output_path(media_root, file_name)
                                 total = await baileys.download_media(
@@ -545,7 +547,16 @@ async def inbound(
             elif msg.message_type == "unknown" and not text:
                 text = "[unsupported message]"
 
-            message_id = insert_message(conn, thread_id, "user", text)
+            _media_path: str | None = None
+            _mime_type: str | None = None
+            if msg.message_type in {"image", "video", "document", "audio", "sticker"}:
+                _local = str(media_result.get("local_path", "") or "").strip()
+                if _local:
+                    _media_path = _local
+                    _mime_type = str(media_result.get("mime_type", "") or "").strip() or None
+            message_id = insert_message(
+                conn, thread_id, "user", text, media_path=_media_path, mime_type=_mime_type
+            )
 
             media_id = ""
             if msg.message_type in {"image", "video", "document", "audio", "sticker"}:
@@ -634,10 +645,12 @@ async def inbound(
                 )
             # Send typing indicator ("composing") to show Jarvis is thinking
             try:
-                await adapter.send_presence(
-                    recipient=str(msg.sender_id or remote_jid),
-                    presence="composing",
-                )
+                _send_presence = getattr(adapter, "send_presence", None)
+                if callable(_send_presence):
+                    await _send_presence(
+                        recipient=str(msg.sender_id or remote_jid),
+                        presence="composing",
+                    )
             except Exception:
                 pass  # Typing indicator is best-effort, don't block on failure
 

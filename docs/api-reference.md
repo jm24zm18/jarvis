@@ -27,6 +27,7 @@ Auth levels:
 | `POST` | `/api/v1/bugs` | `auth` | `create_bug_api_v1_bugs_post` | `application/json` | `200, 422` |
 | `DELETE` | `/api/v1/bugs/{bug_id}` | `auth` | `delete_bug_api_v1_bugs__bug_id__delete` | `-` | `200, 422` |
 | `PATCH` | `/api/v1/bugs/{bug_id}` | `auth` | `update_bug_api_v1_bugs__bug_id__patch` | `application/json` | `200, 422` |
+| `GET` | `/api/v1/channels/telegram/status` | `admin` | `telegram_status_api_v1_channels_telegram_status_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/channels/whatsapp/create` | `admin` | `whatsapp_create_api_v1_channels_whatsapp_create_post` | `-` | `200, 422` |
 | `POST` | `/api/v1/channels/whatsapp/disconnect` | `admin` | `whatsapp_disconnect_api_v1_channels_whatsapp_disconnect_post` | `-` | `200, 422` |
 | `POST` | `/api/v1/channels/whatsapp/pairing-code` | `admin` | `whatsapp_pairing_code_api_v1_channels_whatsapp_pairing_code_post` | `application/json` | `200, 422` |
@@ -54,6 +55,7 @@ Auth levels:
 | `GET` | `/api/v1/governance/slo` | `admin` | `governance_slo_api_v1_governance_slo_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/governance/slo/history` | `admin` | `governance_slo_history_api_v1_governance_slo_history_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/memory` | `auth` | `search_memory_api_v1_memory_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/memory/consistency` | `auth` | `get_consistency_api_v1_memory_consistency_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/memory/export` | `auth` | `memory_export_api_v1_memory_export_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/memory/kb` | `auth` | `search_kb_api_v1_memory_kb_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/memory/kb` | `auth` | `upsert_kb_api_v1_memory_kb_post` | `application/json` | `200, 422` |
@@ -104,6 +106,7 @@ Auth levels:
 | `GET` | `/healthz` | `public` | `healthz_healthz_get` | `-` | `200` |
 | `GET` | `/metrics` | `public` | `metrics_metrics_get` | `-` | `200` |
 | `GET` | `/readyz` | `public` | `readyz_readyz_get` | `-` | `200` |
+| `POST` | `/webhooks/telegram` | `public` | `inbound_webhooks_telegram_post` | `-` | `200` |
 | `GET` | `/webhooks/whatsapp` | `public` | `verify_webhooks_whatsapp_get` | `-` | `200` |
 | `POST` | `/webhooks/whatsapp` | `public` | `inbound_webhooks_whatsapp_post` | `application/json` | `200, 422` |
 | `POST` | `/webhooks/{channel_type}` | `public` | `generic_inbound_webhooks__channel_type__post` | `application/json` | `200, 422` |
@@ -117,12 +120,12 @@ Auth levels:
 
 - `title`: `Jarvis Agent Framework`
 - `version`: `0.1.0`
-- `path_count`: `84`
+- `path_count`: `87`
 
 ```json
 {
   "title": "Jarvis Agent Framework",
   "version": "0.1.0",
-  "path_count": 84
+  "path_count": 87
 }
 ```
