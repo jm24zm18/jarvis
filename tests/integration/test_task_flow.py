@@ -8,6 +8,7 @@ from jarvis.db.queries import (
     ensure_user,
     insert_message,
 )
+from jarvis.providers.base import ModelResponse
 from jarvis.tasks.agent import agent_step
 from jarvis.tasks.scheduler import scheduler_tick
 
@@ -37,6 +38,14 @@ def test_scheduler_tick_and_agent_step_flow(monkeypatch) -> None:
             return True
 
     monkeypatch.setattr("jarvis.tasks.agent.get_task_runner", lambda: _Runner())
+
+    class _FakeRouter:
+        async def generate(self, *args, **kwargs):
+            return ModelResponse(text="test response", tool_calls=[]), "primary", None
+
+    monkeypatch.setattr("jarvis.tasks.agent.ProviderRouter", lambda _p, _f: _FakeRouter())
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", lambda **kwargs: None)
 
     with get_conn() as conn:
         ensure_system_state(conn)

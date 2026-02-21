@@ -27,7 +27,7 @@ class StubVoiceTranscriber:
         if not file_path.exists():
             raise VoiceTranscriptionError("voice_transcription_input_missing")
         _ = mime_type
-        return "voice note received"
+        return "[stub: transcription not configured]"
 
 
 @lru_cache(maxsize=4)

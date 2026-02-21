@@ -16,6 +16,7 @@ def _register_tasks(runner: TaskRunner) -> None:
         backup,
         channel,
         dependency_steward,
+        events,
         github,
         maintenance,
         memory,
@@ -73,6 +74,7 @@ def _register_tasks(runner: TaskRunner) -> None:
     runner.register("jarvis.tasks.selfupdate.self_update_apply", selfupdate.self_update_apply)
     runner.register("jarvis.tasks.selfupdate.self_update_rollback", selfupdate.self_update_rollback)
     runner.register("jarvis.tasks.story_runner.run_story_pack", story_runner.run_story_pack)
+    runner.register("jarvis.tasks.events.run_event_maintenance", events.run_event_maintenance)
     runner.register("jarvis.tasks.system.rotate_unlock_code", system.rotate_unlock_code)
     runner.register("jarvis.tasks.system.system_restart", system.system_restart)
     runner.register("jarvis.tasks.system.reload_settings_cache", system.reload_settings_cache)
@@ -106,6 +108,8 @@ def get_periodic_scheduler() -> PeriodicScheduler:
         scheduler.add("jarvis.tasks.memory.evaluate_consistency", 86400)
         scheduler.add("jarvis.tasks.system.db_optimize", 86400)
         scheduler.add("jarvis.tasks.system.db_integrity_check", 604800)
+        # Prune old events weekly (configurable via EVENT_RETENTION_DAYS).
+        scheduler.add("jarvis.tasks.events.run_event_maintenance", 604800)
         scheduler.add("jarvis.tasks.system.db_vacuum", 2592000)
         if settings.maintenance_enabled == 1 and settings.maintenance_interval_seconds > 0:
             scheduler.add(
@@ -117,7 +121,8 @@ def get_periodic_scheduler() -> PeriodicScheduler:
                 "jarvis.tasks.maintenance.maintenance_heartbeat",
                 float(settings.maintenance_heartbeat_interval_seconds),
             )
-        scheduler.add("jarvis.tasks.maintenance.compute_system_fitness", 604800)
+        # Run fitness compute every 30 minutes so SLO gate is always current.
+        scheduler.add("jarvis.tasks.maintenance.compute_system_fitness", 1800)
         if int(settings.dependency_steward_enabled) == 1:
             scheduler.add("jarvis.tasks.dependency_steward.run_dependency_steward", 604800)
         if int(settings.release_candidate_agent_enabled) == 1:

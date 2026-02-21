@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from jarvis.auth.dependencies import UserContext, require_admin, require_auth
 from jarvis.db.connection import get_conn
+from jarvis.db.queries import store_consistency_report
 from jarvis.memory.knowledge import KnowledgeBaseService
 from jarvis.memory.scope import can_agent_access_thread_memory, normalize_agent_id
 from jarvis.memory.service import MemoryService
@@ -152,6 +153,75 @@ def memory_stats(ctx: UserContext = Depends(require_auth)) -> dict[str, int]:  #
         "embedded_items": embedded_n,
         "embedding_coverage_pct": int((embedded_n * 100 / total_n) if total_n else 0),
     }
+
+
+@router.get("/consistency")
+def get_consistency(
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+    thread_id: str = "",
+    from_ts: str | None = None,
+    to_ts: str | None = None,
+    limit: int = Query(default=20, ge=1, le=200),
+) -> dict[str, object]:
+    """Evaluate and persist memory consistency for a thread."""
+    if not thread_id.strip():
+        return {"error": "thread_id is required", "items": []}
+    service = MemoryService()
+    with get_conn() as conn:
+        if not _thread_allowed(conn, ctx, thread_id):
+            return {"error": "forbidden", "items": []}
+        # Run consistency evaluation and persist the result.
+        eval_result = service.evaluate_consistency(conn, thread_id=thread_id)
+        _sample_size = eval_result.get("sample_size", 0)
+        _total_items = eval_result.get("total_items", 0)
+        _conflicted_items = eval_result.get("conflicted_items", 0)
+        _consistency_score = eval_result.get("consistency_score", 1.0)
+        _num = (int, float, str)
+        report_id = store_consistency_report(
+            conn,
+            thread_id=thread_id,
+            sample_size=int(_sample_size) if isinstance(_sample_size, _num) else 0,
+            total_items=int(_total_items) if isinstance(_total_items, _num) else 0,
+            conflicted_items=(
+                int(_conflicted_items) if isinstance(_conflicted_items, _num) else 0
+            ),
+            consistency_score=(
+                float(_consistency_score) if isinstance(_consistency_score, _num) else 1.0
+            ),
+        )
+        # Fetch historical reports.
+        filters: list[str] = ["thread_id=?"]
+        params: list[object] = [thread_id]
+        if from_ts and from_ts.strip():
+            filters.append("created_at>=?")
+            params.append(from_ts.strip())
+        if to_ts and to_ts.strip():
+            filters.append("created_at<=?")
+            params.append(to_ts.strip())
+        where = " AND ".join(filters)
+        rows = conn.execute(
+            (
+                "SELECT id, thread_id, sample_size, total_items, conflicted_items, "
+                "consistency_score, details_json, created_at "
+                f"FROM memory_consistency_reports WHERE {where} "
+                "ORDER BY created_at DESC LIMIT ?"
+            ),
+            tuple([*params, limit]),
+        ).fetchall()
+    items = [
+        {
+            "id": str(row["id"]),
+            "thread_id": str(row["thread_id"]),
+            "sample_size": int(row["sample_size"]),
+            "total_items": int(row["total_items"]),
+            "conflicted_items": int(row["conflicted_items"]),
+            "consistency_score": float(row["consistency_score"]),
+            "details": _parse_metadata(row["details_json"]),
+            "created_at": str(row["created_at"]),
+        }
+        for row in rows
+    ]
+    return {"current_report_id": report_id, "latest": eval_result, "items": items}
 
 
 @router.get("/kb")

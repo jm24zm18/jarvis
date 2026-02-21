@@ -1,6 +1,7 @@
 """Application configuration contract."""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -36,6 +37,12 @@ class Settings(BaseSettings):
     selfupdate_pr_autoraise: int = Field(alias="SELFUPDATE_PR_AUTORAISE", default=0)
     selfupdate_fitness_gate_mode: str = Field(alias="SELFUPDATE_FITNESS_GATE_MODE", default="warn")
     selfupdate_test_gate_mode: str = Field(alias="SELFUPDATE_TEST_GATE_MODE", default="warn")
+    selfupdate_max_files_per_patch: int = Field(alias="SELFUPDATE_MAX_FILES_PER_PATCH", default=20)
+    selfupdate_max_risk_score: int = Field(alias="SELFUPDATE_MAX_RISK_SCORE", default=100)
+    selfupdate_max_patch_attempts_per_day: int = Field(
+        alias="SELFUPDATE_MAX_PATCH_ATTEMPTS_PER_DAY", default=10
+    )
+    selfupdate_max_prs_per_day: int = Field(alias="SELFUPDATE_MAX_PRS_PER_DAY", default=5)
     selfupdate_test_gate_min_coverage_pct: float = Field(
         alias="SELFUPDATE_TEST_GATE_MIN_COVERAGE_PCT", default=0.0
     )
@@ -191,6 +198,7 @@ class Settings(BaseSettings):
     memory_secret_scan_enabled: int = Field(alias="MEMORY_SECRET_SCAN_ENABLED", default=1)
     memory_pii_redact_mode: str = Field(alias="MEMORY_PII_REDACT_MODE", default="mask")
     memory_retention_days: int = Field(alias="MEMORY_RETENTION_DAYS", default=180)
+    event_retention_days: int = Field(alias="EVENT_RETENTION_DAYS", default=90)
     memory_tiers_enabled: int = Field(alias="MEMORY_TIERS_ENABLED", default=0)
     memory_importance_enabled: int = Field(alias="MEMORY_IMPORTANCE_ENABLED", default=0)
     memory_graph_enabled: int = Field(alias="MEMORY_GRAPH_ENABLED", default=0)
@@ -262,7 +270,7 @@ class Settings(BaseSettings):
     )
     exec_host_allowed_cwd_prefixes: str = Field(
         alias="EXEC_HOST_ALLOWED_CWD_PREFIXES",
-        default="/srv/agent-framework,/tmp,/home/justin/jarvis",
+        default="/srv/agent-framework,/tmp," + str(Path.cwd()),
     )
     web_auth_token_ttl_hours: int = Field(alias="WEB_AUTH_TOKEN_TTL_HOURS", default=720)
     web_cors_origins: str = Field(alias="WEB_CORS_ORIGINS", default="http://localhost:5173")

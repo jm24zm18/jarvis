@@ -74,14 +74,14 @@ export default function AdminChannelsPage() {
         </div>
       </Card>
 
-      <h2 className="mb-4 font-display text-xl text-[var(--text-primary)]">WhatsApp (Evolution API)</h2>
+      <h2 className="mb-4 font-display text-xl text-[var(--text-primary)]">WhatsApp (Baileys Node Server)</h2>
       <Card className="mb-6">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={status === "open" || status === "connected" ? "success" : "warning"}>
             {status}
           </Badge>
           <Button onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
-            Create/Connect Instance
+            Initialize Connection
           </Button>
           <Button variant="secondary" onClick={() => void qrQuery.refetch()}>
             Load QR

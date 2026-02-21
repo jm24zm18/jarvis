@@ -297,7 +297,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-20T13:03:14.766088+00:00",
+  "generated_at": "2026-02-21T01:16:05.339917+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -513,6 +513,18 @@
     {
       "file": "src/jarvis/db/migrations/056_whatsapp_sender_review_queue.sql",
       "number": 56
+    },
+    {
+      "file": "src/jarvis/db/migrations/057_fix_jarvis_permissions.sql",
+      "number": 57
+    },
+    {
+      "file": "src/jarvis/db/migrations/058_message_media_support.sql",
+      "number": 58
+    },
+    {
+      "file": "src/jarvis/db/migrations/059_memory_consistency_reports.sql",
+      "number": 59
     }
   ],
   "protected_modules": [
@@ -521,5 +533,5 @@
     "src/jarvis/policy/engine.py",
     "src/jarvis/tools/runtime.py"
   ],
-  "repo_root": "/home/justin/jarvis2"
+  "repo_root": "/home/justin/jarvis"
 }

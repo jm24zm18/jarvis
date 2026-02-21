@@ -236,16 +236,20 @@ def ensure_channel(conn: sqlite3.Connection, user_id: str, channel_type: str) ->
 
 
 def ensure_open_thread(conn: sqlite3.Connection, user_id: str, channel_id: str) -> str:
+    # First, try to find ANY open thread for this user, regardless of channel.
+    # This enforces the "one global chat thread per user" rule.
     row = conn.execute(
         (
             "SELECT id FROM threads "
-            "WHERE user_id=? AND channel_id=? AND status='open' "
+            "WHERE user_id=? AND status='open' "
             "ORDER BY created_at DESC LIMIT 1"
         ),
-        (user_id, channel_id),
+        (user_id,),
     ).fetchone()
     if row:
         return str(row["id"])
+    
+    # If no thread exists, create a new one.
     thread_id = new_id("thr")
     conn.execute(
         (
@@ -611,11 +615,23 @@ def create_thread(conn: sqlite3.Connection, user_id: str, channel_id: str) -> st
     return thread_id
 
 
-def insert_message(conn: sqlite3.Connection, thread_id: str, role: str, content: str) -> str:
+def insert_message(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    role: str,
+    content: str,
+    *,
+    media_path: str | None = None,
+    mime_type: str | None = None,
+) -> str:
     message_id = new_id("msg")
     conn.execute(
-        "INSERT INTO messages(id, thread_id, role, content, created_at) VALUES(?,?,?,?,?)",
-        (message_id, thread_id, role, content, now_iso()),
+        (
+            "INSERT INTO messages("
+            "id, thread_id, role, content, media_path, mime_type, created_at"
+            ") VALUES(?,?,?,?,?,?,?)"
+        ),
+        (message_id, thread_id, role, content, media_path, mime_type, now_iso()),
     )
     conn.execute("UPDATE threads SET updated_at=? WHERE id=?", (now_iso(), thread_id))
     return message_id
@@ -824,16 +840,16 @@ def get_agent_governance(
 
 def get_whatsapp_outbound(
     conn: sqlite3.Connection, thread_id: str, message_id: str
-) -> dict[str, str] | None:
+) -> dict[str, str | None] | None:
     return get_channel_outbound(conn, thread_id, message_id, "whatsapp")
 
 
 def get_channel_outbound(
     conn: sqlite3.Connection, thread_id: str, message_id: str, channel_type: str
-) -> dict[str, str] | None:
+) -> dict[str, str | None] | None:
     row = conn.execute(
         (
-            "SELECT u.external_id AS recipient, m.content AS text "
+            "SELECT u.external_id AS recipient, m.content AS text, m.media_path, m.mime_type "
             "FROM messages m "
             "JOIN threads t ON t.id=m.thread_id "
             "JOIN users u ON u.id=t.user_id "
@@ -845,7 +861,44 @@ def get_channel_outbound(
     ).fetchone()
     if row is None:
         return None
-    return {"recipient": str(row["recipient"]), "text": str(row["text"])}
+    return {
+        "recipient": str(row["recipient"]),
+        "text": str(row["text"]),
+        "media_path": str(row["media_path"]) if row["media_path"] else None,
+        "mime_type": str(row["mime_type"]) if row["mime_type"] else None,
+    }
+
+
+def store_consistency_report(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    sample_size: int,
+    total_items: int,
+    conflicted_items: int,
+    consistency_score: float,
+    details: dict[str, object] | None = None,
+) -> str:
+    report_id = new_id("csr")
+    conn.execute(
+        (
+            "INSERT INTO memory_consistency_reports("
+            "id, thread_id, sample_size, total_items, conflicted_items, "
+            "consistency_score, details_json, created_at"
+            ") VALUES(?,?,?,?,?,?,?,?)"
+        ),
+        (
+            report_id,
+            thread_id,
+            int(sample_size),
+            int(total_items),
+            int(conflicted_items),
+            float(consistency_score),
+            json.dumps(details or {}, sort_keys=True),
+            now_iso(),
+        ),
+    )
+    return report_id
 
 
 def upsert_selfupdate_run(
