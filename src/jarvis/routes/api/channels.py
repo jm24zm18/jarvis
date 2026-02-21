@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -191,14 +191,72 @@ def whatsapp_pairing_code(
     del request, ctx
     client = BaileysClient()
     if not client.enabled:
-        return {"ok": False, "error": "evolution_api_disabled"}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="evolution_api_disabled",
+        )
     try:
         status_code, payload = asyncio.run(client.pairing_code(input_data.number))
     except Exception as exc:
         logger.warning("Evolution API unreachable on pairing-code: %s", exc)
-        return {"ok": False, "error": f"evolution_api_unreachable: {exc}"}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"evolution_api_unreachable: {exc}",
+        ) from exc
+    if status_code >= 400:
+        error_detail = str(
+            payload.get("error")
+            or payload.get("message")
+            or payload.get("detail")
+            or "pairing_code_failed"
+        ).strip()
+        if (
+            status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+            and "QR state not reached" in error_detail
+        ):
+            error_detail = (
+                "qr_not_ready: QR state not reached yet; initialize connection "
+                "and wait for QR"
+            )
+        raise HTTPException(status_code=status_code, detail=error_detail)
     code = payload.get("code") if isinstance(payload.get("code"), str) else ""
+    if not code:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="pairing_code_missing",
+        )
     return {"ok": status_code < 400, "status_code": status_code, "code": code}
+
+
+@router.post("/whatsapp/reset")
+@_limiter.limit("5/minute")
+def whatsapp_reset(
+    request: Request,
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    """Clear saved Baileys credentials and force a full re-pair."""
+    del request, ctx
+    client = BaileysClient()
+    if not client.enabled:
+        return {"ok": False, "error": "evolution_api_disabled"}
+    try:
+        status_code, payload = asyncio.run(client.reset_instance())
+    except Exception as exc:
+        logger.warning("Evolution API unreachable on reset: %s", exc)
+        return {"ok": False, "error": f"evolution_api_unreachable: {exc}"}
+    with get_conn() as conn:
+        upsert_whatsapp_instance(
+            conn,
+            instance=client.instance,
+            status="connecting",
+            metadata=payload,
+            callback_url=client.webhook_url,
+            callback_by_events=client.webhook_by_events,
+            callback_events=client.webhook_events,
+            callback_configured=False,
+            callback_last_error="reset_requested",
+        )
+    return {"ok": status_code < 400, "status_code": status_code, "payload": payload}
 
 
 @router.post("/whatsapp/disconnect")

@@ -311,6 +311,30 @@ def test_whatsapp_pairing_code_rejects_non_numeric_input() -> None:
     assert response.status_code == 422
 
 
+def test_whatsapp_pairing_code_propagates_upstream_qr_not_ready(monkeypatch) -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = TestClient(app)
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    class _FakeBaileysClient:
+        enabled = True
+
+        async def pairing_code(self, _number: str) -> tuple[int, dict[str, object]]:
+            return 503, {"error": "QR state not reached — click Initialize Connection first"}
+
+    monkeypatch.setattr("jarvis.routes.api.channels.BaileysClient", _FakeBaileysClient)
+
+    response = client.post(
+        "/api/v1/channels/whatsapp/pairing-code",
+        headers=headers,
+        json={"number": "15555550123"},
+    )
+    assert response.status_code == 503
+    assert "qr_not_ready" in str(response.json().get("detail", ""))
+
+
 def test_whatsapp_review_queue_list_and_resolve() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()

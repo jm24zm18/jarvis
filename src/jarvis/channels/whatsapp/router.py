@@ -39,7 +39,9 @@ from jarvis.db.queries import (
     get_whatsapp_sender_review_open,
     insert_message,
     insert_whatsapp_media,
+    prune_whatsapp_thread_map_orphans,
     record_external_message,
+    thread_exists,
     upsert_whatsapp_thread_map,
 )
 from jarvis.events.models import EventInput
@@ -319,9 +321,24 @@ async def inbound(
             remote_jid = str(msg.thread_key or "").strip()
             if remote_jid:
                 mapped = get_thread_by_whatsapp_remote(conn, instance, remote_jid)
-                if mapped:
+                if mapped is not None and thread_exists(conn, mapped):
                     thread_id = mapped
                 else:
+                    if mapped:
+                        degraded = True
+                        _emit_degraded_event(
+                            conn=conn,
+                            trace_id=trace_id,
+                            thread_id=mapped,
+                            actor_id="whatsapp",
+                            reason="stale_thread_map",
+                            detail={
+                                "instance": instance,
+                                "remote_jid": remote_jid,
+                                "stale_thread_id": mapped,
+                            },
+                        )
+                        prune_whatsapp_thread_map_orphans(conn)
                     thread_id = ensure_open_thread(conn, user_id, channel_id)
                     upsert_whatsapp_thread_map(
                         conn,

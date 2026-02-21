@@ -687,3 +687,75 @@ def test_inbound_ignores_non_upsert_evolution_event() -> None:
 
     assert after_messages == before_messages
     assert after_events == before_events
+
+
+def test_inbound_heals_stale_whatsapp_thread_mapping(monkeypatch) -> None:
+    from jarvis.channels.whatsapp import router as whatsapp_router
+
+    payload = {
+        "event": "messages.upsert",
+        "data": {
+            "messages": [
+                {
+                    "key": {
+                        "id": "BAE5STALEMAP1",
+                        "remoteJid": "15855098110@s.whatsapp.net",
+                        "fromMe": True,
+                    },
+                    "message": {"conversation": "healed path"},
+                }
+            ],
+            "type": "notify",
+        },
+    }
+
+    class _Runner:
+        def send_task(self, *_args, **_kwargs) -> bool:
+            return True
+
+    monkeypatch.setattr(whatsapp_router, "get_task_runner", lambda: _Runner())
+
+    with get_conn() as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            (
+                "INSERT INTO whatsapp_thread_map("
+                "thread_id, instance, remote_jid, participant_jid, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?)"
+            ),
+            (
+                "thr_stale_missing",
+                "personal",
+                "15855098110@s.whatsapp.net",
+                "",
+                "2026-02-21T00:00:00+00:00",
+                "2026-02-21T00:00:00+00:00",
+            ),
+        )
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    client = TestClient(app)
+    response = client.post("/webhooks/whatsapp", json=payload)
+    assert response.status_code == 202
+    assert response.json() == {"accepted": True, "degraded": True}
+
+    with get_conn() as conn:
+        msg_row = conn.execute(
+            "SELECT thread_id, content FROM messages "
+            "WHERE role='user' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        map_row = conn.execute(
+            "SELECT thread_id FROM whatsapp_thread_map "
+            "WHERE instance='personal' AND remote_jid='15855098110@s.whatsapp.net' "
+            "LIMIT 1"
+        ).fetchone()
+        degraded = conn.execute(
+            "SELECT payload_json FROM events "
+            "WHERE event_type='channel.inbound.degraded' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    assert msg_row is not None
+    assert str(msg_row["content"]) == "healed path"
+    assert map_row is not None
+    assert str(map_row["thread_id"]) == str(msg_row["thread_id"])
+    assert degraded is not None
+    assert "\"stale_thread_map\"" in str(degraded["payload_json"])

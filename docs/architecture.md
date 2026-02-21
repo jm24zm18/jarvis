@@ -11,6 +11,8 @@
 
 1. Incoming webhook (WhatsApp or generic webhook) hits API route.
 2. Request is validated, deduped, and persisted (`src/jarvis/db/queries.py`).
+   - WhatsApp inbound path auto-heals stale `whatsapp_thread_map` rows (orphaned `thread_id`)
+     before message insert, preventing webhook `500` from FK failures.
 3. `channel.inbound` event is emitted.
 4. In-process task runner dispatches `agent_step`.
 5. Orchestrator builds prompt from agent bundle + thread context + memory.

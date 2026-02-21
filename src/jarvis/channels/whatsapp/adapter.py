@@ -84,7 +84,10 @@ class WhatsAppAdapter:
         event = str(payload.get("event") or "")
         if event != "messages.upsert":
             return []
-        records = self._evolution_records(payload.get("data"))
+        data = payload.get("data")
+        if isinstance(data, dict) and str(data.get("type") or "").lower() == "append":
+            return []  # skip history-sync flood
+        records = self._evolution_records(data)
         messages: list[InboundMessage] = []
         for data in records:
             parsed = self._parse_evolution_record(payload, data)

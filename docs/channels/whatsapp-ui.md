@@ -8,6 +8,8 @@ Path: `/admin/channels`
 - Create/connect instance action.
 - QR load action for pairing.
 - Pairing code generation by phone number.
+- Pairing code action is enabled only when WhatsApp status is `qr`; otherwise UI shows
+  `QR not ready` with current state.
 - Disconnect action.
 - All channel actions require admin auth and are blocked for non-admin users.
 
@@ -15,6 +17,7 @@ Path: `/admin/channels`
 
 - `evolution_api_disabled`: set `EVOLUTION_API_URL` in `.env` and restart API.
 - Empty QR: ensure the instance exists and Evolution sidecar is reachable.
+- Pairing-code `503 qr_not_ready`: wait until status badge becomes `qr`, then retry generate.
 - 401 webhook errors: confirm `X-WhatsApp-Secret` matches `WHATSAPP_WEBHOOK_SECRET`.
 - Pairing code or QR should never appear in persisted event payloads; validate with redacted event views.
 - `review_required` sender queue growth: inspect `/api/v1/channels/whatsapp/review-queue` and resolve pending allow/deny decisions.

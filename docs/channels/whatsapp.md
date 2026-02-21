@@ -83,6 +83,8 @@ If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path f
 2. Pairing/QR actions fail:
    - verify instance exists (`POST /api/v1/channels/whatsapp/create` if needed).
    - retry `GET /api/v1/channels/whatsapp/qrcode` or `POST /api/v1/channels/whatsapp/pairing-code`.
+   - if pairing returns `503` with `qr_not_ready`, wait for status `qr` before retrying
+     pairing-code request.
 3. Webhook receives `401 invalid_webhook_secret`:
    - ensure Evolution sends `X-WhatsApp-Secret` matching `WHATSAPP_WEBHOOK_SECRET`.
 4. Inbound appears accepted but no thread message created:
