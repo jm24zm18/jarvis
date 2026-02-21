@@ -242,7 +242,7 @@ def login(payload: dict[str, str], request: Request, response: Response) -> dict
     with get_conn() as conn:
         user_id = ensure_user(conn, external_id)
         admin_count_row = conn.execute(
-            "SELECT COUNT(*) AS n FROM users WHERE role='admin'"
+            "SELECT COUNT(*) AS n FROM users WHERE role='admin' AND external_id != 'system:root'"
         ).fetchone()
         admin_count = int(admin_count_row["n"]) if admin_count_row is not None else 0
         if admin_count == 0:

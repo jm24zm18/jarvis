@@ -297,7 +297,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-21T13:04:04.070847+00:00",
+  "generated_at": "2026-02-21T22:56:14.141834+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -525,6 +525,10 @@
     {
       "file": "src/jarvis/db/migrations/059_memory_consistency_reports.sql",
       "number": 59
+    },
+    {
+      "file": "src/jarvis/db/migrations/060_agent_run_attempts.sql",
+      "number": 60
     }
   ],
   "protected_modules": [

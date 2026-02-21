@@ -548,7 +548,7 @@ def test_run_agent_step_rewrites_placeholder_to_degraded_response(monkeypatch) -
             ("trc_step_10",),
         ).fetchone()
     assert row is not None
-    assert row["content"] == DEGRADED_RESPONSE
+    assert DEGRADED_RESPONSE in row["content"]
     assert evt is not None and int(evt["c"]) == 1
 
 
@@ -647,7 +647,7 @@ def test_run_agent_step_terminal_synthesis_provider_error_sets_specific_reason(
             ("trc_step_14",),
         ).fetchone()
     assert row is not None
-    assert row["content"] == DEGRADED_RESPONSE
+    assert DEGRADED_RESPONSE in row["content"]
     assert degraded_evt is not None
     payload = json.loads(str(degraded_evt["payload_json"]))
     assert payload["reason"] == "provider_error_terminal_synthesis"
@@ -741,7 +741,7 @@ def test_run_agent_step_provider_failure_writes_degraded_message_and_error_event
             ("trc_step_12",),
         ).fetchone()
     assert message_row is not None
-    assert message_row["content"] == DEGRADED_RESPONSE
+    assert DEGRADED_RESPONSE in message_row["content"]
     assert event_row is not None
     payload = json.loads(str(event_row["payload_json"]))
     assert payload["primary_failure_kind"] == "dns_resolution"

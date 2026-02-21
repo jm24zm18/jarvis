@@ -111,6 +111,12 @@ class MemoryService:
                 decision="deny",
                 reason=schema_reason,
             )
+            self._emit_memory_event(
+                conn,
+                "memory.write.rejected",
+                {"actor_id": actor_id, "reason": schema_reason},
+                thread_id=thread_id,
+            )
             raise PermissionError(f"memory write blocked: {schema_reason}")
 
         if is_known_agent(actor_id):
@@ -125,6 +131,12 @@ class MemoryService:
                     target_kind="memory_item",
                     decision="deny",
                     reason=reason,
+                )
+                self._emit_memory_event(
+                    conn,
+                    "memory.write.rejected",
+                    {"actor_id": actor_id, "reason": reason},
+                    thread_id=thread_id,
                 )
                 raise PermissionError(f"memory write blocked: {reason}")
         governed_text, decision, reason = apply_memory_policy(

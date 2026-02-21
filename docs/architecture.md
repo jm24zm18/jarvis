@@ -27,6 +27,14 @@
 3. Idempotency is enforced by `schedule_dispatches(schedule_id, due_at)` uniqueness.
 4. `schedule.trigger` and catch-up telemetry events are emitted.
 
+## Agent Run Reliability Flow
+
+1. `agent_step` creates a durable attempt row in `agent_run_attempts` before orchestration starts.
+2. The orchestrator reports phase transitions (`state.extract`, `model.run`, `tool.exec`, `finalize`) to keep attempt heartbeats current.
+3. Retryable failures are recorded and retried with bounded exponential backoff.
+4. A periodic reaper task scans stale `running` attempts and requeues recovery attempts when under the max-attempt budget.
+5. Trace-scoped success dedupe is enforced so only one successful attempt publishes the final result for a given `trace_id`.
+
 ## Self-Update Flow
 
 1. Propose patch -> persist metadata.

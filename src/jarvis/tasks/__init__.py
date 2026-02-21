@@ -13,6 +13,7 @@ _periodic_scheduler: PeriodicScheduler | None = None
 def _register_tasks(runner: TaskRunner) -> None:
     from jarvis.tasks import (
         agent,
+        agent_recovery,
         backup,
         channel,
         dependency_steward,
@@ -29,6 +30,10 @@ def _register_tasks(runner: TaskRunner) -> None:
     )
 
     runner.register("jarvis.tasks.agent.agent_step", agent.agent_step)
+    runner.register(
+        "jarvis.tasks.agent_recovery.reap_stale_agent_runs",
+        agent_recovery.reap_stale_agent_runs,
+    )
     runner.register("jarvis.tasks.backup.create_backup", backup.create_backup)
     runner.register("jarvis.tasks.channel.send_channel_message", channel.send_channel_message)
     runner.register("jarvis.tasks.channel.send_whatsapp_message", channel.send_whatsapp_message)
@@ -98,6 +103,10 @@ def get_periodic_scheduler() -> PeriodicScheduler:
     if _periodic_scheduler is None:
         settings = get_settings()
         scheduler = PeriodicScheduler(get_task_runner())
+        scheduler.add(
+            "jarvis.tasks.agent_recovery.reap_stale_agent_runs",
+            float(max(5, int(settings.agent_run_reaper_interval_seconds))),
+        )
         scheduler.add("jarvis.tasks.scheduler.scheduler_tick", 60)
         scheduler.add("jarvis.tasks.system.rotate_unlock_code", 600)
         scheduler.add("jarvis.tasks.backup.create_backup", 900)

@@ -59,6 +59,14 @@ Source of truth: `src/jarvis/config.py`.
 | Variable | Type | Default | Description |
 |---|---|---|---|
 | `SCHEDULER_MAX_CATCHUP` | int | `10` | Global catch-up cap per schedule tick. |
+| `AGENT_STEP_MAX_ATTEMPTS` | int | `3` | Max in-process attempts for one `trace_id` before exhaustion. |
+| `AGENT_STEP_RETRY_BASE_SECONDS` | int | `2` | Base backoff for retryable agent-step failures. |
+| `AGENT_STEP_RETRY_MAX_SECONDS` | int | `20` | Max backoff cap for retryable agent-step failures. |
+| `AGENT_RUN_REAPER_INTERVAL_SECONDS` | int | `30` | Periodic stale-attempt recovery scan interval. |
+| `AGENT_RUN_MODEL_STALE_MIN_SECONDS` | int | `780` | Minimum stale cutoff while phase=`model.run`. |
+| `AGENT_RUN_TOOL_STALE_MIN_SECONDS` | int | `240` | Minimum stale cutoff while phase=`tool.exec`. |
+| `AGENT_RUN_FINALIZE_STALE_MIN_SECONDS` | int | `120` | Minimum stale cutoff while phase=`state.extract`/`finalize`. |
+| `AGENT_RUN_STALE_HARD_CAP_SECONDS` | int | `2700` | Absolute per-attempt runtime cap before stale recovery. |
 | `RABBITMQ_MGMT_URL` | str | `` | Optional RabbitMQ mgmt endpoint. |
 | `RABBITMQ_MGMT_USER` | str | `` | RabbitMQ mgmt username. |
 | `RABBITMQ_MGMT_PASSWORD` | str | `` | RabbitMQ mgmt password. |

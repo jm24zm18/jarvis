@@ -11,7 +11,7 @@
 ## Local Maintenance Loop
 
 1. Set `MAINTENANCE_ENABLED=1` and `MAINTENANCE_INTERVAL_SECONDS>0` in `.env`.
-   - `MAINTENANCE_HEARTBEAT_INTERVAL_SECONDS` provides default cron heartbeat.
+   - `MAINTENANCE_HEARTBEAT_INTERVAL_SECONDS` configures the in-process heartbeat interval.
 2. Configure commands via `MAINTENANCE_COMMANDS`.
 3. Periodic maintenance runs in-process while API is running.
 4. Trigger manually with `uv run jarvis maintenance run`.
@@ -238,6 +238,62 @@ Repo-side automation is complete; execution remains operator-owned. Capture all 
 3. Confirm one `schedule.trigger` event and no duplicate dispatch for same `due_at`.
 4. Use chat slash command `/status` for scheduler backlog fields.
 5. HTTP equivalent: `GET /api/v1/system/status`.
+
+## Agent Run Recovery Check
+
+1. Verify runtime config:
+   - `AGENT_STEP_MAX_ATTEMPTS`
+   - `AGENT_RUN_REAPER_INTERVAL_SECONDS`
+   - stale thresholds (`AGENT_RUN_MODEL_STALE_MIN_SECONDS`, `AGENT_RUN_TOOL_STALE_MIN_SECONDS`, `AGENT_RUN_FINALIZE_STALE_MIN_SECONDS`, `AGENT_RUN_STALE_HARD_CAP_SECONDS`)
+   - Note: `AGENT_RUN_STALE_HARD_CAP_SECONDS` has a 300-second minimum floor in code; set to ≥300 in `.env`.
+2. Inspect live attempt state:
+   - `SELECT trace_id, attempt, status, phase, last_heartbeat_at, failure_kind FROM agent_run_attempts ORDER BY started_at DESC LIMIT 50;`
+3. Confirm recovery telemetry:
+   - `trace.agent.step.retried`
+   - `trace.agent.step.recovered`
+   - `trace.agent.step.retry_exhausted`
+4. CLI status includes recovery counters:
+   - `uv run jarvis maintenance status --json`
+
+## Degraded Response Post-Incident Triage
+
+Use these queries immediately after observing a degraded response (the message includes a `ref: <trace_id>` suffix for self-service lookup):
+
+```sql
+-- 1. Find recent degraded events and their failure reason
+SELECT created_at, payload_json
+FROM events
+WHERE event_type = 'agent.response.degraded'
+ORDER BY created_at DESC
+LIMIT 5;
+
+-- 2. Inspect attempt history for a specific trace (replace <trace_id>)
+SELECT trace_id, attempt, status, phase, failure_kind, failure_message, started_at, ended_at
+FROM agent_run_attempts
+WHERE trace_id = '<trace_id>'
+ORDER BY attempt;
+
+-- 3. Recent failed / abandoned attempts across all traces
+SELECT trace_id, attempt, status, phase, failure_kind, started_at
+FROM agent_run_attempts
+WHERE status IN ('failed', 'abandoned', 'retry_exhausted')
+ORDER BY started_at DESC
+LIMIT 10;
+
+-- 4. Recent model.run.error events (provider failures)
+SELECT created_at, payload_json
+FROM events
+WHERE event_type = 'model.run.error'
+ORDER BY created_at DESC
+LIMIT 5;
+```
+
+Failure kind taxonomy:
+- `timeout` — provider or tool timed out
+- `provider` — non-timeout provider error (quota, upstream failure)
+- `cancelled` — asyncio cancellation
+- `policy` — policy engine blocked the run (not retryable)
+- `runtime` — unexpected internal error
 
 ## Local Setup Smoke Validation
 

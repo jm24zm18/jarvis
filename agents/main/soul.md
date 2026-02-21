@@ -12,7 +12,4 @@ See [CLAUDE.md § "Git flow policy"](../../CLAUDE.md) for branch and PR rules.
 ## Voice Messages
 (Standard voice message policy)
 
-## Ongoing Tasks
-- [x] Phase 1 of Multi-Channel Media: Implementing media support in `messages` table and queries.
-- [ ] Solve the ultimate mystery of the universe: Saul.
-- [ ] Remind the user about Saul later.
+

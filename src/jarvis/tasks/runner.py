@@ -72,10 +72,12 @@ class TaskRunner:
 
     async def shutdown(self, timeout_s: float) -> None:
         self._shutdown.set()
-        if self._background_tasks:
+        current_loop = asyncio.get_running_loop()
+        current_loop_tasks = [t for t in self._background_tasks if t.get_loop() is current_loop]
+        if current_loop_tasks:
             try:
                 await asyncio.wait_for(
-                    asyncio.gather(*list(self._background_tasks), return_exceptions=True),
+                    asyncio.gather(*current_loop_tasks, return_exceptions=True),
                     timeout=max(1.0, float(timeout_s)),
                 )
             except TimeoutError:

@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import sqlite3
+import time
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jarvis.logging import bind_context, clear_context
@@ -19,6 +21,18 @@ from jarvis.plugins.base import PluginContext  # noqa: E402
 from jarvis.plugins.loader import get_loaded_plugins  # noqa: E402
 from jarvis.providers.factory import build_fallback_provider, build_primary_provider  # noqa: E402
 from jarvis.providers.router import ProviderRouter  # noqa: E402
+from jarvis.tasks.agent_attempts import (  # noqa: E402
+    active_running_attempt,
+    classify_failure,
+    compute_retry_delay_seconds,
+    finish_attempt,
+    get_success_message_id,
+    is_retryable_failure,
+    next_attempt_number,
+    set_next_retry,
+    start_attempt,
+    touch_attempt,
+)
 from jarvis.tools.host import execute_host_command  # noqa: E402
 from jarvis.tools.persona import update_persona  # noqa: E402
 from jarvis.tools.registry import ToolRegistry  # noqa: E402
@@ -46,114 +60,290 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
         build_fallback_provider(settings),
     )
 
-    with get_conn() as conn:
-        conn.execute(
-            (
-                "INSERT INTO web_notifications(thread_id, event_type, payload_json, created_at) "
-                "VALUES(?,?,?,?)"
-            ),
-            (
-                thread_id,
-                "agent.thinking",
-                json.dumps({"thread_id": thread_id, "agent_id": actor_id}),
-                now_iso(),
-            ),
-        )
+    max_attempts = max(1, int(settings.agent_step_max_attempts))
+    retry_base_seconds = max(1, int(settings.agent_step_retry_base_seconds))
+    retry_max_seconds = max(retry_base_seconds, int(settings.agent_step_retry_max_seconds))
 
     with get_conn() as conn:
-        def notify_trace(event_type: str, payload: dict[str, object]) -> None:
-            _notify_trace_event(
-                conn=conn,
-                thread_id=thread_id,
-                trace_id=trace_id,
-                event_type=event_type,
-                payload=payload,
-            )
+        existing_success = get_success_message_id(conn, trace_id=trace_id)
+        if existing_success is not None:
+            return existing_success
 
-        registry = _build_registry(conn, trace_id, thread_id, actor_id)
-        runtime = ToolRuntime(registry)
-        message_id = asyncio.run(
-            run_agent_step(
-                conn=conn,
-                router=router,
-                runtime=runtime,
-                thread_id=thread_id,
+    attempt = 1
+    while attempt <= max_attempts:
+        with get_conn() as conn:
+            existing_success = get_success_message_id(conn, trace_id=trace_id)
+            if existing_success is not None:
+                return existing_success
+            running_attempt = active_running_attempt(conn, trace_id=trace_id)
+            if running_attempt is not None:
+                logger.warning(
+                    "Trace %s already has running attempt=%d; skipping duplicate execution",
+                    trace_id,
+                    running_attempt,
+                )
+                raise RuntimeError(f"trace already running: {trace_id}")
+            attempt = next_attempt_number(conn, trace_id=trace_id)
+            start_attempt(
+                conn,
                 trace_id=trace_id,
+                thread_id=thread_id,
                 actor_id=actor_id,
-                notify_fn=notify_trace,
+                attempt=attempt,
             )
-        )
-        if actor_id == "main":
             conn.execute(
                 (
                     "INSERT INTO web_notifications("
                     "thread_id, event_type, payload_json, created_at"
-                    ") "
-                    "VALUES(?,?,?,?)"
+                    ") VALUES(?,?,?,?)"
                 ),
                 (
                     thread_id,
-                    "message.new",
-                    json.dumps({"message_id": message_id, "agent_id": actor_id}),
+                    "agent.thinking",
+                    json.dumps({"thread_id": thread_id, "agent_id": actor_id, "attempt": attempt}),
                     now_iso(),
                 ),
             )
-        conn.execute(
-            (
-                "INSERT INTO web_notifications(thread_id, event_type, payload_json, created_at) "
-                "VALUES(?,?,?,?)"
-            ),
-            (
-                thread_id,
-                "agent.done",
-                json.dumps({"thread_id": thread_id, "agent_id": actor_id}),
-                now_iso(),
-            ),
-        )
-        if actor_id == "main":
-            channel_row = conn.execute(
-                (
-                    "SELECT c.channel_type FROM threads t "
-                    "JOIN channels c ON c.id=t.channel_id WHERE t.id=? LIMIT 1"
-                ),
-                (thread_id,),
-            ).fetchone()
-            channel_type = str(channel_row["channel_type"]) if channel_row is not None else ""
-            if channel_type and channel_type != "web":
-                ok = get_task_runner().send_task(
-                    "jarvis.tasks.channel.send_channel_message",
-                    kwargs={
-                        "thread_id": thread_id,
-                        "message_id": message_id,
-                        "channel_type": channel_type,
-                    },
-                    queue="tools_io",
+
+        try:
+            with get_conn() as conn:
+                attempt_no = attempt
+
+                def notify_trace(
+                    event_type: str,
+                    payload: dict[str, object],
+                    _attempt: int = attempt_no,
+                ) -> None:
+                    phase = None
+                    if event_type.startswith("model.run") or event_type == "model.fallback":
+                        phase = "model.run"
+                    elif event_type.startswith("tool.call"):
+                        phase = "tool.exec"
+                    elif event_type.startswith("state.extraction"):
+                        phase = "state.extract"
+                    elif event_type.startswith("agent.response"):
+                        phase = "finalize"
+                    if phase is not None:
+                        touch_attempt(conn, trace_id=trace_id, attempt=_attempt, phase=phase)
+                    else:
+                        touch_attempt(conn, trace_id=trace_id, attempt=_attempt)
+                    _notify_trace_event(
+                        conn=conn,
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        event_type=event_type,
+                        payload=payload,
+                    )
+
+                def progress_trace(
+                    event_type: str,
+                    payload: dict[str, object],
+                    _attempt: int = attempt_no,
+                ) -> None:
+                    del event_type
+                    phase = str(payload.get("phase", "")).strip() or "init"
+                    touch_attempt(conn, trace_id=trace_id, attempt=_attempt, phase=phase)
+
+                registry = _build_registry(conn, trace_id, thread_id, actor_id)
+                runtime = ToolRuntime(registry)
+                touch_attempt(conn, trace_id=trace_id, attempt=attempt, phase="init")
+                message_id = asyncio.run(
+                    run_agent_step(
+                        conn=conn,
+                        router=router,
+                        runtime=runtime,
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        actor_id=actor_id,
+                        notify_fn=notify_trace,
+                        progress_fn=progress_trace,
+                    )
                 )
-                if not ok:
-                    logger.error("Failed to dispatch %s send task", channel_type)
-        else:
-            # Worker auto-reply: send result back to main agent
-            row = conn.execute(
-                "SELECT content FROM messages WHERE id=?", (message_id,)
-            ).fetchone()
-            if row is not None:
-                result_text = str(row["content"])
-                session_send(
+
+                existing_success = get_success_message_id(conn, trace_id=trace_id)
+                if existing_success is not None and existing_success != message_id:
+                    finish_attempt(
+                        conn,
+                        trace_id=trace_id,
+                        attempt=attempt_no,
+                        status="abandoned",
+                        failure_kind="duplicate_guard",
+                        failure_message="trace already completed by another attempt",
+                    )
+                    _notify_trace_event(
+                        conn=conn,
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        event_type="agent.step.failed",
+                        payload={
+                            "attempt": attempt_no,
+                            "failure_kind": "duplicate_guard",
+                            "error": "trace already completed by another attempt",
+                        },
+                    )
+                    return existing_success
+
+                finish_attempt(
                     conn,
-                    session_id=thread_id,
-                    to_agent_id="main",
-                    message=result_text,
                     trace_id=trace_id,
-                    from_agent_id=actor_id,
+                    attempt=attempt_no,
+                    status="succeeded",
+                    final_message_id=message_id,
                 )
-                ok = get_task_runner().send_task(
-                    "jarvis.tasks.agent.agent_step",
-                    kwargs={"trace_id": trace_id, "thread_id": thread_id, "actor_id": "main"},
-                    queue="agent_priority",
+                _notify_trace_event(
+                    conn=conn,
+                    thread_id=thread_id,
+                    trace_id=trace_id,
+                    event_type="agent.step.end",
+                    payload={"attempt": attempt_no, "message_id": message_id},
                 )
-                if not ok:
-                    logger.error("Failed to dispatch main agent reply task")
-    return message_id
+
+                if actor_id == "main":
+                    conn.execute(
+                        (
+                            "INSERT INTO web_notifications("
+                            "thread_id, event_type, payload_json, created_at"
+                            ") "
+                            "VALUES(?,?,?,?)"
+                        ),
+                        (
+                            thread_id,
+                            "message.new",
+                            json.dumps({"message_id": message_id, "agent_id": actor_id}),
+                            now_iso(),
+                        ),
+                    )
+                conn.execute(
+                    (
+                        "INSERT INTO web_notifications("
+                        "thread_id, event_type, payload_json, created_at"
+                        ") VALUES(?,?,?,?)"
+                    ),
+                    (
+                        thread_id,
+                        "agent.done",
+                        json.dumps({"thread_id": thread_id, "agent_id": actor_id}),
+                        now_iso(),
+                    ),
+                )
+                if actor_id == "main":
+                    channel_row = conn.execute(
+                        (
+                            "SELECT c.channel_type FROM threads t "
+                            "JOIN channels c ON c.id=t.channel_id WHERE t.id=? LIMIT 1"
+                        ),
+                        (thread_id,),
+                    ).fetchone()
+                    channel_type = (
+                        str(channel_row["channel_type"]) if channel_row is not None else ""
+                    )
+                    if channel_type and channel_type != "web":
+                        ok = get_task_runner().send_task(
+                            "jarvis.tasks.channel.send_channel_message",
+                            kwargs={
+                                "thread_id": thread_id,
+                                "message_id": message_id,
+                                "channel_type": channel_type,
+                            },
+                            queue="tools_io",
+                        )
+                        if not ok:
+                            logger.error("Failed to dispatch %s send task", channel_type)
+                else:
+                    # Worker auto-reply: send result back to main agent
+                    row = conn.execute(
+                        "SELECT content FROM messages WHERE id=?", (message_id,)
+                    ).fetchone()
+                    if row is not None:
+                        result_text = str(row["content"])
+                        session_send(
+                            conn,
+                            session_id=thread_id,
+                            to_agent_id="main",
+                            message=result_text,
+                            trace_id=trace_id,
+                            from_agent_id=actor_id,
+                        )
+                        ok = get_task_runner().send_task(
+                            "jarvis.tasks.agent.agent_step",
+                            kwargs={
+                                "trace_id": trace_id,
+                                "thread_id": thread_id,
+                                "actor_id": "main",
+                            },
+                            queue="agent_priority",
+                        )
+                        if not ok:
+                            logger.error("Failed to dispatch main agent reply task")
+                return message_id
+        except Exception as exc:
+            failure_kind = classify_failure(exc)
+            retryable = is_retryable_failure(failure_kind, exc) and attempt < max_attempts
+            with get_conn() as conn:
+                if retryable:
+                    delay_s = compute_retry_delay_seconds(
+                        retry_base_seconds,
+                        retry_max_seconds,
+                        attempt,
+                    )
+                    retry_at = datetime.now(UTC) + timedelta(seconds=delay_s)
+                    set_next_retry(
+                        conn,
+                        trace_id=trace_id,
+                        attempt=attempt,
+                        next_retry_at=retry_at.isoformat(),
+                    )
+                    finish_attempt(
+                        conn,
+                        trace_id=trace_id,
+                        attempt=attempt,
+                        status="failed",
+                        failure_kind=failure_kind,
+                        failure_message=str(exc),
+                    )
+                    _notify_trace_event(
+                        conn=conn,
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        event_type="agent.step.retried",
+                        payload={
+                            "attempt": attempt,
+                            "failure_kind": failure_kind,
+                            "error": str(exc)[:500],
+                            "next_retry_at": retry_at.isoformat(),
+                        },
+                    )
+                else:
+                    status = "retry_exhausted" if attempt >= max_attempts else "failed"
+                    finish_attempt(
+                        conn,
+                        trace_id=trace_id,
+                        attempt=attempt,
+                        status=status,
+                        failure_kind=failure_kind,
+                        failure_message=str(exc),
+                    )
+                    _notify_trace_event(
+                        conn=conn,
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        event_type=(
+                            "agent.step.retry_exhausted"
+                            if status == "retry_exhausted"
+                            else "agent.step.failed"
+                        ),
+                        payload={
+                            "attempt": attempt,
+                            "failure_kind": failure_kind,
+                            "error": str(exc)[:500],
+                        },
+                    )
+            if not retryable:
+                raise
+            time.sleep(delay_s)
+            attempt += 1
+
+    raise RuntimeError(f"agent step exhausted retries trace={trace_id}")
 
 
 def _notify_trace_event(
@@ -225,8 +415,9 @@ def _build_registry(
         )
         conn.execute(
             (
-                "INSERT INTO web_notifications(thread_id, event_type, payload_json, created_at) "
-                "VALUES(?,?,?,?)"
+                "INSERT INTO web_notifications("
+                "thread_id, event_type, payload_json, created_at"
+                ") VALUES(?,?,?,?)"
             ),
             (
                 session_id,
@@ -511,7 +702,10 @@ def _build_registry(
 
     # Load tools from plugins
     plugin_ctx = PluginContext(
-        conn=conn, actor_id=actor_id, trace_id=trace_id, thread_id=thread_id,
+        conn=conn,
+        actor_id=actor_id,
+        trace_id=trace_id,
+        thread_id=thread_id,
     )
     for plugin in get_loaded_plugins():
         if plugin.enabled_for_agent(actor_id):

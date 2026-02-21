@@ -32,6 +32,7 @@ uv run pytest tests/integration/test_whatsapp_webhook.py -v
 uv run pytest tests/unit/test_whatsapp_media_security.py -v
 uv run pytest tests/unit/test_whatsapp_transcription.py -v
 uv run pytest tests/integration/test_admin_api.py -v
+uv run pytest tests/unit/test_agent_recovery.py -v
 ```
 
 ## CI Test Pipeline

@@ -42,6 +42,11 @@ PLACEHOLDER_RESPONSE = "I can help with that."
 DEGRADED_RESPONSE = (
     "I hit an internal response issue while processing that request. Please try again."
 )
+
+
+def _degraded_response_msg(trace_id: str) -> str:
+    """Return the degraded response with a trace ref for self-service debugging."""
+    return f"{DEGRADED_RESPONSE} (ref: {trace_id})"
 IDENTITY_POLICY = (
     "Response policy:\n"
     "- Never say you are an AI, language model, chatbot, or similar.\n"
@@ -426,6 +431,7 @@ async def run_agent_step(
     trace_id: str,
     actor_id: str = "main",
     notify_fn: Callable[[str, dict[str, object]], None] | None = None,
+    progress_fn: Callable[[str, dict[str, object]], None] | None = None,
 ) -> str:
     settings = get_settings()
     admin_ids = {item.strip() for item in settings.admin_whatsapp_ids.split(",") if item.strip()}
@@ -477,6 +483,8 @@ async def run_agent_step(
             admin_ids=admin_ids,
         )
         if command_result is not None:
+            if progress_fn is not None:
+                progress_fn("phase", {"phase": "finalize", "reason": "command.short_path"})
             command_message_id = insert_message(conn, thread_id, "assistant", command_result)
             _enqueue_memory_index(
                 trace_id=trace_id,
@@ -512,6 +520,8 @@ async def run_agent_step(
     memory = MemoryService()
     summaries = memory.thread_summary(conn, thread_id)
     state_store = StateStore()
+    if progress_fn is not None:
+        progress_fn("phase", {"phase": "state.extract"})
     if int(settings.state_extraction_enabled) == 1:
         try:
             extraction_result = await extract_state_items(
@@ -734,6 +744,8 @@ async def run_agent_step(
     tool_iteration_exhausted = False
     degraded_reason: str | None = None
     for step_idx in range(MAX_TOOL_ITERATIONS + 1):
+        if progress_fn is not None:
+            progress_fn("phase", {"phase": "model.run", "iteration": step_idx})
         if notify_fn is not None:
             notify_fn("model.run.start", {"iteration": step_idx})
         emit_event(
@@ -782,7 +794,7 @@ async def run_agent_step(
                     payload_redacted_json=json.dumps(redact_payload(run_error_payload)),
                 ),
             )
-            final_text = DEGRADED_RESPONSE
+            final_text = _degraded_response_msg(trace_id)
             lane = "degraded"
             break
         run_end_payload: dict[str, object] = {"iteration": step_idx, "lane": lane}
@@ -945,6 +957,11 @@ async def run_agent_step(
             tool_name = str(tool_call.get("name", ""))
             raw_args = tool_call.get("arguments", {})
             arguments = raw_args if isinstance(raw_args, dict) else {}
+            if progress_fn is not None:
+                progress_fn(
+                    "phase",
+                    {"phase": "tool.exec", "iteration": step_idx, "tool": tool_name},
+                )
             if notify_fn is not None:
                 notify_fn(
                     "tool.call.start",
@@ -1245,7 +1262,7 @@ async def run_agent_step(
         if reason == "placeholder_response_after_tool_loop":
             final_text = _tool_loop_terminal_fallback_message(trace_id)
         else:
-            final_text = DEGRADED_RESPONSE
+            final_text = _degraded_response_msg(trace_id)
         degraded_payload: dict[str, object] = {
             "reason": reason,
             "actor_id": actor_id,
@@ -1269,6 +1286,8 @@ async def run_agent_step(
         )
 
     message_role = "assistant" if actor_id == "main" else "agent"
+    if progress_fn is not None:
+        progress_fn("phase", {"phase": "finalize"})
     message_id = insert_message(conn, thread_id, message_role, final_text)
     _enqueue_memory_index(
         trace_id=trace_id,

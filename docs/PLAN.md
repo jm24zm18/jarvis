@@ -78,6 +78,39 @@ _Last updated: 2026-02-20 (Packet 9: framework audit + multi-channel media Phase
   - Run full quality gate sweep (`make test-gates`) with this pairing-route behavior change and
     attach evidence in PR notes.
 
+## Execution Update (2026-02-21, System Audit Improvements)
+
+- Root-cause investigation of user-visible "internal response issue" (`DEGRADED_RESPONSE` constant)
+  confirmed as provider failure → terminal synthesis failure path in `step.py`.
+- Implemented audit improvements:
+  - `_degraded_response_msg(trace_id)` now embeds `ref: <trace_id>` in the user-visible degraded
+    message for self-service post-incident lookup.
+  - `memory.write.rejected` event emitted by `MemoryService.write()` when governance blocks a write
+    (missing evidence ref or scope violation), making write rejections explicitly queryable in the events
+    table (supplements the existing `memory.policy.denial` event).
+  - Post-incident triage queries added to `docs/runbook.md` under "Degraded Response Post-Incident
+    Triage" with SQL for `agent.response.degraded` events, attempt history, and failure taxonomy.
+  - `src/jarvis/runtime/__init__.py` placeholder documented (reserved for future sandboxing).
+  - BK-067 and BK-068 added to consolidated backlog.
+- Confirmed no config mismatch: `AGENT_RUN_STALE_HARD_CAP_SECONDS` default is 2700 in both
+  `config.py` and `.env.example`; code uses `max(300, config_value)` as a minimum floor only.
+
+## Execution Update (2026-02-21, Agent Run Reliability)
+
+- Discovered missing task: agent traces could terminate after `agent.thought` without terminal lifecycle
+  completion (`agent.step.end` absent), causing user-facing stalls and no deterministic retry path.
+- Implemented task scope:
+  - Added durable attempt ledger table `agent_run_attempts` (migration `060_agent_run_attempts.sql`).
+  - Added phase-aware attempt heartbeats from orchestrator (`state.extract`, `model.run`, `tool.exec`,
+    `finalize`) and bounded in-process retry in `agent_step`.
+  - Added stale-attempt recovery task (`jarvis.tasks.agent_recovery.reap_stale_agent_runs`) scheduled by
+    periodic scheduler with trace recovery telemetry.
+  - Added trace-scoped dedupe guard so only one successful attempt publishes per `trace_id`.
+  - Added targeted unit coverage in `tests/unit/test_agent_recovery.py`.
+- Remaining tasks before handoff:
+  - Run full quality gate sweep (`make test-gates`) and docs validation (`make docs-check`) with new
+    migration + recovery task behavior.
+
 ## Security Audit Update (2026-02-18)
 
 Source: `docs/security-audit-2026-02-18.md` (dev @ `b9a4e1447282ec8a0d67fdd22e8591b7c2b7adc4`)
@@ -200,6 +233,8 @@ Dependencies: M3
 | BK-065 | Documentation + Ops Hardening | Add FEATURE_BUILDER_PROMPT.md and DOCS_AGENT_PROMPT.md to docs/prompts/ | done | P2 | docs_keeper | `docs/prompts/FEATURE_BUILDER_PROMPT.md`; `docs/prompts/DOCS_AGENT_PROMPT.md`; `docs/prompts/README.md` updated |
 | BK-066 | Governance + Safety | Self-update guardrail defaults: bound `max_files_per_patch`, `max_risk_score`, `max_patch_attempts_per_day`, `max_prs_per_day` | done | P1 | api_guardian | `SELFUPDATE_MAX_FILES_PER_PATCH=20`, `SELFUPDATE_MAX_RISK_SCORE=100`, `SELFUPDATE_MAX_PATCH_ATTEMPTS_PER_DAY=10`, `SELFUPDATE_MAX_PRS_PER_DAY=5` added to `config.py` and `.env.example`; prevents runaway self-update loops |
 | BK-035 | Governance + Safety | Release-candidate hardening (changelog artifact + runbook evidence) | partial | P1 | release_candidate | `uv run pytest tests/unit/test_governance_tasks.py -v` |
+| BK-067 | Foundation + Observability | Agent run reliability: durable attempt ledger, phase-aware heartbeats, stale-run reaper, dedupe guard | done | P0 | api_guardian | migration `060_agent_run_attempts.sql`; `tests/unit/test_agent_recovery.py`; `AGENT_STEP_MAX_ATTEMPTS`, `AGENT_RUN_REAPER_INTERVAL_SECONDS` config flags; `make test` |
+| BK-068 | Foundation + Observability | Audit improvements: trace_id in degraded response, memory.write.rejected event, post-incident triage runbook | done | P1 | api_guardian | `_degraded_response_msg(trace_id)` in `step.py`; `memory.write.rejected` event emitted in `service.py`; triage queries in `docs/runbook.md`; `uv run pytest tests/unit/test_orchestrator_step.py -k degraded -v`; `uv run pytest tests/unit/test_memory_service.py -v` |
 | BK-036 | Memory Intelligence + Retrieval | Memory admin UI completion (conflicts, tier/archive stats, failure lookup, graph preview) | done | P1 | web_builder | `cd web && npm test` (`web/tests/adminMemoryContracts.test.mjs`) + `uv run pytest tests/integration/test_memory_api_state_surfaces.py -v` |
 | BK-037 | Governance + Safety | Enforce admin-only WS system subscription (`subscribe_system`) and add regression tests | done | P0 | security_reviewer | `uv run pytest tests/integration/test_authorization.py -k websocket -v` |
 | BK-038 | Governance + Safety | Web auth hardening: remove WS query-token transport + replace persistent browser token storage model | done | P0 | api_guardian | `uv run pytest tests/integration/test_websocket.py -v`; `uv run pytest tests/integration/test_authorization.py -k websocket -v`; manual login/session regression |

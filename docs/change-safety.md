@@ -14,6 +14,7 @@
 - WhatsApp inbound processing must not return `500` when `whatsapp_thread_map` contains stale
   mappings; stale rows must be pruned/remapped before `messages` insert.
 - Memory state reads/writes must enforce thread-scoped active-agent boundaries and emit governance denials on blocked mutation attempts.
+- Every `agent.step.start` must resolve to a terminal attempt status in `agent_run_attempts`; stale `running` attempts must be recoverable without duplicating final assistant publication for the same trace.
 
 ## High-Risk Files
 

@@ -67,6 +67,24 @@ class Settings(BaseSettings):
         alias="TASK_RUNNER_SHUTDOWN_TIMEOUT_SECONDS",
         default=30,
     )
+    agent_step_max_attempts: int = Field(alias="AGENT_STEP_MAX_ATTEMPTS", default=3)
+    agent_step_retry_base_seconds: int = Field(alias="AGENT_STEP_RETRY_BASE_SECONDS", default=2)
+    agent_step_retry_max_seconds: int = Field(alias="AGENT_STEP_RETRY_MAX_SECONDS", default=20)
+    agent_run_reaper_interval_seconds: int = Field(
+        alias="AGENT_RUN_REAPER_INTERVAL_SECONDS", default=30
+    )
+    agent_run_model_stale_min_seconds: int = Field(
+        alias="AGENT_RUN_MODEL_STALE_MIN_SECONDS", default=780
+    )
+    agent_run_tool_stale_min_seconds: int = Field(
+        alias="AGENT_RUN_TOOL_STALE_MIN_SECONDS", default=240
+    )
+    agent_run_finalize_stale_min_seconds: int = Field(
+        alias="AGENT_RUN_FINALIZE_STALE_MIN_SECONDS", default=120
+    )
+    agent_run_stale_hard_cap_seconds: int = Field(
+        alias="AGENT_RUN_STALE_HARD_CAP_SECONDS", default=2700
+    )
     restart_command: str = Field(alias="RESTART_COMMAND", default="")
     lockdown_readyz_fail_threshold: int = Field(alias="LOCKDOWN_READYZ_FAIL_THRESHOLD", default=3)
     lockdown_rollback_threshold: int = Field(alias="LOCKDOWN_ROLLBACK_THRESHOLD", default=2)

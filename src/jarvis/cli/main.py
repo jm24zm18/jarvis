@@ -438,6 +438,19 @@ def _maintenance_status_payload() -> dict[str, object]:
             "WHERE title LIKE 'Local maintenance check failed:%' "
             "ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
+        run_stats_row = conn.execute(
+            "SELECT "
+            "SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) AS running_count, "
+            "SUM(CASE WHEN status='retry_exhausted' THEN 1 ELSE 0 END) AS exhausted_count, "
+            "SUM(CASE WHEN status='abandoned' AND failure_kind='stale_timeout' "
+            "THEN 1 ELSE 0 END) AS stale_abandoned_count "
+            "FROM agent_run_attempts"
+        ).fetchone()
+        recoveries_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM events "
+            "WHERE event_type='agent.step.recovered' "
+            "AND created_at >= datetime('now', '-24 hours')"
+        ).fetchone()
 
     latest: dict[str, str] | None = None
     if latest_row is not None:
@@ -466,6 +479,19 @@ def _maintenance_status_payload() -> dict[str, object]:
         "commands": commands,
         "periodic_scheduler_active": is_periodic_scheduler_configured(),
         "last_heartbeat": last_heartbeat,
+        "agent_run_reaper_interval_seconds": int(settings.agent_run_reaper_interval_seconds),
+        "agent_run_stats": {
+            "running": int(run_stats_row["running_count"] or 0) if run_stats_row is not None else 0,
+            "retry_exhausted": (
+                int(run_stats_row["exhausted_count"] or 0) if run_stats_row is not None else 0
+            ),
+            "stale_abandoned": (
+                int(run_stats_row["stale_abandoned_count"] or 0) if run_stats_row is not None else 0
+            ),
+            "recovered_last_24h": (
+                int(recoveries_row["c"] or 0) if recoveries_row is not None else 0
+            ),
+        },
         "open_maintenance_bugs": int(open_count_row["cnt"]) if open_count_row is not None else 0,
         "latest_maintenance_bug": latest,
     }
@@ -492,6 +518,16 @@ def maintenance_status(json_output: bool) -> None:
     for command in commands:
         click.echo(f"  - {command}")
     click.echo(f"periodic_scheduler_active: {payload['periodic_scheduler_active']}")
+    click.echo(f"agent_run_reaper_interval_seconds: {payload['agent_run_reaper_interval_seconds']}")
+    agent_run_stats = payload.get("agent_run_stats")
+    if isinstance(agent_run_stats, dict):
+        click.echo(
+            "agent_run_stats: "
+            f"running={agent_run_stats.get('running')} "
+            f"recovered_last_24h={agent_run_stats.get('recovered_last_24h')} "
+            f"stale_abandoned={agent_run_stats.get('stale_abandoned')} "
+            f"retry_exhausted={agent_run_stats.get('retry_exhausted')}"
+        )
     last_heartbeat = payload.get("last_heartbeat")
     if isinstance(last_heartbeat, dict):
         click.echo(
