@@ -32,6 +32,7 @@ Auth levels:
 | `POST` | `/api/v1/channels/whatsapp/disconnect` | `admin` | `whatsapp_disconnect_api_v1_channels_whatsapp_disconnect_post` | `-` | `200, 422` |
 | `POST` | `/api/v1/channels/whatsapp/pairing-code` | `admin` | `whatsapp_pairing_code_api_v1_channels_whatsapp_pairing_code_post` | `application/json` | `200, 422` |
 | `GET` | `/api/v1/channels/whatsapp/qrcode` | `admin` | `whatsapp_qrcode_api_v1_channels_whatsapp_qrcode_get` | `-` | `200, 422` |
+| `POST` | `/api/v1/channels/whatsapp/reset` | `admin` | `whatsapp_reset_api_v1_channels_whatsapp_reset_post` | `-` | `200, 422` |
 | `GET` | `/api/v1/channels/whatsapp/review-queue` | `admin` | `whatsapp_review_queue_api_v1_channels_whatsapp_review_queue_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/channels/whatsapp/review-queue/{review_id}/resolve` | `admin` | `whatsapp_resolve_review_item_api_v1_channels_whatsapp_review_queue__review_id__resolve_post` | `application/json` | `200, 422` |
 | `GET` | `/api/v1/channels/whatsapp/status` | `admin` | `whatsapp_status_api_v1_channels_whatsapp_status_get` | `-` | `200, 422` |
@@ -120,12 +121,12 @@ Auth levels:
 
 - `title`: `Jarvis Agent Framework`
 - `version`: `0.1.0`
-- `path_count`: `87`
+- `path_count`: `88`
 
 ```json
 {
   "title": "Jarvis Agent Framework",
   "version": "0.1.0",
-  "path_count": 87
+  "path_count": 88
 }
 ```

@@ -286,6 +286,11 @@ def get_thread_by_whatsapp_remote(
     return str(row["thread_id"]) if row is not None else None
 
 
+def thread_exists(conn: sqlite3.Connection, thread_id: str) -> bool:
+    row = conn.execute("SELECT 1 FROM threads WHERE id=? LIMIT 1", (thread_id,)).fetchone()
+    return row is not None
+
+
 def upsert_whatsapp_thread_map(
     conn: sqlite3.Connection,
     *,
@@ -306,6 +311,14 @@ def upsert_whatsapp_thread_map(
         ),
         (thread_id, instance, remote_jid, participant_jid, now, now),
     )
+
+
+def prune_whatsapp_thread_map_orphans(conn: sqlite3.Connection) -> int:
+    cursor = conn.execute(
+        "DELETE FROM whatsapp_thread_map "
+        "WHERE thread_id NOT IN (SELECT id FROM threads)"
+    )
+    return int(cursor.rowcount or 0)
 
 
 def upsert_whatsapp_instance(

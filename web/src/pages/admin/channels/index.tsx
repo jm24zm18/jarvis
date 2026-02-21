@@ -10,6 +10,7 @@ import {
   whatsappDisconnect,
   whatsappPairingCode,
   whatsappQrCode,
+  whatsappReset,
   whatsappStatus,
   telegramStatus,
 } from "../../../api/endpoints";
@@ -23,10 +24,13 @@ export default function AdminChannelsPage() {
     refetchInterval: 3000,
   });
 
+  const status = String(statusQuery.data?.status ?? (statusQuery.data?.payload as Record<string, unknown> | undefined)?.state ?? "unknown");
+
   const qrQuery = useQuery({
     queryKey: ["whatsapp-qr"],
     queryFn: whatsappQrCode,
-    enabled: false,
+    enabled: status === "qr",
+    refetchInterval: status === "qr" ? 2000 : false,
   });
 
   const tgQuery = useQuery({
@@ -36,6 +40,13 @@ export default function AdminChannelsPage() {
   });
 
   const createMutation = useMutation({ mutationFn: whatsappCreate, onSuccess: () => void statusQuery.refetch() });
+  const resetMutation = useMutation({
+    mutationFn: whatsappReset,
+    onSuccess: () => {
+      void statusQuery.refetch();
+      void qrQuery.refetch();
+    },
+  });
   const disconnectMutation = useMutation({
     mutationFn: whatsappDisconnect,
     onSuccess: () => {
@@ -44,9 +55,8 @@ export default function AdminChannelsPage() {
     },
   });
   const pairMutation = useMutation({ mutationFn: () => whatsappPairingCode(pairNumber) });
-
-  const status = String(statusQuery.data?.status ?? (statusQuery.data?.payload as Record<string, unknown> | undefined)?.state ?? "unknown");
   const qr = String(qrQuery.data?.qrcode ?? "");
+  const canGeneratePairingCode = status === "qr" && pairNumber.trim().length > 0;
 
   const tgEnabled = Boolean(tgQuery.data?.enabled);
   const tgToken = Boolean(tgQuery.data?.token_configured);
@@ -86,6 +96,9 @@ export default function AdminChannelsPage() {
           <Button variant="secondary" onClick={() => void qrQuery.refetch()}>
             Load QR
           </Button>
+          <Button variant="secondary" onClick={() => resetMutation.mutate()} disabled={resetMutation.isPending}>
+            Force Re-pair
+          </Button>
           <Button variant="secondary" onClick={() => disconnectMutation.mutate()} disabled={disconnectMutation.isPending}>
             Disconnect
           </Button>
@@ -101,13 +114,19 @@ export default function AdminChannelsPage() {
             placeholder="15555550123"
           />
           <div className="flex items-end">
-            <Button onClick={() => pairMutation.mutate()} disabled={pairMutation.isPending || !pairNumber.trim()}>
+            <Button onClick={() => pairMutation.mutate()} disabled={pairMutation.isPending || !canGeneratePairingCode}>
               Generate
             </Button>
           </div>
           <div className="flex items-end">
             <div className="rounded border border-[var(--border-default)] px-3 py-2 text-sm text-[var(--text-secondary)]">
-              {String(pairMutation.data?.code ?? "-")}
+              {pairMutation.isPending
+                ? "Generating..."
+                : pairMutation.isError
+                  ? `Error: ${String((pairMutation.error as Error)?.message ?? "unknown")}`
+                  : status !== "qr"
+                    ? `QR not ready (state: ${status}). Initialize connection and wait for QR.`
+                  : String(pairMutation.data?.code ?? "-")}
             </div>
           </div>
         </div>

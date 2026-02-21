@@ -11,6 +11,8 @@
 - Self-update validation must preserve deterministic replay from the captured `baseline_ref`.
 - Self-update propose path must reject governance-key mutations in `agents/*/identity.md` (`allowed_tools`, `risk_tier`, `max_actions_per_step`, `allowed_paths`, `can_request_privileged_change`).
 - Persisted webhook/event logs must redact QR and pairing-code fields in `payload_redacted_json`.
+- WhatsApp inbound processing must not return `500` when `whatsapp_thread_map` contains stale
+  mappings; stale rows must be pruned/remapped before `messages` insert.
 - Memory state reads/writes must enforce thread-scoped active-agent boundaries and emit governance denials on blocked mutation attempts.
 
 ## High-Risk Files

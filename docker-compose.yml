@@ -25,7 +25,11 @@ services:
       - "8081:8081"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    tmpfs:
-      - /tmp/auth
+    volumes:
+      - jarvis-baileys-auth:/tmp/auth
     environment:
       - API_KEY=${EVOLUTION_API_KEY}
+      - WEBHOOK_URL=http://host.docker.internal:8000/webhooks/whatsapp
+
+volumes:
+  jarvis-baileys-auth:

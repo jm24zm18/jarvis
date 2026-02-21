@@ -27,7 +27,12 @@ from jarvis.channels.whatsapp.router import router as whatsapp_router
 from jarvis.config import get_settings, validate_settings_for_env
 from jarvis.db.connection import get_conn
 from jarvis.db.migrations.runner import run_migrations
-from jarvis.db.queries import ensure_root_user, ensure_system_state, upsert_whatsapp_instance
+from jarvis.db.queries import (
+    ensure_root_user,
+    ensure_system_state,
+    prune_whatsapp_thread_map_orphans,
+    upsert_whatsapp_instance,
+)
 from jarvis.logging import configure_logging
 from jarvis.memory.service import MemoryService
 from jarvis.repo_index import write_repo_index
@@ -93,6 +98,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     except RuntimeError as exc:
         logger.warning("Agent bundle load skipped at startup: %s", exc)
     with get_conn() as conn:
+        pruned = prune_whatsapp_thread_map_orphans(conn)
+        if pruned > 0:
+            logger.info("Pruned %d stale whatsapp_thread_map rows", pruned)
         ensure_system_state(conn)
         root_user_id = ensure_root_user(conn)
         logger.info("Root user ready: %s", root_user_id)

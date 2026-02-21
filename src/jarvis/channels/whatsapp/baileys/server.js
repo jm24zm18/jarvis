@@ -129,6 +129,11 @@ async function connectToWhatsApp() {
         });
 
         sock.ev.on('messages.upsert', async m => {
+            // Only forward real-time messages; skip history-sync (type: "append")
+            if (m.type !== 'notify') {
+                logger.info(`Skipping messages.upsert type=${m.type}`);
+                return;
+            }
             logger.info(`Received messages.upsert: ${JSON.stringify(m).substring(0, 500)}`);
             try {
                 const resp = await fetch(WEBHOOK_URL, {
@@ -161,6 +166,46 @@ app.post("/start", async (req, res) => {
     if (connectionState === "open") {
         return res.json({ state: "open" });
     }
+    // Cancel any pending reconnect and close stale socket
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    if (sock) {
+        try {
+            sock.ev.removeAllListeners();
+            sock.ws?.close();
+        } catch (e) { }
+        sock = null;
+    }
+    isConnecting = false;
+    // Only clear auth if no saved credentials exist — don't force re-pair unnecessarily
+    const credsPath = path.join(AUTH_DIR, 'creds.json');
+    if (!fs.existsSync(credsPath)) {
+        forceClearAuth();
+    }
+    connectToWhatsApp();
+    res.json({ state: "connecting" });
+});
+
+// Force a full re-pair by clearing saved credentials, then reconnect
+app.post("/reset", async (req, res) => {
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    if (sock) {
+        try {
+            sock.ev.removeAllListeners();
+            sock.ws?.close();
+        } catch (e) { }
+        sock = null;
+    }
+    isConnecting = false;
+    connectionState = "close";
+    currentQr = null;
+    currentPairingCode = null;
+    forceClearAuth();
     connectToWhatsApp();
     res.json({ state: "connecting" });
 });
@@ -191,17 +236,23 @@ app.post("/pair", async (req, res) => {
     try {
         if (!sock && !isConnecting) connectToWhatsApp();
 
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(number);
-                currentPairingCode = code;
-            } catch (e) {
-                logger.error(`Pairing error: ${e.message}`);
-            }
-        }, 2000);
+        // Wait for Baileys to reach QR state (registration phase complete) — up to 15s
+        const deadline = Date.now() + 15000;
+        while (connectionState !== "qr" && connectionState !== "open" && Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 200));
+        }
+        if (connectionState === "open") {
+            return res.status(400).json({ error: "Already connected" });
+        }
+        if (connectionState !== "qr") {
+            return res.status(503).json({ error: "QR state not reached — click Initialize Connection first" });
+        }
 
-        res.json({ code: "requested..." });
+        const code = await sock.requestPairingCode(number);
+        currentPairingCode = code;
+        res.json({ code });
     } catch (e) {
+        logger.error(`Pairing error: ${e.message}`);
         res.status(500).json({ error: e.message });
     }
 });

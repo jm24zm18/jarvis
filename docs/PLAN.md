@@ -51,6 +51,33 @@ Tier flow: `working -> episodic -> semantic/procedural`, with low-importance sta
 
 _Last updated: 2026-02-20 (Packet 9: framework audit + multi-channel media Phase 1)_
 
+## Execution Update (2026-02-21)
+
+- Discovered missing task: WhatsApp webhook reliability gap where stale
+  `whatsapp_thread_map.thread_id` values could trigger `sqlite3.IntegrityError`
+  (`FOREIGN KEY constraint failed`) and return `500` for inbound `messages.upsert`.
+- Implemented task scope:
+  - Runtime auto-heal in webhook path: detect stale mapping, emit degraded event, prune orphan
+    map rows, remap to a valid thread, continue processing.
+  - Startup hygiene: prune orphan `whatsapp_thread_map` rows during API lifespan boot.
+  - Regression coverage: integration test for stale-map healing + unit test for prune helper.
+- Remaining tasks before handoff:
+  - Run full quality gate sweep (`make test-gates`) and attach results in PR evidence notes.
+
+## Execution Update (2026-02-21, Pairing UX/API)
+
+- Discovered missing task: `/api/v1/channels/whatsapp/pairing-code` returned HTTP `200` even
+  when Baileys returned upstream `503` (`QR state not reached`), causing misleading admin UI success.
+- Implemented task scope:
+  - API now propagates upstream pairing HTTP errors and detail payloads (including explicit
+    `qr_not_ready` detail mapping for the QR-state race condition).
+  - Admin Channels UI now disables pairing-code generation unless status is `qr` and shows
+    explicit guidance when QR is not ready.
+  - Added integration regression for upstream `503` propagation path.
+- Remaining tasks before handoff:
+  - Run full quality gate sweep (`make test-gates`) with this pairing-route behavior change and
+    attach evidence in PR notes.
+
 ## Security Audit Update (2026-02-18)
 
 Source: `docs/security-audit-2026-02-18.md` (dev @ `b9a4e1447282ec8a0d67fdd22e8591b7c2b7adc4`)

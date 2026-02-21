@@ -123,6 +123,13 @@ class BaileysClient:
             response = await client.post(url, headers=self._headers())
         return response.status_code, self._safe_json(response)
 
+    async def reset_instance(self) -> tuple[int, dict[str, Any]]:
+        """Force a full re-pair by clearing saved credentials then reconnecting."""
+        url = f"{self._base_url}/reset"
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(url, headers=self._headers())
+        return response.status_code, self._safe_json(response)
+
     async def status(self) -> tuple[int, dict[str, Any]]:
         url = f"{self._base_url}/status"
         async with httpx.AsyncClient(timeout=20) as client:

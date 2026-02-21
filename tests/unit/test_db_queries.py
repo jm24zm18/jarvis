@@ -7,6 +7,7 @@ from jarvis.db.queries import (
     ensure_user,
     get_channel_outbound,
     insert_message,
+    prune_whatsapp_thread_map_orphans,
 )
 from jarvis.ids import new_id
 
@@ -68,3 +69,55 @@ def test_ensure_open_thread_unification_across_channels() -> None:
     assert thread_id_1 == thread_id_2, (
         "ensure_open_thread should return the same thread for a user regardless of channel"
     )
+
+
+def test_prune_whatsapp_thread_map_orphans_removes_missing_threads() -> None:
+    with get_conn() as conn:
+        user_id = ensure_user(conn, f"wa_map_orphan_test_{new_id('usr')}")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        valid_thread_id = ensure_open_thread(conn, user_id, channel_id)
+
+        conn.execute(
+            (
+                "INSERT INTO whatsapp_thread_map("
+                "thread_id, instance, remote_jid, participant_jid, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?)"
+            ),
+            (
+                valid_thread_id,
+                "personal",
+                "15550001111@s.whatsapp.net",
+                "",
+                "2026-02-21T00:00:00+00:00",
+                "2026-02-21T00:00:00+00:00",
+            ),
+        )
+
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            (
+                "INSERT INTO whatsapp_thread_map("
+                "thread_id, instance, remote_jid, participant_jid, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?)"
+            ),
+            (
+                "thr_missing_orphan",
+                "personal",
+                "15550002222@s.whatsapp.net",
+                "",
+                "2026-02-21T00:00:00+00:00",
+                "2026-02-21T00:00:00+00:00",
+            ),
+        )
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        removed = prune_whatsapp_thread_map_orphans(conn)
+        rows = conn.execute(
+            "SELECT remote_jid, thread_id FROM whatsapp_thread_map "
+            "ORDER BY remote_jid ASC"
+        ).fetchall()
+
+    assert removed == 1
+    assert len(rows) == 1
+    assert str(rows[0]["remote_jid"]) == "15550001111@s.whatsapp.net"
+    assert str(rows[0]["thread_id"]) == valid_thread_id
