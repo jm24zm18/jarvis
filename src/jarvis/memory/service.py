@@ -1141,7 +1141,15 @@ class MemoryService:
             embedding = [float(item) for item in decoded if isinstance(item, int | float)]
             if not embedding:
                 continue
-            self._upsert_memory_vec_index_raw(conn, str(row["memory_id"]), embedding)
+            try:
+                self._upsert_memory_vec_index_raw(conn, str(row["memory_id"]), embedding)
+            except sqlite3.IntegrityError:
+                logger.debug(
+                    "memory vector backfill upsert conflict for memory_id=%s",
+                    str(row["memory_id"]),
+                    exc_info=True,
+                )
+                continue
 
     def _backfill_event_vec_runtime(self, conn: sqlite3.Connection) -> None:
         try:
@@ -1173,7 +1181,15 @@ class MemoryService:
             if not embedding:
                 continue
             thread_id = str(row["thread_id"]) if row["thread_id"] is not None else None
-            self._upsert_event_vec_index_raw(conn, str(row["id"]), thread_id, embedding)
+            try:
+                self._upsert_event_vec_index_raw(conn, str(row["id"]), thread_id, embedding)
+            except sqlite3.IntegrityError:
+                logger.debug(
+                    "event vector backfill upsert conflict for event_id=%s",
+                    str(row["id"]),
+                    exc_info=True,
+                )
+                continue
 
     def _upsert_memory_vec_index(
         self, conn: sqlite3.Connection, memory_id: str, embedding: list[float]
@@ -1185,20 +1201,17 @@ class MemoryService:
     def _upsert_memory_vec_index_raw(
         self, conn: sqlite3.Connection, memory_id: str, embedding: list[float]
     ) -> None:
+        conn.execute(
+            f"INSERT OR IGNORE INTO {self.MEMORY_VEC_INDEX_MAP_TABLE}(memory_id) VALUES(?)",
+            (memory_id,),
+        )
         row = conn.execute(
             f"SELECT vec_rowid FROM {self.MEMORY_VEC_INDEX_MAP_TABLE} WHERE memory_id=?",
             (memory_id,),
         ).fetchone()
         if row is None:
-            cursor = conn.execute(
-                f"INSERT INTO {self.MEMORY_VEC_INDEX_MAP_TABLE}(memory_id) VALUES(?)",
-                (memory_id,),
-            )
-            if cursor.lastrowid is None:
-                return
-            vec_rowid = int(cursor.lastrowid)
-        else:
-            vec_rowid = int(row["vec_rowid"])
+            return
+        vec_rowid = int(row["vec_rowid"])
         try:
             conn.execute(
                 f"INSERT OR REPLACE INTO {self.MEMORY_VEC_INDEX_TABLE}(rowid, embedding) "
@@ -1227,24 +1240,18 @@ class MemoryService:
         thread_id: str | None,
         embedding: list[float],
     ) -> None:
+        conn.execute(
+            f"INSERT INTO {self.EVENT_VEC_INDEX_MAP_TABLE}(event_id, thread_id) VALUES(?,?) "
+            "ON CONFLICT(event_id) DO UPDATE SET thread_id=excluded.thread_id",
+            (event_id, thread_id),
+        )
         row = conn.execute(
             f"SELECT vec_rowid FROM {self.EVENT_VEC_INDEX_MAP_TABLE} WHERE event_id=?",
             (event_id,),
         ).fetchone()
         if row is None:
-            cursor = conn.execute(
-                f"INSERT INTO {self.EVENT_VEC_INDEX_MAP_TABLE}(event_id, thread_id) VALUES(?,?)",
-                (event_id, thread_id),
-            )
-            if cursor.lastrowid is None:
-                return
-            vec_rowid = int(cursor.lastrowid)
-        else:
-            vec_rowid = int(row["vec_rowid"])
-            conn.execute(
-                f"UPDATE {self.EVENT_VEC_INDEX_MAP_TABLE} SET thread_id=? WHERE event_id=?",
-                (thread_id, event_id),
-            )
+            return
+        vec_rowid = int(row["vec_rowid"])
         try:
             conn.execute(
                 f"INSERT OR REPLACE INTO {self.EVENT_VEC_INDEX_TABLE}(rowid, embedding) "

@@ -634,7 +634,13 @@ def test_run_agent_step_leak_guard_retry_recovers_final_output(monkeypatch) -> N
                 ),
                 "fallback",
             ),
-            (ModelResponse(text="Implemented and verified the requested change.", tool_calls=[]), "fallback"),
+            (
+                ModelResponse(
+                    text="Implemented and verified the requested change.",
+                    tool_calls=[],
+                ),
+                "fallback",
+            ),
         ]
     )
     runtime = _FakeRuntime()
@@ -645,7 +651,13 @@ def test_run_agent_step_leak_guard_retry_recovers_final_output(monkeypatch) -> N
         thread_id = ensure_open_thread(conn, user_id, channel_id)
         insert_message(conn, thread_id, "user", "continue")
         message_id = asyncio.run(
-            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_leak_retry")
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_leak_retry",
+            )
         )
         row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
         leak_evt = conn.execute(
@@ -656,7 +668,10 @@ def test_run_agent_step_leak_guard_retry_recovers_final_output(monkeypatch) -> N
             ("trc_step_leak_retry",),
         ).fetchone()
         degraded_evt = conn.execute(
-            "SELECT COUNT(*) AS c FROM events WHERE trace_id=? AND event_type='agent.response.degraded'",
+            (
+                "SELECT COUNT(*) AS c FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.degraded'"
+            ),
             ("trc_step_leak_retry",),
         ).fetchone()
     assert row is not None
@@ -811,7 +826,12 @@ def test_run_agent_step_tool_loop_placeholder_uses_deterministic_terminal_messag
         user_id = ensure_user(conn, "15555550139")
         channel_id = ensure_channel(conn, user_id, "whatsapp")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
-        insert_message(conn, thread_id, "user", "build loop placeholder")
+        insert_message(
+            conn,
+            thread_id,
+            "user",
+            "Build feature request 'bug_test': 'loop placeholder behavior'",
+        )
         message_id = asyncio.run(
             run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_15")
         )
@@ -823,6 +843,13 @@ def test_run_agent_step_tool_loop_placeholder_uses_deterministic_terminal_messag
             ),
             ("trc_step_15",),
         ).fetchone()
+        loop_cap_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='tool.call.loop_cap_reached' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_step_15",),
+        ).fetchone()
     assert row is not None
     assert "I completed tool execution but could not synthesize a final summary." in str(
         row["content"]
@@ -831,6 +858,7 @@ def test_run_agent_step_tool_loop_placeholder_uses_deterministic_terminal_messag
     assert degraded_evt is not None
     payload = json.loads(str(degraded_evt["payload_json"]))
     assert payload["reason"] == "placeholder_response_after_tool_loop"
+    assert loop_cap_evt is not None
 
 
 def test_extract_primary_failure_fields_parses_retry_and_request_id() -> None:

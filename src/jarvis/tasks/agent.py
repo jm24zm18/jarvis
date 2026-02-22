@@ -3,9 +3,12 @@
 import asyncio
 import json
 import logging
+import shlex
 import sqlite3
+import subprocess
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from jarvis.logging import bind_context, clear_context
@@ -30,6 +33,7 @@ from jarvis.plugins.base import PluginContext  # noqa: E402
 from jarvis.plugins.loader import get_loaded_plugins  # noqa: E402
 from jarvis.providers.factory import build_fallback_provider, build_primary_provider  # noqa: E402
 from jarvis.providers.router import ProviderRouter  # noqa: E402
+from jarvis.selfupdate.pipeline import PROTECTED_PATH_PATTERNS  # noqa: E402
 from jarvis.tasks.agent_attempts import (  # noqa: E402
     active_running_attempt,
     classify_failure,
@@ -54,6 +58,213 @@ _DEFAULT_EXEC_HOST_TIMEOUT_S = 120
 _BUILD_TEST_GATES_TIMEOUT_S = 600
 _BUILD_TEST_GATES_COMMAND = "uv run jarvis test-gates --fail-fast"
 _DEGRADED_RESPONSE_PREFIX = "I hit an internal response issue while processing that request."
+_TERMINAL_PLACEHOLDER_PREFIX = (
+    "I completed tool execution but could not synthesize a final summary."
+)
+_WRITE_COMMAND_MARKERS = (
+    ">>",
+    " > ",
+    " touch ",
+    " mkdir ",
+    "cat <<",
+    " apply_patch",
+    " sed -i",
+    " perl -pi",
+    " mv ",
+    " cp ",
+    " rm ",
+)
+_GIT_DIFF_TIMEOUT_S = 30
+
+
+def _split_csv(raw: str) -> list[str]:
+    return [item.strip() for item in str(raw or "").split(",") if item.strip()]
+
+
+def _command_may_write(command: str) -> bool:
+    lowered = f" {command.lower()} "
+    return any(marker in lowered for marker in _WRITE_COMMAND_MARKERS)
+
+
+def _extract_command_paths(command: str) -> list[str]:
+    tokens: list[str]
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    paths: list[str] = []
+    redir_tokens = {">", ">>", "1>", "2>"}
+    for idx, token in enumerate(tokens):
+        candidate = token.strip()
+        if not candidate:
+            continue
+        if candidate in redir_tokens and idx + 1 < len(tokens):
+            target = tokens[idx + 1].strip()
+            if target:
+                paths.append(target)
+            continue
+        if any(candidate.startswith(prefix) for prefix in (">", "1>", "2>")):
+            target = candidate.lstrip(">").lstrip("1>").lstrip("2>")
+            target = target.strip()
+            if target:
+                paths.append(target)
+            continue
+        if candidate.startswith("-"):
+            continue
+        if "/" in candidate or candidate.startswith("."):
+            paths.append(candidate)
+    return paths
+
+
+def _path_matches_never_edit(path: str, never_edit_path: str) -> bool:
+    clean_path = path.strip().strip("'\"")
+    rule = never_edit_path.strip().strip("'\"")
+    if not clean_path or not rule:
+        return False
+    path_obj = Path(clean_path)
+    if not path_obj.is_absolute():
+        path_obj = (Path.cwd() / path_obj).resolve()
+    absolute = str(path_obj)
+    if rule.endswith("/"):
+        rel_rule = rule.rstrip("/") + "/"
+        return rel_rule in clean_path.replace("\\", "/") or f"/{rel_rule}" in absolute.replace(
+            "\\", "/"
+        )
+    return rule in clean_path.replace("\\", "/") or absolute.replace("\\", "/").endswith(
+        "/" + rule
+    )
+
+
+def _path_matches_protected_pattern(path: str) -> bool:
+    clean = path.strip().strip("'\"")
+    if not clean:
+        return False
+    path_obj = Path(clean)
+    if not path_obj.is_absolute():
+        path_obj = (Path.cwd() / path_obj).resolve()
+    absolute = str(path_obj)
+    return any(pattern.match(absolute) for pattern in PROTECTED_PATH_PATTERNS)
+
+
+def _trace_attempted_protected_edits(
+    conn: sqlite3.Connection,
+    *,
+    trace_id: str,
+    never_edit_paths: list[str],
+) -> list[str]:
+    rows = conn.execute(
+        "SELECT payload_json FROM events WHERE trace_id=? AND event_type='tool.call.start'",
+        (trace_id,),
+    ).fetchall()
+    hits: list[str] = []
+    for row in rows:
+        try:
+            payload = json.loads(str(row["payload_json"]))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        tool = str(payload.get("tool", "")).strip()
+        if tool != "exec_host":
+            continue
+        args = payload.get("arguments", {})
+        if not isinstance(args, dict):
+            continue
+        command = str(args.get("command", "")).strip()
+        if not command or not _command_may_write(command):
+            continue
+        for token in _extract_command_paths(command):
+            if any(_path_matches_never_edit(token, item) for item in never_edit_paths) or (
+                _path_matches_protected_pattern(token)
+            ):
+                hit = token.strip()
+                if hit and hit not in hits:
+                    hits.append(hit)
+    return hits
+
+
+def _has_explicit_noop_with_blockers(text: str) -> bool:
+    lowered = text.lower()
+    no_change = ("no-op" in lowered) or ("no changes" in lowered) or ("no code changes" in lowered)
+    blocked = ("blocker" in lowered) or ("blocked" in lowered)
+    return no_change and blocked
+
+
+def _git_changed_files() -> tuple[list[str], str | None]:
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--name-only"],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_DIFF_TIMEOUT_S,
+            check=False,
+        )
+    except Exception as exc:
+        return [], f"git diff failed: {exc.__class__.__name__}: {exc}"
+    if proc.returncode != 0:
+        return [], f"git diff failed: {proc.stderr.strip() or proc.stdout.strip()}"
+    files = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    return files, None
+
+
+def _is_placeholder_terminal_message(text: str) -> bool:
+    clean = text.strip()
+    if not clean:
+        return True
+    return clean.startswith(_TERMINAL_PLACEHOLDER_PREFIX)
+
+
+def _evaluate_feature_build_deliverable_gate(
+    conn: sqlite3.Connection,
+    *,
+    trace_id: str,
+    message_id: str | None,
+    settings,
+) -> tuple[bool, str | None, dict[str, object]]:
+    checks: dict[str, object] = {}
+    never_edit_paths = _split_csv(settings.ralph_never_edit_paths)
+    protected_hits = _trace_attempted_protected_edits(
+        conn,
+        trace_id=trace_id,
+        never_edit_paths=never_edit_paths,
+    )
+    checks["protected_path_edit_attempts"] = protected_hits
+    if protected_hits:
+        return False, "protected_path_edit_attempted", checks
+
+    message_text = ""
+    if message_id:
+        row = conn.execute(
+            "SELECT content FROM messages WHERE id=? LIMIT 1",
+            (message_id,),
+        ).fetchone()
+        if row is not None:
+            message_text = str(row["content"] or "").strip()
+    checks["message_present"] = bool(message_text)
+    checks["message_is_placeholder"] = _is_placeholder_terminal_message(message_text)
+    if not message_text or _is_placeholder_terminal_message(message_text):
+        return False, "insufficient_deliverable_evidence", checks
+
+    changed_files, diff_error = _git_changed_files()
+    checks["git_diff_error"] = diff_error or ""
+    checks["changed_files"] = changed_files
+    checks["explicit_noop_with_blockers"] = _has_explicit_noop_with_blockers(message_text)
+    if diff_error:
+        return False, "insufficient_deliverable_evidence", checks
+
+    allowed_changes: list[str] = []
+    for path in changed_files:
+        if any(_path_matches_never_edit(path, item) for item in never_edit_paths):
+            continue
+        if _path_matches_protected_pattern(path):
+            continue
+        allowed_changes.append(path)
+    checks["allowed_scope_changes"] = allowed_changes
+    if allowed_changes:
+        return True, None, checks
+    if bool(checks["explicit_noop_with_blockers"]):
+        return True, None, checks
+    return False, "insufficient_deliverable_evidence", checks
 
 
 def _terminal_outcome_reason(
@@ -120,9 +331,28 @@ def _finalize_feature_build_run_from_trace_result(
     if run is None:
         return
     run_id = str(run["id"])
+    thread_id = str(run.get("thread_id") or "") or None
     attempt_count = max(1, int(run.get("attempt_count", 1)))
     max_attempts = max(attempt_count, int(run.get("max_attempts", attempt_count)))
+    previous_reason = str(run.get("last_failure_reason") or "").strip()
     settings = get_settings()
+
+    def _emit_build_event(event_type: str, payload: dict[str, object]) -> None:
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type=event_type,
+                component="feature_build",
+                actor_type="system",
+                actor_id="feature_build",
+                payload_json=json.dumps(payload),
+                payload_redacted_json=json.dumps(redact_payload(payload)),
+            ),
+        )
 
     def _retry_delay_seconds(next_attempt: int) -> int:
         raw = str(settings.feature_build_retry_backoff_seconds).strip()
@@ -140,7 +370,40 @@ def _finalize_feature_build_run_from_trace_result(
         idx = max(0, min(len(values) - 1, next_attempt - 2))
         return values[idx]
 
-    def _schedule_retry(reason: str, summary: str) -> None:
+    def _schedule_retry(reason: str, summary: str) -> bool:
+        consecutive_reason_count = 2 if previous_reason and previous_reason == reason else 1
+        if (
+            reason == "placeholder_response_after_tool_loop"
+            and int(settings.feature_build_fail_fast_placeholder_repeat) == 1
+            and consecutive_reason_count >= 2
+        ):
+            update_feature_build_run(
+                conn,
+                run_id,
+                status="failed",
+                retry_state="exhausted",
+                next_retry_at="",
+                summary=f"Build failed after repeated placeholder degradation: {summary}",
+                last_failure_reason=reason,
+                active_attempt=attempt_count,
+                last_progress_at=now_iso(),
+                last_event_type="feature.build.retry.denied",
+                last_trace_id=trace_id,
+                terminal_reason=reason,
+            )
+            _emit_build_event(
+                "feature.build.retry.denied",
+                {
+                    "run_id": run_id,
+                    "attempt": attempt_count,
+                    "max_attempts": max_attempts,
+                    "reason": reason,
+                    "policy_action": "fail_fast",
+                    "consecutive_reason_count": consecutive_reason_count,
+                },
+            )
+            return False
+
         next_attempt = attempt_count + 1
         if next_attempt > max_attempts:
             update_feature_build_run(
@@ -151,39 +414,22 @@ def _finalize_feature_build_run_from_trace_result(
                 next_retry_at="",
                 summary=f"Build failed after {attempt_count} attempts: {summary}",
                 last_failure_reason=reason,
+                active_attempt=attempt_count,
+                last_progress_at=now_iso(),
+                last_event_type="feature.build.retry.exhausted",
+                last_trace_id=trace_id,
+                terminal_reason=reason,
             )
-            emit_event(
-                conn,
-                EventInput(
-                    trace_id=trace_id,
-                    span_id=new_id("spn"),
-                    parent_span_id=None,
-                    thread_id=str(run.get("thread_id") or "") or None,
-                    event_type="feature.build.retry.exhausted",
-                    component="feature_build",
-                    actor_type="system",
-                    actor_id="feature_build",
-                    payload_json=json.dumps(
-                        {
-                            "run_id": run_id,
-                            "attempt_count": attempt_count,
-                            "max_attempts": max_attempts,
-                            "reason": reason,
-                        }
-                    ),
-                    payload_redacted_json=json.dumps(
-                        redact_payload(
-                            {
-                                "run_id": run_id,
-                                "attempt_count": attempt_count,
-                                "max_attempts": max_attempts,
-                                "reason": reason,
-                            }
-                        )
-                    ),
-                ),
+            _emit_build_event(
+                "feature.build.retry.exhausted",
+                {
+                    "run_id": run_id,
+                    "attempt_count": attempt_count,
+                    "max_attempts": max_attempts,
+                    "reason": reason,
+                },
             )
-            return
+            return False
 
         delay = _retry_delay_seconds(next_attempt)
         next_retry_at = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
@@ -199,40 +445,23 @@ def _finalize_feature_build_run_from_trace_result(
                 f"after degraded outcome: {summary}"
             ),
             last_failure_reason=reason,
+            active_attempt=next_attempt,
+            last_progress_at=now_iso(),
+            last_event_type="feature.build.retry.scheduled",
+            last_trace_id=trace_id,
+            terminal_reason=reason,
         )
-        emit_event(
-            conn,
-            EventInput(
-                trace_id=trace_id,
-                span_id=new_id("spn"),
-                parent_span_id=None,
-                thread_id=str(run.get("thread_id") or "") or None,
-                event_type="feature.build.retry.scheduled",
-                component="feature_build",
-                actor_type="system",
-                actor_id="feature_build",
-                payload_json=json.dumps(
-                    {
-                        "run_id": run_id,
-                        "attempt_count": next_attempt,
-                        "max_attempts": max_attempts,
-                        "reason": reason,
-                        "next_retry_at": next_retry_at,
-                    }
-                ),
-                payload_redacted_json=json.dumps(
-                    redact_payload(
-                        {
-                            "run_id": run_id,
-                            "attempt_count": next_attempt,
-                            "max_attempts": max_attempts,
-                            "reason": reason,
-                            "next_retry_at": next_retry_at,
-                        }
-                    )
-                ),
-            ),
+        _emit_build_event(
+            "feature.build.retry.scheduled",
+            {
+                "run_id": run_id,
+                "attempt_count": next_attempt,
+                "max_attempts": max_attempts,
+                "reason": reason,
+                "next_retry_at": next_retry_at,
+            },
         )
+        return True
 
     if failure_kind is not None:
         detail = str(failure_error or "").strip()
@@ -241,6 +470,23 @@ def _finalize_feature_build_run_from_trace_result(
         else:
             summary = f"Build failed: agent step {failure_kind}."
         finalize_feature_build_run_by_trace(conn, trace_id, status="failed", summary=summary)
+        update_feature_build_run(
+            conn,
+            run_id,
+            last_progress_at=now_iso(),
+            last_event_type="feature.build.terminal_synthesis",
+            last_trace_id=trace_id,
+            terminal_reason=f"agent_step_{failure_kind}",
+        )
+        _emit_build_event(
+            "feature.build.terminal_synthesis",
+            {
+                "run_id": run_id,
+                "attempt": attempt_count,
+                "reason": f"agent_step_{failure_kind}",
+                "deliverable_passed": False,
+            },
+        )
         return
 
     quota_row = conn.execute(
@@ -251,6 +497,32 @@ def _finalize_feature_build_run_from_trace_result(
         (trace_id,),
     ).fetchone()
     terminal_reason = _terminal_outcome_reason(conn, trace_id=trace_id, message_id=message_id)
+    gate_passed = False
+    gate_reason: str | None = None
+    gate_checks: dict[str, object] = {}
+
+    if (
+        terminal_reason is None
+        and int(settings.feature_build_deliverable_gate_enabled) == 1
+    ):
+        gate_passed, gate_reason, gate_checks = _evaluate_feature_build_deliverable_gate(
+            conn,
+            trace_id=trace_id,
+            message_id=message_id,
+            settings=settings,
+        )
+        if not gate_passed and gate_reason is not None:
+            terminal_reason = gate_reason
+            _emit_build_event(
+                "feature.build.deliverable_gate.failed",
+                {
+                    "run_id": run_id,
+                    "attempt": attempt_count,
+                    "reason": gate_reason,
+                    "checks": gate_checks,
+                },
+            )
+
     if terminal_reason is not None:
         retryable_reasons = {
             "placeholder_response_after_tool_loop",
@@ -260,6 +532,7 @@ def _finalize_feature_build_run_from_trace_result(
             "incomplete_terminal_response",
             "degraded_message_prefix",
             "quota_retryable",
+            "insufficient_deliverable_evidence",
         }
         retryable_reason: str | None = (
             terminal_reason if terminal_reason in retryable_reasons else None
@@ -267,16 +540,33 @@ def _finalize_feature_build_run_from_trace_result(
         if quota_row is not None:
             retryable_reason = "quota_retryable"
         summary = f"Build failed: terminal response ({terminal_reason})."
+        _emit_build_event(
+            "feature.build.terminal_synthesis",
+            {
+                "run_id": run_id,
+                "attempt": attempt_count,
+                "reason": terminal_reason,
+                "deliverable_passed": False,
+            },
+        )
+        update_feature_build_run(
+            conn,
+            run_id,
+            last_progress_at=now_iso(),
+            last_event_type="feature.build.terminal_synthesis",
+            last_trace_id=trace_id,
+            terminal_reason=terminal_reason,
+        )
         if int(settings.feature_build_retry_on_degraded) == 1 and retryable_reason is not None:
             _schedule_retry(retryable_reason, summary)
             return
 
         finalize_feature_build_run_by_trace(conn, trace_id, status="failed", summary=summary)
         if int(settings.feature_build_escalate_on_exhausted) == 1:
-            thread_id = str(run.get("thread_id") or "").strip()
-            if thread_id:
+            thread_id_for_escalation = str(run.get("thread_id") or "").strip()
+            if thread_id_for_escalation:
                 request_human_escalation(
-                    thread_id=thread_id,
+                    thread_id=thread_id_for_escalation,
                     trace_id=trace_id,
                     requested_by_actor_id="system",
                     source_agent_id="main",
@@ -296,35 +586,33 @@ def _finalize_feature_build_run_from_trace_result(
         status="succeeded",
         summary="Build completed successfully.",
     )
-    if attempt_count > 1:
-        emit_event(
-            conn,
-            EventInput(
-                trace_id=trace_id,
-                span_id=new_id("spn"),
-                parent_span_id=None,
-                thread_id=str(run.get("thread_id") or "") or None,
-                event_type="feature.build.retry.succeeded_after_retry",
-                component="feature_build",
-                actor_type="system",
-                actor_id="feature_build",
-                payload_json=json.dumps(
-                    {
-                        "run_id": run_id,
-                        "attempt_count": attempt_count,
-                        "max_attempts": max_attempts,
-                    }
-                ),
-                payload_redacted_json=json.dumps(
-                    redact_payload(
-                        {
-                            "run_id": run_id,
-                            "attempt_count": attempt_count,
-                            "max_attempts": max_attempts,
-                        }
-                    )
-                ),
+    update_feature_build_run(
+        conn,
+        run_id,
+        last_progress_at=now_iso(),
+        last_event_type="feature.build.terminal_synthesis",
+        last_trace_id=trace_id,
+        terminal_reason="ok",
+    )
+    _emit_build_event(
+        "feature.build.terminal_synthesis",
+        {
+            "run_id": run_id,
+            "attempt": attempt_count,
+            "reason": "ok",
+            "deliverable_passed": (
+                gate_passed or int(settings.feature_build_deliverable_gate_enabled) == 0
             ),
+        },
+    )
+    if attempt_count > 1:
+        _emit_build_event(
+            "feature.build.retry.succeeded_after_retry",
+            {
+                "run_id": run_id,
+                "attempt_count": attempt_count,
+                "max_attempts": max_attempts,
+            },
         )
 
 

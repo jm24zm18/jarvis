@@ -36,6 +36,7 @@ uv run pytest tests/unit/test_agent_recovery.py -v
 uv run pytest tests/unit/test_orchestrator_step.py -v
 uv run pytest tests/unit/test_router.py -v
 uv run pytest tests/unit/test_memory_tasks.py -v
+uv run pytest tests/unit/test_feature_build_task.py -v
 ```
 
 ## CI Test Pipeline

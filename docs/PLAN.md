@@ -62,6 +62,21 @@ Tier flow: `working -> episodic -> semantic/procedural`, with low-importance sta
 
 _Last updated: 2026-02-22 (Auto-Continue + Human Escalation Routing)_
 
+## Execution Update (2026-02-22, Memory Vector Map Upsert Concurrency Hotfix)
+
+- Discovered runtime incident from `errors.md`: repeated background task failures in
+  `jarvis.tasks.memory.index_event` with
+  `UNIQUE constraint failed: memory_vec_index_map.memory_id`.
+- Implemented task scope:
+  - Hardened memory/event vector map upserts in `src/jarvis/memory/service.py` to be conflict-safe under concurrency.
+  - Added per-row backfill conflict handling so vector backfill skips conflicting rows instead of failing the full run.
+  - Added task-level suppression in `src/jarvis/tasks/memory.py` for known vector map integrity conflicts so indexing remains non-fatal.
+  - Added regressions in:
+    - `tests/unit/test_memory_service.py`
+    - `tests/unit/test_memory_tasks.py`
+- Remaining tasks before handoff:
+  - Run full quality gates (`make lint`, `make typecheck`, `make test-gates`, `make docs-check`).
+
 ## Execution Update (2026-02-22, Auto-Continue + Human Escalation Routing)
 
 - Completed:
@@ -1176,3 +1191,35 @@ Rollback policy:
 5. Remaining tasks discovered during implementation:
    - Persist extraction backoff state in DB (currently process-local) if multi-worker durability is required.
    - Add admin/system dashboard counters for `agent.response.leak_blocked` and `tool.call.suppressed`.
+
+### Packet 13 (completed, 2026-02-22): Feature-build retry hardening + deliverable gate
+
+1. Scope completed:
+   - Added reason-aware feature-build retry controls with fail-fast on repeated consecutive
+     `placeholder_response_after_tool_loop` outcomes (`feature.build.retry.denied`).
+   - Added feature-build deliverable gate checks before success finalization:
+     - require allowed-scope `git diff --name-only` changes, or explicit no-op with blockers.
+     - block success when protected-path edit attempts are detected against
+       `RALPH_NEVER_EDIT_PATHS` / `PROTECTED_PATH_PATTERNS`.
+   - Added terminal synthesis observability event `feature.build.terminal_synthesis`.
+   - Added loop-cap telemetry `tool.call.loop_cap_reached` for repeated identical tool signatures.
+2. Code updates:
+   - `src/jarvis/tasks/agent.py`
+   - `src/jarvis/orchestrator/step.py`
+   - `src/jarvis/tasks/feature_build.py`
+   - `src/jarvis/db/queries.py`
+   - `src/jarvis/db/migrations/072_feature_build_run_diagnostics.sql`
+   - `src/jarvis/config.py`
+   - `src/jarvis/cli/env_groups.py`
+   - `.env.example`
+3. Test updates:
+   - `tests/unit/test_agent_recovery.py`
+   - `tests/unit/test_orchestrator_step.py`
+4. Documentation updates:
+   - `docs/configuration.md`
+   - `docs/architecture.md`
+   - `docs/change-safety.md`
+   - `docs/testing.md`
+5. Remaining tasks discovered during implementation:
+   - Consider exposing new build diagnostics fields (`active_attempt`, `last_progress_at`,
+     `last_event_type`, `last_trace_id`, `terminal_reason`) in admin API/UI follow-up pass.

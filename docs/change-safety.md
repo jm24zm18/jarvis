@@ -28,6 +28,9 @@
 - Assistant must not claim roadmap/feature-request mutation success unless an in-step verified write result exists; unverified claims must be blocked and logged (`agent.response.claim_blocked`).
 - Feature-request create path must be idempotent for retry scenarios when `trace_id` is supplied.
 - Follow-up heartbeat checks must remain opt-in per thread with ownership enforcement on management APIs; `no_reply` outcomes must not emit user-visible outbound messages.
+- Feature-build runs must reject terminal success when deliverable evidence is missing (no allowed-scope diff and no explicit no-op blockers) and emit `feature.build.deliverable_gate.failed`.
+- Feature-build runs must fail fast on repeated consecutive `placeholder_response_after_tool_loop` outcomes (`feature.build.retry.denied`) to avoid deterministic retry churn.
+- Feature-build execution attempts must not include write attempts against `RALPH_NEVER_EDIT_PATHS` or `PROTECTED_PATH_PATTERNS`; violations must block success finalization.
 
 ## High-Risk Files
 

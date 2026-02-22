@@ -828,6 +828,7 @@ async def run_agent_step(
     degraded_reason: str | None = None
     failed_tool_fingerprints: set[str] = set()
     failed_tool_signatures: set[str] = set()
+    repeated_tool_signatures: dict[str, int] = {}
     verified_roadmap_item_ids: list[str] = []
     for step_idx in range(MAX_TOOL_ITERATIONS + 1):
         if progress_fn is not None:
@@ -1017,6 +1018,8 @@ async def run_agent_step(
             break
 
         convo.append({"role": "assistant", "content": stripped_text})
+        loop_cap_threshold = max(1, int(settings.feature_build_loop_cap_threshold))
+        loop_cap_reached = False
         for tool_call in parsed_tool_calls:
             if action_calls_used >= max_actions_per_step:
                 deny_payload = {
@@ -1050,6 +1053,9 @@ async def run_agent_step(
             else:
                 cwd_note = None
             signature = _tool_call_signature(tool_name, arguments)
+            signature_count = repeated_tool_signatures.get(signature, 0) + 1
+            repeated_tool_signatures[signature] = signature_count
+            signature_hit_cap = build_request_mode and signature_count >= loop_cap_threshold
             if signature in failed_tool_signatures:
                 suppressed_payload: dict[str, object] = {
                     "tool": tool_name,
@@ -1082,6 +1088,34 @@ async def run_agent_step(
                     }
                 )
                 convo.append({"role": "user", "content": f"[tool_result] {payload}"})
+                if signature_hit_cap:
+                    loop_cap_payload = {
+                        "tool": tool_name,
+                        "iteration": step_idx,
+                        "signature": signature,
+                        "count": signature_count,
+                        "threshold": loop_cap_threshold,
+                    }
+                    if notify_fn is not None:
+                        notify_fn("tool.call.loop_cap_reached", loop_cap_payload)
+                    emit_event(
+                        conn,
+                        EventInput(
+                            trace_id=trace_id,
+                            span_id=new_id("spn"),
+                            parent_span_id=None,
+                            thread_id=thread_id,
+                            event_type="tool.call.loop_cap_reached",
+                            component="tools.runtime",
+                            actor_type="agent",
+                            actor_id=actor_id,
+                            payload_json=json.dumps(loop_cap_payload),
+                            payload_redacted_json=json.dumps(redact_payload(loop_cap_payload)),
+                        ),
+                    )
+                    loop_cap_reached = True
+                    tool_iteration_exhausted = True
+                    break
                 continue
             if progress_fn is not None:
                 progress_fn(
@@ -1189,6 +1223,8 @@ async def run_agent_step(
                             payload_redacted_json=json.dumps(redact_payload(suppressed_payload)),
                         ),
                     )
+                    if notify_fn is not None:
+                        notify_fn("tool.call.end", error_payload)
                     payload = json.dumps(
                         {
                             "tool": tool_name,
@@ -1197,6 +1233,36 @@ async def run_agent_step(
                         }
                     )
                     convo.append({"role": "user", "content": f"[tool_result] {payload}"})
+                    if signature_hit_cap:
+                        loop_cap_payload = {
+                            "tool": tool_name,
+                            "iteration": step_idx,
+                            "signature": signature,
+                            "count": signature_count,
+                            "threshold": loop_cap_threshold,
+                        }
+                        if notify_fn is not None:
+                            notify_fn("tool.call.loop_cap_reached", loop_cap_payload)
+                        emit_event(
+                            conn,
+                            EventInput(
+                                trace_id=trace_id,
+                                span_id=new_id("spn"),
+                                parent_span_id=None,
+                                thread_id=thread_id,
+                                event_type="tool.call.loop_cap_reached",
+                                component="tools.runtime",
+                                actor_type="agent",
+                                actor_id=actor_id,
+                                payload_json=json.dumps(loop_cap_payload),
+                                payload_redacted_json=json.dumps(
+                                    redact_payload(loop_cap_payload)
+                                ),
+                            ),
+                        )
+                        loop_cap_reached = True
+                        tool_iteration_exhausted = True
+                        break
                     continue
                 failed_tool_fingerprints.add(fingerprint)
                 failed_tool_signatures.add(signature)
@@ -1233,6 +1299,37 @@ async def run_agent_step(
                     },
                 )
             convo.append({"role": "user", "content": f"[tool_result] {payload}"})
+            if signature_hit_cap:
+                loop_cap_payload = {
+                    "tool": tool_name,
+                    "iteration": step_idx,
+                    "signature": signature,
+                    "count": signature_count,
+                    "threshold": loop_cap_threshold,
+                }
+                if notify_fn is not None:
+                    notify_fn("tool.call.loop_cap_reached", loop_cap_payload)
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id,
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="tool.call.loop_cap_reached",
+                        component="tools.runtime",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(loop_cap_payload),
+                        payload_redacted_json=json.dumps(redact_payload(loop_cap_payload)),
+                    ),
+                )
+                loop_cap_reached = True
+                tool_iteration_exhausted = True
+                break
+
+        if loop_cap_reached:
+            break
 
     if final_text.strip() == PLACEHOLDER_RESPONSE or tool_iteration_exhausted:
         for retry_idx in range(FALLBACK_ONLY_RETRIES):

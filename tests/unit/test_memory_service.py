@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 
 import pytest
 
@@ -230,6 +231,121 @@ def test_backfill_event_vec_runtime_from_legacy_table() -> None:
     assert row is not None
     assert row["event_id"] == "evt_a"
     assert row["thread_id"] == "thr_a"
+
+
+def test_backfill_memory_vec_runtime_continues_on_integrity_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO users(id, external_id, created_at) VALUES(?,?,datetime('now'))",
+            ("usr_b", "u_b"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO channels(id, user_id, channel_type, created_at) "
+                "VALUES(?,?,?,datetime('now'))"
+            ),
+            ("chn_b", "usr_b", "whatsapp"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO threads(id, user_id, channel_id, status, created_at, updated_at) "
+                "VALUES(?,?,?,'open',datetime('now'),datetime('now'))"
+            ),
+            ("thr_b", "usr_b", "chn_b"),
+        )
+        for memory_id, text in (("mem_b1", "alpha"), ("mem_b2", "beta")):
+            conn.execute(
+                (
+                    "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                    "VALUES(?,?,?,?,datetime('now'))"
+                ),
+                (memory_id, "thr_b", text, "{}"),
+            )
+            conn.execute(
+                (
+                    "INSERT INTO memory_embeddings(memory_id, model, vector_json, created_at) "
+                    "VALUES(?,?,?,datetime('now'))"
+                ),
+                (memory_id, "nomic-embed-text", "[0.1, 0.2]"),
+            )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS memory_vec_index(rowid INTEGER PRIMARY KEY, embedding TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS memory_vec_index_map("
+            "vec_rowid INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT UNIQUE NOT NULL)"
+        )
+
+        original = service._upsert_memory_vec_index_raw
+        call_count = {"value": 0}
+
+        def flaky_upsert(
+            inner_conn,
+            memory_id: str,
+            embedding: list[float],
+        ) -> None:
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                raise sqlite3.IntegrityError(
+                    "UNIQUE constraint failed: memory_vec_index_map.memory_id"
+                )
+            original(inner_conn, memory_id, embedding)
+
+        monkeypatch.setattr(service, "_upsert_memory_vec_index_raw", flaky_upsert)
+        service._backfill_memory_vec_runtime(conn)
+        rows = conn.execute(
+            "SELECT memory_id FROM memory_vec_index_map ORDER BY memory_id"
+        ).fetchall()
+    assert [str(row["memory_id"]) for row in rows] == ["mem_b2"]
+
+
+def test_backfill_event_vec_runtime_continues_on_integrity_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS event_vec_index(rowid INTEGER PRIMARY KEY, embedding TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS event_vec_index_map("
+            "vec_rowid INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "event_id TEXT UNIQUE NOT NULL, thread_id TEXT)"
+        )
+        for event_id in ("evt_b1", "evt_b2"):
+            conn.execute(
+                (
+                    "INSERT INTO event_vec(id, thread_id, vector_json, created_at) "
+                    "VALUES(?,?,?,datetime('now'))"
+                ),
+                (event_id, "thr_b", "[0.3, 0.7]"),
+            )
+
+        original = service._upsert_event_vec_index_raw
+        call_count = {"value": 0}
+
+        def flaky_upsert(
+            inner_conn,
+            event_id: str,
+            thread_id: str | None,
+            embedding: list[float],
+        ) -> None:
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                raise sqlite3.IntegrityError(
+                    "UNIQUE constraint failed: event_vec_index_map.event_id"
+                )
+            original(inner_conn, event_id, thread_id, embedding)
+
+        monkeypatch.setattr(service, "_upsert_event_vec_index_raw", flaky_upsert)
+        service._backfill_event_vec_runtime(conn)
+        rows = conn.execute(
+            "SELECT event_id FROM event_vec_index_map ORDER BY event_id"
+        ).fetchall()
+    assert [str(row["event_id"]) for row in rows] == ["evt_b2"]
 
 
 def test_sqlite_vec_round_trip_search_when_runtime_available(monkeypatch) -> None:

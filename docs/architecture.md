@@ -55,6 +55,9 @@
 3. Per-thread memory extraction uses task-level backoff after timeout/quota failures and emits `state.extraction.skipped` during active backoff windows.
 4. Model run events annotate primary cooldown bypass with `primary_skipped_due_to_cooldown=true`.
 5. Typed roadmap mutation tool (`create_feature_request`) returns verified write IDs and emits `roadmap.write.verified` / `roadmap.write.failed`.
+6. Feature-build traces cap repeated identical tool-call signatures and emit `tool.call.loop_cap_reached` before terminal synthesis fallback.
+7. Feature-build finalization emits `feature.build.terminal_synthesis` and enforces a deliverable gate (diff/no-op blockers + protected-path checks) before success.
+8. Repeated consecutive `placeholder_response_after_tool_loop` outcomes fail fast via `feature.build.retry.denied` instead of consuming all retry slots.
 
 ## Agent Run Reliability Flow
 
@@ -138,6 +141,14 @@
 - Unified attachment table: `media_attachments` (`062_media_attachments.sql`) with `mda_` IDs.
 - Inbound channel media (WhatsApp/Telegram) writes to both channel-specific paths and unified attachment storage.
 - Message-list API enriches each message with a `media` array (`id`, `url`, `mime_type`, `thumbnail_url`, `size_bytes`) using a batched attachment lookup by `message_id`.
+
+## Memory Vector Runtime
+
+- `MemoryService` maintains runtime vector virtual tables (`memory_vec_index`, `event_vec_index`) plus mapping tables (`memory_vec_index_map`, `event_vec_index_map`) for rowid joins to durable IDs.
+- Map row creation is concurrency-safe by design:
+  - memory map upsert uses `INSERT OR IGNORE` + subsequent rowid lookup.
+  - event map upsert uses `ON CONFLICT(event_id) DO UPDATE` to keep `thread_id` current.
+- Vector backfill is best-effort and non-fatal: per-row map integrity conflicts are logged and skipped so background indexing continues under concurrent writes.
 
 ## Migration Ledger
 

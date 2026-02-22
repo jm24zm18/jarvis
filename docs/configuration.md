@@ -76,6 +76,9 @@ Source of truth: `src/jarvis/config.py`.
 | `FEATURE_BUILD_RETRY_BACKOFF_SECONDS` | str | `30,120,300,600` | Comma-delimited retry delays (seconds) for scheduled feature-build retries. |
 | `FEATURE_BUILD_RETRY_DISPATCH_INTERVAL_SECONDS` | int | `15` | Periodic interval for scanning and dispatching due scheduled feature-build retries. |
 | `FEATURE_BUILD_ESCALATE_ON_EXHAUSTED` | int | `1` | When `1`, exhausted feature-build terminal failures trigger configured human escalation dispatch. |
+| `FEATURE_BUILD_FAIL_FAST_PLACEHOLDER_REPEAT` | int | `1` | When `1`, repeated consecutive `placeholder_response_after_tool_loop` outcomes fail fast instead of re-scheduling retries. |
+| `FEATURE_BUILD_DELIVERABLE_GATE_ENABLED` | int | `1` | When `1`, feature-build runs require deliverable evidence (diff/no-op blockers + safety checks) before success finalization. |
+| `FEATURE_BUILD_LOOP_CAP_THRESHOLD` | int | `8` | Max repeated identical tool-call signature count per build attempt before forcing terminal synthesis fallback. |
 | `HUMAN_ESCALATION_CHANNEL_TYPE` | str | `whatsapp` | Outbound channel used for escalation dispatch (`whatsapp`, `telegram`, etc. as configured). |
 | `HUMAN_ESCALATION_TARGETS` | str | `` | Comma-separated external channel IDs to notify when escalation is requested. |
 | `HUMAN_ESCALATION_DEFAULT_PRIORITY` | str | `normal` | Default escalation priority when caller does not provide one. |

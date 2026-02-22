@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import jarvis.tasks.memory as memory_tasks
 from jarvis.db.connection import get_conn
@@ -473,3 +474,27 @@ def test_index_event_denies_write_when_actor_scope_not_active() -> None:
     assert audit is not None
     assert str(audit["decision"]) == "deny"
     assert str(audit["reason"]) == "agent_scope_denied"
+
+
+def test_index_event_suppresses_vector_map_integrity_conflict(
+    monkeypatch,
+) -> None:
+    with get_conn() as conn:
+        user_id = ensure_user(conn, "15550010010")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = create_thread(conn, user_id, channel_id)
+
+    def _raise_integrity(*_args, **_kwargs):
+        raise sqlite3.IntegrityError(
+            "UNIQUE constraint failed: memory_vec_index_map.memory_id"
+        )
+
+    monkeypatch.setattr(memory_tasks.MemoryService, "write_chunked", _raise_integrity)
+
+    memory_id = index_event(
+        trace_id="trc_vec_integrity_conflict",
+        thread_id=thread_id,
+        text="non-fatal conflict",
+        metadata={"actor_id": "main", "source": "agent.thought"},
+    )
+    assert memory_id == ""

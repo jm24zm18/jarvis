@@ -1764,8 +1764,9 @@ def create_feature_build_run(
         (
             "INSERT INTO feature_request_build_runs"
             "(id, feature_id, trace_id, thread_id, status, summary, attempt_count, max_attempts, "
-            "retry_state, next_retry_at, last_failure_reason, created_by, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            "retry_state, next_retry_at, last_failure_reason, active_attempt, last_progress_at, "
+            "last_event_type, last_trace_id, terminal_reason, created_by, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         ),
         (
             run_id,
@@ -1777,6 +1778,11 @@ def create_feature_build_run(
             1,
             5,
             "none",
+            "",
+            "",
+            1,
+            "",
+            "",
             "",
             "",
             created_by,
@@ -1800,6 +1806,11 @@ def update_feature_build_run(
     retry_state: str | None = None,
     next_retry_at: str | None = None,
     last_failure_reason: str | None = None,
+    active_attempt: int | None = None,
+    last_progress_at: str | None = None,
+    last_event_type: str | None = None,
+    last_trace_id: str | None = None,
+    terminal_reason: str | None = None,
 ) -> None:
     """Partial update for a feature build run row."""
     updates: list[str] = []
@@ -1836,6 +1847,21 @@ def update_feature_build_run(
     if last_failure_reason is not None:
         updates.append("last_failure_reason=?")
         params.append(str(last_failure_reason)[:500])
+    if active_attempt is not None:
+        updates.append("active_attempt=?")
+        params.append(max(1, int(active_attempt)))
+    if last_progress_at is not None:
+        updates.append("last_progress_at=?")
+        params.append(str(last_progress_at))
+    if last_event_type is not None:
+        updates.append("last_event_type=?")
+        params.append(str(last_event_type)[:120])
+    if last_trace_id is not None:
+        updates.append("last_trace_id=?")
+        params.append(str(last_trace_id)[:80])
+    if terminal_reason is not None:
+        updates.append("terminal_reason=?")
+        params.append(str(terminal_reason)[:160])
     if not updates:
         return
     updates.append("updated_at=?")
@@ -1955,6 +1981,7 @@ def list_feature_build_runs(
         (
             "SELECT id, feature_id, trace_id, thread_id, status, summary, "
             "attempt_count, max_attempts, retry_state, next_retry_at, last_failure_reason, "
+            "active_attempt, last_progress_at, last_event_type, last_trace_id, terminal_reason, "
             "created_by, created_at, updated_at "
             "FROM feature_request_build_runs WHERE feature_id=? "
             "ORDER BY created_at DESC LIMIT ?"

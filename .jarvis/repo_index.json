@@ -34,6 +34,14 @@
       "skill_read",
       "skill_write"
     ],
+    "feature_builder": [
+      "echo",
+      "exec_host",
+      "request_human_escalation",
+      "skill_list",
+      "skill_read",
+      "skill_write"
+    ],
     "lintfixer": [
       "echo",
       "exec_host",
@@ -302,7 +310,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-22T20:22:16.029634+00:00",
+  "generated_at": "2026-02-22T22:27:16.748337+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -570,6 +578,18 @@
     {
       "file": "src/jarvis/db/migrations/069_feature_build_retry_metadata.sql",
       "number": 69
+    },
+    {
+      "file": "src/jarvis/db/migrations/070_human_escalations.sql",
+      "number": 70
+    },
+    {
+      "file": "src/jarvis/db/migrations/071_request_human_escalation_tool_permission.sql",
+      "number": 71
+    },
+    {
+      "file": "src/jarvis/db/migrations/072_feature_build_run_diagnostics.sql",
+      "number": 72
     }
   ],
   "protected_modules": [

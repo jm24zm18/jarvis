@@ -20,3 +20,5 @@ deploy/.env.prod
 web/node_modules/
 web/dist/
 web/tsconfig.tsbuildinfo
+errors.md
+jarvis.db

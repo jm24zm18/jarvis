@@ -3,6 +3,8 @@
 
 import asyncio
 import json
+import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
@@ -18,6 +20,15 @@ from jarvis.providers.factory import build_fallback_provider, build_primary_prov
 from jarvis.providers.router import ProviderRouter
 
 _STATE_EXTRACTION_BACKOFF: dict[str, dict[str, object]] = {}
+logger = logging.getLogger(__name__)
+
+
+def _is_vector_map_integrity_error(exc: sqlite3.IntegrityError) -> bool:
+    message = str(exc).lower()
+    return (
+        "memory_vec_index_map.memory_id" in message
+        or "event_vec_index_map.event_id" in message
+    )
 
 
 def index_event(
@@ -33,6 +44,15 @@ def index_event(
             ids = service.write_chunked(conn, thread_id, text, metadata=metadata)
         except PermissionError:
             return ""
+        except sqlite3.IntegrityError as exc:
+            if _is_vector_map_integrity_error(exc):
+                logger.warning(
+                    "memory index_event conflict suppressed for thread_id=%s",
+                    thread_id,
+                    exc_info=True,
+                )
+                return ""
+            raise
     return ids[0] if ids else ""
 
 

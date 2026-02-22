@@ -316,6 +316,21 @@ ENV_GROUPS: list[EnvGroup] = [
                 default="1",
             ),
             EnvVarDef(
+                "FEATURE_BUILD_FAIL_FAST_PLACEHOLDER_REPEAT",
+                "Fail fast when placeholder tool-loop degradation repeats consecutively (0/1)",
+                default="1",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_DELIVERABLE_GATE_ENABLED",
+                "Enable feature-build deliverable gate checks before marking success (0/1)",
+                default="1",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_LOOP_CAP_THRESHOLD",
+                "Max repeated identical tool signature count per build attempt",
+                default="8",
+            ),
+            EnvVarDef(
                 "HUMAN_ESCALATION_CHANNEL_TYPE",
                 "Channel used for escalation delivery",
                 default="whatsapp",

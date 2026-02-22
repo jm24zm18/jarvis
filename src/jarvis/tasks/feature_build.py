@@ -95,6 +95,10 @@ def run_feature_build(
                 trace_id=trace_id,
                 retry_state="none",
                 next_retry_at="",
+                active_attempt=attempt_count,
+                last_progress_at=now_iso(),
+                last_event_type="feature.build.attempt.start",
+                last_trace_id=trace_id,
                 summary=f"Build attempt {attempt_count}/{max_attempts} in progress.",
             )
 
@@ -174,6 +178,9 @@ def run_feature_build(
                     conn,
                     run_id,
                     status="failed",
+                    last_progress_at=now_iso(),
+                    last_event_type="feature.build.attempt.enqueue_failed",
+                    last_trace_id=trace_id,
                     summary="agent_step task could not be enqueued",
                 )
                 _emit_build_event(
@@ -260,6 +267,8 @@ def dispatch_due_feature_build_retries(limit: int = 50) -> dict[str, object]:
                     status="failed",
                     retry_state="exhausted",
                     next_retry_at="",
+                    last_progress_at=now_iso(),
+                    last_event_type="feature.build.retry.exhausted",
                     summary=f"Build failed after {max_attempts} attempts (retry exhausted).",
                 )
                 failed += 1
@@ -275,6 +284,8 @@ def dispatch_due_feature_build_retries(limit: int = 50) -> dict[str, object]:
                     status="failed",
                     retry_state="exhausted",
                     next_retry_at="",
+                    last_progress_at=now_iso(),
+                    last_event_type="feature.build.retry.exhausted",
                     summary="Build failed: feature request no longer exists.",
                 )
                 failed += 1
@@ -286,6 +297,10 @@ def dispatch_due_feature_build_retries(limit: int = 50) -> dict[str, object]:
                 trace_id=trace_id,
                 retry_state="running",
                 next_retry_at="",
+                active_attempt=attempt_count,
+                last_progress_at=now_iso(),
+                last_event_type="feature.build.retry.started",
+                last_trace_id=trace_id,
                 summary=f"Retry attempt {attempt_count}/{max_attempts} dispatching.",
             )
             queued = runner.send_task(
@@ -321,6 +336,9 @@ def dispatch_due_feature_build_retries(limit: int = 50) -> dict[str, object]:
                 run_id,
                 retry_state="scheduled",
                 next_retry_at=next_retry_at,
+                last_progress_at=now_iso(),
+                last_event_type="feature.build.retry.rescheduled",
+                last_trace_id=trace_id,
                 summary=(
                     f"Retry attempt {attempt_count}/{max_attempts} dispatch failed; "
                     f"rescheduled for {next_retry_at}."

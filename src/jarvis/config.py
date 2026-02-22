@@ -96,6 +96,18 @@ class Settings(BaseSettings):
         alias="FEATURE_BUILD_ESCALATE_ON_EXHAUSTED",
         default=1,
     )
+    feature_build_fail_fast_placeholder_repeat: int = Field(
+        alias="FEATURE_BUILD_FAIL_FAST_PLACEHOLDER_REPEAT",
+        default=1,
+    )
+    feature_build_deliverable_gate_enabled: int = Field(
+        alias="FEATURE_BUILD_DELIVERABLE_GATE_ENABLED",
+        default=1,
+    )
+    feature_build_loop_cap_threshold: int = Field(
+        alias="FEATURE_BUILD_LOOP_CAP_THRESHOLD",
+        default=8,
+    )
     human_escalation_channel_type: str = Field(
         alias="HUMAN_ESCALATION_CHANNEL_TYPE",
         default="whatsapp",
