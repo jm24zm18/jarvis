@@ -14,7 +14,7 @@ from jarvis.tasks import get_task_runner
 logger = logging.getLogger(__name__)
 from jarvis.config import get_settings  # noqa: E402
 from jarvis.db.connection import get_conn  # noqa: E402
-from jarvis.db.queries import now_iso  # noqa: E402
+from jarvis.db.queries import create_feature_request, now_iso  # noqa: E402
 from jarvis.events.models import EventInput  # noqa: E402
 from jarvis.events.writer import emit_event, redact_payload  # noqa: E402
 from jarvis.ids import new_id  # noqa: E402
@@ -565,6 +565,132 @@ def _build_registry(
         soul_md = str(args.get("soul_md", ""))
         return update_persona(agent_id=target_agent_id, soul_md=soul_md)
 
+    async def tool_create_feature_request(args: dict[str, object]) -> dict[str, object]:
+        raw_title = args.get("title")
+        title = str(raw_title).strip() if isinstance(raw_title, str) else ""
+        if not title:
+            return {"ok": False, "error": "title is required"}
+        description = (
+            str(args.get("description", "")).strip()
+            if isinstance(args.get("description"), str)
+            else ""
+        )
+        priority = (
+            str(args.get("priority", "medium")).strip().lower()
+            if isinstance(args.get("priority"), str)
+            else "medium"
+        )
+        row = conn.execute(
+            "SELECT user_id FROM threads WHERE id=? LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "error": "thread not found"}
+        reporter_id = str(row["user_id"])
+        input_thread_id = (
+            str(args.get("thread_id", "")).strip()
+            if isinstance(args.get("thread_id"), str)
+            else ""
+        )
+        target_thread_id = input_thread_id or thread_id
+        input_trace_id = (
+            str(args.get("trace_id", "")).strip()
+            if isinstance(args.get("trace_id"), str)
+            else ""
+        )
+        target_trace_id = input_trace_id or trace_id
+        try:
+            feature_id, created = create_feature_request(
+                conn,
+                title=title,
+                description=description,
+                priority=priority,
+                reporter_id=reporter_id,
+                thread_id=target_thread_id,
+                trace_id=target_trace_id,
+            )
+        except Exception as exc:
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="roadmap.write.failed",
+                    component="agent",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(
+                        {
+                            "status": "failed",
+                            "error": str(exc),
+                            "title": title,
+                            "thread_id": target_thread_id,
+                            "trace_id": target_trace_id,
+                        }
+                    ),
+                    payload_redacted_json=json.dumps(
+                        redact_payload(
+                            {
+                                "status": "failed",
+                                "error": str(exc),
+                                "title": title,
+                                "thread_id": target_thread_id,
+                                "trace_id": target_trace_id,
+                            }
+                        )
+                    ),
+                ),
+            )
+            return {"ok": False, "error": str(exc)}
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="roadmap.write.verified",
+                component="agent",
+                actor_type="agent",
+                actor_id=actor_id,
+                payload_json=json.dumps(
+                    {
+                        "status": "verified",
+                        "id": feature_id,
+                        "kind": "feature",
+                        "created": created,
+                        "idempotent_hit": not created,
+                        "thread_id": target_thread_id,
+                        "trace_id": target_trace_id,
+                    }
+                ),
+                payload_redacted_json=json.dumps(
+                    redact_payload(
+                        {
+                            "status": "verified",
+                            "id": feature_id,
+                            "kind": "feature",
+                            "created": created,
+                            "idempotent_hit": not created,
+                            "thread_id": target_thread_id,
+                            "trace_id": target_trace_id,
+                        }
+                    )
+                ),
+            ),
+        )
+        return {
+            "ok": True,
+            "id": feature_id,
+            "kind": "feature",
+            "created": created,
+            "idempotent_hit": not created,
+            "thread_id": target_thread_id,
+            "trace_id": target_trace_id,
+        }
+
     async def tool_skill_list(args: dict[str, object]) -> dict[str, Any]:
         scope = str(args["scope"]) if isinstance(args.get("scope"), str) else actor_id
         raw_pinned_only = args.get("pinned_only")
@@ -758,6 +884,26 @@ def _build_registry(
                     "soul_md": {"type": "string", "description": "Full replacement markdown"},
                 },
                 "required": ["agent_id", "soul_md"],
+            },
+        )
+        registry.register(
+            "create_feature_request",
+            "Create a roadmap feature request and return its ID",
+            tool_create_feature_request,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Feature title"},
+                    "description": {"type": "string", "description": "Feature details"},
+                    "priority": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "critical"],
+                        "description": "Feature priority",
+                    },
+                    "thread_id": {"type": "string", "description": "Optional thread scope"},
+                    "trace_id": {"type": "string", "description": "Optional idempotency trace"},
+                },
+                "required": ["title"],
             },
         )
     registry.register(

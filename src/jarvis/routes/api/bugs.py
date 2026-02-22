@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from jarvis.auth.dependencies import UserContext, require_admin, require_auth
 from jarvis.db.connection import get_conn
+from jarvis.db.queries import create_feature_request as create_feature_request_row
 from jarvis.ids import new_id
 from jarvis.tasks import get_task_runner
 
@@ -100,39 +101,51 @@ def create_bug(
         raise HTTPException(status_code=400, detail=f"Invalid priority: {body.priority}")
     if body.kind not in VALID_KINDS:
         raise HTTPException(status_code=400, detail=f"Invalid kind: {body.kind}")
-    bug_id = new_id("bug")
     now = _now()
     degraded = False
+    created = True
     with get_conn() as conn:
-        conn.execute(
-            (
-                "INSERT INTO bug_reports(id, kind, title, description, status, priority, "
-                "reporter_id, assignee_agent, thread_id, trace_id, "
-                "github_issue_number, github_issue_url, github_synced_at, github_sync_error, "
-                "created_at, updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-            ),
-            (
-                bug_id,
-                body.kind,
-                body.title,
-                body.description,
-                "open",
-                body.priority,
-                ctx.user_id,
-                None,
-                body.thread_id,
-                body.trace_id,
-                None,
-                None,
-                None,
-                None,
-                now,
-                now,
-            ),
-        )
+        if body.kind == "feature":
+            bug_id, created = create_feature_request_row(
+                conn,
+                title=body.title,
+                description=body.description,
+                priority=body.priority,
+                reporter_id=ctx.user_id,
+                thread_id=body.thread_id,
+                trace_id=body.trace_id,
+            )
+        else:
+            bug_id = new_id("bug")
+            conn.execute(
+                (
+                    "INSERT INTO bug_reports(id, kind, title, description, status, priority, "
+                    "reporter_id, assignee_agent, thread_id, trace_id, "
+                    "github_issue_number, github_issue_url, github_synced_at, github_sync_error, "
+                    "created_at, updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                ),
+                (
+                    bug_id,
+                    body.kind,
+                    body.title,
+                    body.description,
+                    "open",
+                    body.priority,
+                    ctx.user_id,
+                    None,
+                    body.thread_id,
+                    body.trace_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    now,
+                    now,
+                ),
+            )
     github_sync_queued = False
-    if body.sync_to_github:
+    if body.sync_to_github and created:
         github_sync_queued = _send_task(
             "jarvis.tasks.github.github_issue_sync_bug_report",
             kwargs={"bug_id": bug_id},
@@ -142,6 +155,8 @@ def create_bug(
     return {
         "id": bug_id,
         "kind": body.kind,
+        "created": created,
+        "idempotent_hit": not created,
         "github_sync_queued": github_sync_queued,
         "degraded": degraded,
     }

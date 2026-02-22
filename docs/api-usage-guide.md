@@ -129,6 +129,11 @@ GET   /api/v1/feature-requests/{id}/build-runs  # admin only
 GET   /api/v1/feature-requests?approval_status=pending|approved|rejected  # filter by approval
 ```
 
+Idempotent create behavior:
+- `POST /api/v1/feature-requests` dedupes retries when `trace_id` is provided and
+  `title` + `trace_id` + `thread_id` + reporter match an existing feature row.
+- Response includes `created` and `idempotent_hit` flags to indicate whether a new row was inserted.
+
 ## Approvals Center
 
 ```

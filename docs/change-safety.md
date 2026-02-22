@@ -25,6 +25,8 @@
 - State extraction must not block assistant reply persistence; extraction runs asynchronously and emits `state.extraction.queued -> complete|skipped|failed` lifecycle events.
 - Assistant final output must pass leak-guard sanitization before message persistence; internal planning/tool payload artifacts must never be user-visible.
 - Repeated failing tool calls within a single agent step must be suppressible to avoid deterministic failure loops.
+- Assistant must not claim roadmap/feature-request mutation success unless an in-step verified write result exists; unverified claims must be blocked and logged (`agent.response.claim_blocked`).
+- Feature-request create path must be idempotent for retry scenarios when `trace_id` is supplied.
 - Follow-up heartbeat checks must remain opt-in per thread with ownership enforcement on management APIs; `no_reply` outcomes must not emit user-visible outbound messages.
 
 ## High-Risk Files

@@ -21,6 +21,7 @@
 8. Assistant response is persisted; state extraction is queued as a background task (`jarvis.tasks.memory.extract_thread_state`) and outbound channel task is scheduled in-process.
 9. Final assistant output is guarded before persistence to block leaked internal planning/tool payload text; blocked output emits `agent.response.leak_blocked`.
 10. Repeated failing tool calls are suppressed within a step (`tool.call.suppressed`) to reduce failure loops.
+11. Roadmap-write success claims are blocked unless a verified write result exists in-step; blocked claims emit `agent.response.claim_blocked`.
 
 ## Scheduler Flow
 
@@ -44,6 +45,7 @@
 2. Provider router short-circuits to fallback when primary provider reports active quota cooldown.
 3. Per-thread memory extraction uses task-level backoff after timeout/quota failures and emits `state.extraction.skipped` during active backoff windows.
 4. Model run events annotate primary cooldown bypass with `primary_skipped_due_to_cooldown=true`.
+5. Typed roadmap mutation tool (`create_feature_request`) returns verified write IDs and emits `roadmap.write.verified` / `roadmap.write.failed`.
 
 ## Agent Run Reliability Flow
 

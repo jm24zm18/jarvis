@@ -906,6 +906,24 @@ class _NonZeroExitRuntime(_FakeRuntime):
         return {"exit_code": 2, "stderr": "cwd is not a directory"}
 
 
+class _RoadmapWriteRuntime(_FakeRuntime):
+    async def execute(
+        self,
+        conn: sqlite3.Connection,
+        tool_name: str,
+        arguments: dict[str, Any],
+        caller_id: str,
+        trace_id: str,
+        thread_id: str | None = None,
+        token_scopes: frozenset[str] | None = None,
+    ) -> dict[str, object]:
+        del conn, arguments, caller_id, trace_id, thread_id, token_scopes
+        self.execute_calls += 1
+        if tool_name == "create_feature_request":
+            return {"ok": True, "id": "bug_created", "kind": "feature"}
+        return {"ok": True}
+
+
 def test_run_agent_step_emits_tool_error_notification(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
     router = _SequenceRouter(
@@ -1095,3 +1113,69 @@ def test_run_agent_step_enqueues_thought_memory_payload(monkeypatch) -> None:
     assert "thought_sha256" in metadata
     assert "thought_char_count" in metadata
     assert '"type": "agent.thought"' in str(thought_entries[0]["text"])
+
+
+def test_run_agent_step_blocks_unverified_roadmap_success_claim(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [(ModelResponse(text="I've added both items to the roadmap.", tool_calls=[]), "primary")]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550172")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "add to roadmap")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_claim_blocked")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.claim_blocked' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_claim_blocked",),
+        ).fetchone()
+    assert row is not None
+    assert "could not verify a successful roadmap write" in str(row["content"]).lower()
+    assert evt is not None
+
+
+def test_run_agent_step_allows_roadmap_claim_with_verified_tool_write(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="creating roadmap item",
+                    tool_calls=[{"name": "create_feature_request", "arguments": {"title": "A"}}],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="I've added it to the roadmap.", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _RoadmapWriteRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550173")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "add feature")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_claim_allowed")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        evt = conn.execute(
+            (
+                "SELECT COUNT(*) AS c FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.claim_blocked'"
+            ),
+            ("trc_claim_allowed",),
+        ).fetchone()
+    assert row is not None
+    assert "added it to the roadmap" in str(row["content"]).lower()
+    assert evt is not None
+    assert int(evt["c"]) == 0

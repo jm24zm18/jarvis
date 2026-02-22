@@ -11,6 +11,7 @@ allowed_tools:
   - skill_read
   - skill_write
   - update_persona
+  - create_feature_request
 risk_tier: medium
 max_actions_per_step: 12
 allowed_paths:

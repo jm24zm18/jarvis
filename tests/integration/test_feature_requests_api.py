@@ -69,3 +69,28 @@ def test_create_bug_with_github_sync_enqueues_task(monkeypatch) -> None:
     payload = create.json()
     assert payload["github_sync_queued"] is True
     assert ("jarvis.tasks.github.github_issue_sync_bug_report", "tools_io") in calls
+
+
+def test_create_feature_request_idempotent_on_same_trace_and_title() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+
+    client = TestClient(app)
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = {
+        "title": "Add reliable roadmap write guard",
+        "description": "guard claims with verification",
+        "priority": "high",
+        "trace_id": "trc_feature_idem_1",
+    }
+    first = client.post("/api/v1/feature-requests", headers=headers, json=payload)
+    second = client.post("/api/v1/feature-requests", headers=headers, json=payload)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_body = first.json()
+    second_body = second.json()
+    assert first_body["id"] == second_body["id"]
+    assert first_body["created"] is True
+    assert second_body["created"] is False
+    assert second_body["idempotent_hit"] is True

@@ -49,7 +49,7 @@ uv run jarvis skill install <path>
 ## Architecture Facts
 
 - Runtime process: API (`src/jarvis/main.py`) with in-process asyncio task runner.
-- Database: SQLite with ordered SQL migrations under `src/jarvis/db/migrations` (currently `001..062`).
+- Database: SQLite with ordered SQL migrations under `src/jarvis/db/migrations` (currently `001..068`).
 - Core request path: webhook -> DB dedup/persist -> `channel.inbound` event -> `agent_step` task -> orchestrator/provider/tools -> outbound.
 - Tool execution is deny-by-default and gated by policy + agent permissions.
 - Lockdown and restart state are enforced via `system_state`.

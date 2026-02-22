@@ -1518,6 +1518,80 @@ def get_stale_typing_states(
 # ---------------------------------------------------------------------------
 
 VALID_APPROVAL_STATUSES = {"pending", "approved", "rejected"}
+VALID_BUG_PRIORITIES = {"low", "medium", "high", "critical"}
+
+
+def create_feature_request(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    description: str,
+    priority: str,
+    reporter_id: str,
+    thread_id: str | None,
+    trace_id: str | None,
+) -> tuple[str, bool]:
+    """Insert a feature request row; dedupe by trace/thread/reporter/title when trace is set.
+
+    Returns (feature_id, created) where created=False indicates an idempotent hit.
+    """
+    normalized_priority = priority.strip().lower()
+    if normalized_priority not in VALID_BUG_PRIORITIES:
+        raise HTTPException(status_code=400, detail=f"Invalid priority: {priority}")
+    normalized_title = title.strip()
+    if not normalized_title:
+        raise HTTPException(status_code=400, detail="title is required")
+    normalized_description = description.strip()
+    normalized_thread_id = thread_id.strip() if isinstance(thread_id, str) else ""
+    normalized_trace_id = trace_id.strip() if isinstance(trace_id, str) else ""
+    if normalized_trace_id:
+        existing = conn.execute(
+            (
+                "SELECT id FROM bug_reports "
+                "WHERE kind='feature' AND reporter_id=? AND "
+                "COALESCE(thread_id,'')=? AND COALESCE(trace_id,'')=? AND title=? "
+                "ORDER BY created_at ASC LIMIT 1"
+            ),
+            (
+                reporter_id,
+                normalized_thread_id,
+                normalized_trace_id,
+                normalized_title,
+            ),
+        ).fetchone()
+        if existing is not None:
+            return str(existing["id"]), False
+
+    feature_id = new_id("bug")
+    ts = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO bug_reports(id, kind, title, description, status, priority, "
+            "reporter_id, assignee_agent, thread_id, trace_id, "
+            "github_issue_number, github_issue_url, github_synced_at, github_sync_error, "
+            "created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ),
+        (
+            feature_id,
+            "feature",
+            normalized_title,
+            normalized_description,
+            "open",
+            normalized_priority,
+            reporter_id,
+            None,
+            normalized_thread_id or None,
+            normalized_trace_id or None,
+            None,
+            None,
+            None,
+            None,
+            ts,
+            ts,
+        ),
+    )
+    return feature_id, True
 
 
 def set_feature_request_approval(

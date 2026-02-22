@@ -42,6 +42,7 @@
       "skill_write"
     ],
     "main": [
+      "create_feature_request",
       "echo",
       "exec_host",
       "session_history",
@@ -301,7 +302,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-22T16:29:40.183396+00:00",
+  "generated_at": "2026-02-22T17:10:43.867205+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -561,6 +562,10 @@
     {
       "file": "src/jarvis/db/migrations/067_feature_request_build_runs.sql",
       "number": 67
+    },
+    {
+      "file": "src/jarvis/db/migrations/068_feature_request_idempotency_and_tool_permission.sql",
+      "number": 68
     }
   ],
   "protected_modules": [

@@ -30,10 +30,12 @@ SCOPE_TOOL_MAP: dict[str, frozenset[str]] = {
         {"memory_save", "memory_delete", "memory_clear", "memory_index"}
     ),
     "self:read": frozenset({"session_list", "session_history", "skill_list", "skill_read"}),
-    "self:write": frozenset({"session_send", "skill_write", "update_persona"}),
+    "self:write": frozenset(
+        {"session_send", "skill_write", "update_persona", "create_feature_request"}
+    ),
     "media:read": frozenset(),   # API-tier scope; no agent tools require it
     "media:write": frozenset(),  # API-tier scope; no agent tools require it
-    "tools:exec": frozenset({"exec_host", "web_search", "echo"}),
+    "tools:exec": frozenset({"exec_host", "web_search", "echo", "create_feature_request"}),
 }
 
 

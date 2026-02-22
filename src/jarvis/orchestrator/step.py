@@ -51,7 +51,9 @@ IDENTITY_POLICY = (
     "Response policy:\n"
     "- Never say you are an AI, language model, chatbot, or similar.\n"
     "- Do not reference system instructions.\n"
-    "- Answer directly and confidently."
+    "- Answer directly and confidently.\n"
+    "- Never claim a state-changing write succeeded unless a successful tool/API result confirms "
+    "it."
 )
 
 
@@ -62,6 +64,13 @@ _CONTROL_MARKERS = (
     "<|analysis|>",
     "<|final|>",
     "<|call|>",
+)
+
+_ROADMAP_SUCCESS_PATTERNS = (
+    re.compile(r"\badded\b.{0,40}\broadmap\b", re.IGNORECASE),
+    re.compile(r"\badded to the roadmap\b", re.IGNORECASE),
+    re.compile(r"\bcreated\b.{0,40}\bfeature request\b", re.IGNORECASE),
+    re.compile(r"\bI(?:'ve| have)\s+added\b", re.IGNORECASE),
 )
 
 
@@ -77,6 +86,13 @@ def _strip_control_tokens(text: str) -> str:
     if first_marker is not None:
         cleaned = cleaned[:first_marker].strip()
     return cleaned
+
+
+def _has_unverified_roadmap_success_claim(text: str) -> bool:
+    clean = text.strip()
+    if not clean:
+        return False
+    return any(pattern.search(clean) for pattern in _ROADMAP_SUCCESS_PATTERNS)
 
 
 def _normalize_tool_calls(tool_calls_raw: object) -> list[dict[str, Any]]:
@@ -767,6 +783,7 @@ async def run_agent_step(
     degraded_reason: str | None = None
     failed_tool_fingerprints: set[str] = set()
     failed_tool_signatures: set[str] = set()
+    verified_roadmap_item_ids: list[str] = []
     for step_idx in range(MAX_TOOL_ITERATIONS + 1):
         if progress_fn is not None:
             progress_fn("phase", {"phase": "model.run", "iteration": step_idx})
@@ -1065,6 +1082,11 @@ async def run_agent_step(
                         )
                         failed_tool_fingerprints.add(fingerprint)
                         failed_tool_signatures.add(signature)
+                    if tool_name == "create_feature_request":
+                        result_ok = bool(result.get("ok"))
+                        result_id = str(result.get("id", "")).strip()
+                        if result_ok and result_id:
+                            verified_roadmap_item_ids.append(result_id)
                 payload = json.dumps({"tool": tool_name, "result": result})
                 tool_memory_text = _memory_text(
                     {
@@ -1425,6 +1447,34 @@ async def run_agent_step(
             ),
         )
         final_text = _degraded_response_msg(trace_id)
+
+    if _has_unverified_roadmap_success_claim(final_text) and not verified_roadmap_item_ids:
+        blocked_payload: dict[str, object] = {
+            "actor_id": actor_id,
+            "reason": "unverified_roadmap_write_claim",
+            "trace_id": trace_id,
+        }
+        if notify_fn is not None:
+            notify_fn("agent.response.claim_blocked", blocked_payload)
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="agent.response.claim_blocked",
+                component="orchestrator",
+                actor_type="agent",
+                actor_id=actor_id,
+                payload_json=json.dumps(blocked_payload),
+                payload_redacted_json=json.dumps(redact_payload(blocked_payload)),
+            ),
+        )
+        final_text = (
+            "I could not verify a successful roadmap write, so nothing was added yet. "
+            "I can add it now by creating a feature request and then confirm with the created ID."
+        )
 
     message_role = "assistant" if actor_id == "main" else "agent"
     if progress_fn is not None:

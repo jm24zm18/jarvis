@@ -80,6 +80,28 @@ _Last updated: 2026-02-22 (Productize Self-Build + Web-Based Approval Workflow)_
   - Release promotion: dev → master requires human approval.
   - Consider adding auto-apply behavior to release notes / operational runbook.
 
+## Execution Update (2026-02-22, Roadmap Write Reliability Guard)
+
+- Discovered missing safety task: assistant could claim roadmap writes without a persisted feature row.
+- Implemented task scope:
+  - Added typed tool `create_feature_request` in agent runtime and registered for `main`.
+  - Added idempotent feature-create helper in DB query layer keyed by reporter/thread/trace/title.
+  - Wired `/api/v1/feature-requests` to shared idempotent create logic and response flags:
+    - `created`
+    - `idempotent_hit`
+  - Added roadmap claim guard in orchestrator finalization:
+    - blocks unverified roadmap-success wording
+    - emits `agent.response.claim_blocked`
+  - Added migration `068_feature_request_idempotency_and_tool_permission.sql`:
+    - idempotency lookup index
+    - explicit tool permission for `main:create_feature_request`
+  - Added tests for:
+    - feature-request idempotency
+    - claim-blocked vs verified-write-allowed response paths
+    - tool registration presence
+- Remaining tasks before handoff:
+  - Run full gate sweep (`make test-gates`) before release promotion.
+
 ## Execution Update (2026-02-22, WhatsApp Pairing 401 Auto-Recovery + Diagnostics)
 
 - Discovered missing operational/task gap: WhatsApp sidecar could remain in `close` with repeated
