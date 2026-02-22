@@ -1718,6 +1718,60 @@ def list_feature_build_runs(
     return [dict(r) for r in rows]
 
 
+def reconcile_stale_feature_build_runs(
+    conn: sqlite3.Connection,
+    *,
+    stale_after_seconds: int = 900,
+    limit: int = 200,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Mark stale running feature-build runs as failed.
+
+    A run is stale if its `updated_at` timestamp is older than `stale_after_seconds`.
+    """
+    threshold = max(1, int(stale_after_seconds))
+    max_rows = max(1, int(limit))
+    now_dt = now or datetime.now(UTC)
+    cutoff = now_dt - timedelta(seconds=threshold)
+    rows = conn.execute(
+        (
+            "SELECT id, updated_at, summary FROM feature_request_build_runs "
+            "WHERE status='running' ORDER BY updated_at ASC LIMIT ?"
+        ),
+        (max_rows,),
+    ).fetchall()
+
+    reconciled_ids: list[str] = []
+    for row in rows:
+        stamp = str(row["updated_at"] or "")
+        if not stamp:
+            continue
+        try:
+            dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        if dt.astimezone(UTC) > cutoff:
+            continue
+        run_id = str(row["id"])
+        summary = str(row["summary"] or "").strip()
+        if not summary:
+            summary = (
+                "Build run reconciled as failed after stale running timeout "
+                f"({threshold}s)"
+            )
+        update_feature_build_run(conn, run_id, status="failed", summary=summary)
+        reconciled_ids.append(run_id)
+
+    return {
+        "reconciled": len(reconciled_ids),
+        "ids": reconciled_ids,
+        "stale_after_seconds": threshold,
+        "cutoff": cutoff.isoformat(),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Approval list / revoke helpers
 # ---------------------------------------------------------------------------

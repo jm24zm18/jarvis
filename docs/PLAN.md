@@ -102,6 +102,69 @@ _Last updated: 2026-02-22 (Productize Self-Build + Web-Based Approval Workflow)_
 - Remaining tasks before handoff:
   - Run full gate sweep (`make test-gates`) before release promotion.
 
+## Execution Update (2026-02-22, Feature Build Thread Schema Hotfix)
+
+- Discovered runtime gap from production log: `jarvis.tasks.feature_build.run_feature_build`
+  queried `threads.channel_type`, but current schema stores channel type on `channels.channel_type`.
+- Implemented task scope:
+  - Patched feature-build thread lookup to join `threads.channel_id -> channels.id`.
+  - Switched thread status filter to `open` (current schema contract) and thread-create path to
+    `ensure_channel(..., 'web') + create_thread(...)`.
+  - Added regression unit test `tests/unit/test_feature_build_task.py`.
+- Remaining tasks before handoff:
+  - Run full gate sweep (`make test-gates`) before release promotion.
+
+## Execution Update (2026-02-22, Feature Build Run Reconciliation + Crash Safety)
+
+- Discovered runtime gap from live operation: failed `run_feature_build` tasks could leave
+  `feature_request_build_runs.status='running'` indefinitely, making roadmap/admin UI appear stuck.
+- Implemented task scope:
+  - Added crash-safe reconciliation in `run_feature_build`: unexpected exceptions now mark the run
+    `failed` with an explicit summary.
+  - Added stale-run reconciliation helper in query layer:
+    - `reconcile_stale_feature_build_runs(...)` marks long-running stale rows as `failed`.
+  - Added task registration and periodic sweep:
+    - `jarvis.tasks.feature_build.reconcile_stale_feature_build_runs` every 60s.
+  - Added admin endpoint for manual reconciliation:
+    - `POST /api/v1/feature-requests/build-runs/reconcile`.
+  - Added service-layer auto-reconcile on run-list reads so UI reflects corrected status quickly.
+  - Added regressions:
+    - unit: task crash -> failed status with summary
+    - unit: stale running run -> reconciled failed
+    - integration: admin reconcile endpoint success + non-admin deny
+- Remaining tasks before handoff:
+  - Run full gate sweep (`make test-gates`) before release promotion.
+
+## Execution Update (2026-02-22, Roadmap Build-Run Live Chat Window)
+
+- Implemented admin live monitoring inside roadmap Build Runs modal using existing thread/message
+  APIs and build-run metadata.
+- Implemented task scope:
+  - Roadmap Build Runs modal now has two-pane layout:
+    - selectable run list
+    - live Build Chat pane
+  - Build Chat polling:
+    - polls `GET /api/v1/threads/{thread_id}/messages` every 2.5s while modal is open
+    - supports `Load older` via `before` cursor
+    - preserves bottom-stick scrolling unless user scrolls up
+  - Added sticky run status metadata bar:
+    - status
+    - trace id (short)
+    - created/updated timestamps
+  - Added quick actions:
+    - `Open full Events trace`
+    - `Open Chat thread`
+  - Added UI states for:
+    - no attached thread yet
+    - empty message history
+    - retry on fetch failure
+  - API/web contract updates:
+    - `listMessages` client supports `limit` query parameter
+    - integration coverage asserts `thread_id` + `updated_at` fields in build-runs payload
+    - roadmap contract tests extended for build-chat affordances
+- Remaining tasks before handoff:
+  - Run full gate sweep (`make test-gates`) before release promotion.
+
 ## Execution Update (2026-02-22, WhatsApp Pairing 401 Auto-Recovery + Diagnostics)
 
 - Discovered missing operational/task gap: WhatsApp sidecar could remain in `close` with repeated

@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from jarvis.db.queries import (
     create_feature_build_run,
     list_feature_build_runs,
+    reconcile_stale_feature_build_runs,
     set_feature_request_approval,
 )
 
@@ -129,4 +130,19 @@ def get_feature_build_runs(
         raise HTTPException(status_code=404, detail="Feature request not found")
     if str(row["kind"]) != "feature":
         raise HTTPException(status_code=400, detail="Record is not a feature request")
+    # Keep run statuses honest for the UI by reconciling stale "running" entries.
+    reconcile_stale_feature_build_runs(conn, stale_after_seconds=900, limit=200)
     return list_feature_build_runs(conn, feature_id, limit=limit)
+
+
+def reconcile_feature_build_runs(
+    conn: sqlite3.Connection,
+    *,
+    stale_after_seconds: int = 900,
+    limit: int = 200,
+) -> dict[str, object]:
+    return reconcile_stale_feature_build_runs(
+        conn,
+        stale_after_seconds=stale_after_seconds,
+        limit=limit,
+    )

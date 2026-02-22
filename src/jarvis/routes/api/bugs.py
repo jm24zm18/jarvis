@@ -348,3 +348,21 @@ def list_feature_build_runs_endpoint(
     with get_conn() as conn:
         items = get_feature_build_runs(conn, feature_id, limit=limit)
     return {"items": items, "feature_id": feature_id}
+
+
+@router.post("/feature-requests/build-runs/reconcile")
+def reconcile_feature_build_runs_endpoint(
+    stale_after_seconds: int = Query(default=900, ge=1, le=86400),
+    limit: int = Query(default=200, ge=1, le=1000),
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    del ctx
+    from jarvis.services.feature_requests import reconcile_feature_build_runs
+
+    with get_conn() as conn:
+        result = reconcile_feature_build_runs(
+            conn,
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        )
+    return result

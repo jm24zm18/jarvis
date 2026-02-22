@@ -129,6 +129,10 @@ GET   /api/v1/feature-requests/{id}/build-runs  # admin only
 GET   /api/v1/feature-requests?approval_status=pending|approved|rejected  # filter by approval
 ```
 
+Build-runs payload fields include:
+- `thread_id`: chat thread attached to the run (empty until assigned)
+- `updated_at`: run row freshness timestamp (used by roadmap live monitor)
+
 Idempotent create behavior:
 - `POST /api/v1/feature-requests` dedupes retries when `trace_id` is provided and
   `title` + `trace_id` + `thread_id` + reporter match an existing feature row.

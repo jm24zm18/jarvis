@@ -1,5 +1,7 @@
 """Unit tests for feature request approval and build-run query helpers."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi import HTTPException
 
@@ -11,6 +13,7 @@ from jarvis.db.queries import (
     list_approvals,
     list_feature_build_runs,
     now_iso,
+    reconcile_stale_feature_build_runs,
     revoke_approval,
     set_feature_request_approval,
     update_feature_build_run,
@@ -132,6 +135,29 @@ def test_update_feature_build_run_invalid_status() -> None:
         run_id = create_feature_build_run(conn, feature_id=fid, created_by="usr_admin")
         with pytest.raises(ValueError):
             update_feature_build_run(conn, run_id, status="unknown_status")
+
+
+def test_reconcile_stale_feature_build_runs_marks_stale_running_failed() -> None:
+    with get_conn() as conn:
+        fid = _insert_feature(conn)
+        run_id = create_feature_build_run(conn, feature_id=fid, created_by="usr_admin")
+        stale_stamp = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
+        conn.execute(
+            "UPDATE feature_request_build_runs SET status='running', updated_at=? WHERE id=?",
+            (stale_stamp, run_id),
+        )
+
+        result = reconcile_stale_feature_build_runs(conn, stale_after_seconds=60, limit=10)
+        row = conn.execute(
+            "SELECT status, summary FROM feature_request_build_runs WHERE id=?",
+            (run_id,),
+        ).fetchone()
+
+    assert int(result["reconciled"]) == 1
+    assert run_id in result["ids"]
+    assert row is not None
+    assert str(row["status"]) == "failed"
+    assert "stale running timeout" in str(row["summary"])
 
 
 # ---------------------------------------------------------------------------

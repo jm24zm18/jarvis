@@ -1,11 +1,14 @@
 """Integration tests for feature request approval and build-run API."""
 
 import os
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from jarvis.config import get_settings
+from jarvis.db.connection import get_conn
+from jarvis.db.queries import create_feature_build_run
 from jarvis.main import app
 
 _MANAGED_CLIENTS: list[TestClient] = []
@@ -217,6 +220,78 @@ def test_list_feature_build_runs_admin_only() -> None:
         headers=_headers(user_token),
     )
     assert r_user.status_code == 403
+
+
+def test_build_runs_payload_includes_thread_id_and_updated_at() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    admin_token, _ = _setup(client)
+
+    feature_id = _create_feature(client, admin_token)
+    with get_conn() as conn:
+        run_id = create_feature_build_run(conn, feature_id=feature_id, created_by="usr_admin")
+        conn.execute(
+            "UPDATE feature_request_build_runs SET thread_id=?, status='running' WHERE id=?",
+            ("thr_contract_build_1", run_id),
+        )
+
+    r = client.get(
+        f"/api/v1/feature-requests/{feature_id}/build-runs",
+        headers=_headers(admin_token),
+    )
+    assert r.status_code == 200
+    items = r.json()["items"]
+    target = next(item for item in items if item["id"] == run_id)
+    assert "thread_id" in target
+    assert "updated_at" in target
+    assert target["thread_id"] == "thr_contract_build_1"
+
+
+def test_admin_can_reconcile_stale_feature_build_runs() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    admin_token, _ = _setup(client)
+    feature_id = _create_feature(client, admin_token)
+
+    with get_conn() as conn:
+        run_id = create_feature_build_run(conn, feature_id=feature_id, created_by="usr_admin")
+        stale_stamp = (datetime.now(UTC) - timedelta(minutes=20)).isoformat()
+        conn.execute(
+            "UPDATE feature_request_build_runs SET status='running', updated_at=? WHERE id=?",
+            (stale_stamp, run_id),
+        )
+
+    reconcile = client.post(
+        "/api/v1/feature-requests/build-runs/reconcile?stale_after_seconds=60&limit=50",
+        headers=_headers(admin_token),
+    )
+    assert reconcile.status_code == 200
+    body = reconcile.json()
+    assert body["reconciled"] >= 1
+    assert run_id in body["ids"]
+
+    runs = client.get(
+        f"/api/v1/feature-requests/{feature_id}/build-runs",
+        headers=_headers(admin_token),
+    )
+    assert runs.status_code == 200
+    run_map = {item["id"]: item for item in runs.json()["items"]}
+    assert run_map[run_id]["status"] == "failed"
+
+
+def test_non_admin_cannot_reconcile_stale_feature_build_runs() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    _, user_token = _setup(client)
+
+    r = client.post(
+        "/api/v1/feature-requests/build-runs/reconcile",
+        headers=_headers(user_token),
+    )
+    assert r.status_code == 403
 
 
 # ---------------------------------------------------------------------------

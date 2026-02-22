@@ -70,6 +70,23 @@ For governance and self-update investigations:
 3. Land on `/admin/events` with query parameters (`trace_id`, optional `thread_id`).
 4. Verify the events table and trace viewer load the selected trace context.
 
+## Roadmap Build Chat Monitor
+
+Roadmap Build Runs modal (`/admin/roadmap`) includes a live chat-like monitor for feature builds:
+
+1. Open a feature card with `approval_status=approved`.
+2. Click `Build`, then select a run from the run list.
+3. Build Chat pane polls thread messages every ~2.5 seconds while modal is open.
+4. Status bar shows run status, trace, and created/updated timestamps.
+5. Quick links:
+   - `Open full Events trace` -> `/admin/events?trace_id=...`
+   - `Open Chat thread` -> `/chat/:threadId`
+
+Empty/error states:
+- `No thread attached yet` when run has no `thread_id` yet.
+- `Build has not produced messages yet` when thread history is still empty.
+- Retry action on message fetch error.
+
 ## Related Docs
 
 - `docs/api-usage-guide.md`

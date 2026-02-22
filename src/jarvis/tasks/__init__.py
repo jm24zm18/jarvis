@@ -83,6 +83,10 @@ def _register_tasks(runner: TaskRunner) -> None:
         "jarvis.tasks.feature_build.run_feature_build",
         feature_build.run_feature_build,
     )
+    runner.register(
+        "jarvis.tasks.feature_build.reconcile_stale_feature_build_runs",
+        feature_build.reconcile_stale_feature_build_runs,
+    )
     runner.register("jarvis.tasks.scheduler.scheduler_tick", scheduler.scheduler_tick)
     runner.register("jarvis.tasks.selfupdate.self_update_propose", selfupdate.self_update_propose)
     runner.register("jarvis.tasks.selfupdate.self_update_validate", selfupdate.self_update_validate)
@@ -135,6 +139,7 @@ def get_periodic_scheduler() -> PeriodicScheduler:
         scheduler.add("jarvis.tasks.events.run_event_maintenance", 604800)
         scheduler.add("jarvis.tasks.system.db_vacuum", 2592000)
         scheduler.add("jarvis.tasks.channel.cleanup_stale_typing", 10)
+        scheduler.add("jarvis.tasks.feature_build.reconcile_stale_feature_build_runs", 60)
         scheduler.add("jarvis.tasks.system.watchdog_stall_check", 30)
         scheduler.add("jarvis.tasks.system.update_liveness_probe", 5)
         if settings.maintenance_enabled == 1 and settings.maintenance_interval_seconds > 0:

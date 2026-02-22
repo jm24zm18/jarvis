@@ -72,10 +72,15 @@ export const patchThread = (
 export const createThread = () =>
   apiFetch<{ id: string }>("/api/v1/threads", { method: "POST", body: "{}" });
 
-export const listMessages = (threadId: string, before?: string) =>
-  apiFetch<{ items: MessageItem[]; next_before?: string }>(
-    `/api/v1/threads/${threadId}/messages${before ? `?before=${encodeURIComponent(before)}` : ""}`,
+export const listMessages = (threadId: string, before?: string, limit?: number) => {
+  const qs = new URLSearchParams();
+  if (before) qs.set("before", before);
+  if (typeof limit === "number") qs.set("limit", String(limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ items: MessageItem[]; next_before?: string }>(
+    `/api/v1/threads/${threadId}/messages${suffix}`,
   );
+};
 
 export const sendMessage = (threadId: string, content: string) =>
   apiFetch<{ ok: boolean; message_id: string; onboarding: boolean; trace_id?: string }>(

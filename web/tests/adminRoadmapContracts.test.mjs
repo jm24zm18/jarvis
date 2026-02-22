@@ -41,8 +41,32 @@ test("roadmap page has build run panel", () => {
   assert.match(source, /Run Build/);
 });
 
+test("roadmap build runs modal has live build chat pane", () => {
+  assert.match(source, /Build Chat/);
+  assert.match(source, /listMessages/);
+  assert.match(source, /refetchInterval:\s*2500/);
+});
+
+test("roadmap build chat has events and thread quick links", () => {
+  assert.match(source, /Open full Events trace/);
+  assert.match(source, /Open Chat thread/);
+  assert.match(source, /to=\{`\/chat\/\$\{selectedThreadId\}`\}/);
+});
+
+test("roadmap build chat contains expected empty states", () => {
+  assert.match(source, /No thread attached yet/);
+  assert.match(source, /Build has not produced messages yet/);
+  assert.match(source, /Load older/);
+});
+
 test("roadmap page links build run traces to events page", () => {
   assert.match(source, /\/admin\/events\?trace_id=/);
+});
+
+test("roadmap trace links use client-side routing", () => {
+  assert.match(source, /from "react-router-dom"/);
+  assert.match(source, /<Link/);
+  assert.doesNotMatch(source, /href=\{`\/admin\/events\?trace_id=/);
 });
 
 test("roadmap page has approval_status filter", () => {
