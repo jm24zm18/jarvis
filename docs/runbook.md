@@ -345,12 +345,23 @@ ORDER BY created_at DESC;
 SELECT event_type, created_at, payload_json
 FROM events
 WHERE trace_id = '<trace_id>'
-  AND event_type IN ('agent.response.leak_blocked', 'model.fallback', 'agent.response.degraded')
+  AND event_type IN (
+    'agent.response.leak_blocked',
+    'agent.response.degraded',
+    'agent.response.incomplete',
+    'model.fallback'
+  )
+ORDER BY created_at ASC;
+
+-- 7. Human escalation dispatch records for this trace
+SELECT id, status, channel_type, target_external_id, error, created_at, updated_at
+FROM human_escalations
+WHERE trace_id = '<trace_id>'
 ORDER BY created_at ASC;
 ```
 
 Expected behavior for feature builds:
-- Degraded/leak-blocked terminal responses finalize the linked build run as `failed` immediately.
+- Degraded/leak-blocked/incomplete terminal responses are treated as failed terminal outcomes.
 - `summary` should include an operator-actionable reason (quota exhaustion, leak guard block, or degraded reason).
 - `running` status should only remain for actively executing runs, not terminal degraded outcomes.
 

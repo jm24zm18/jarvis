@@ -22,6 +22,7 @@
 9. Final assistant output is guarded before persistence to block leaked internal planning/tool payload text; blocked output emits `agent.response.leak_blocked`.
 10. Repeated failing tool calls are suppressed within a step (`tool.call.suppressed`) to reduce failure loops.
 11. Roadmap-write success claims are blocked unless a verified write result exists in-step; blocked claims emit `agent.response.claim_blocked`.
+12. Build-request terminal responses that remain progress-only emit `agent.response.incomplete` and are treated as retryable feature-build failures.
 
 ## Scheduler Flow
 
@@ -38,6 +39,14 @@
 4. A compact evaluator produces strict JSON action (`reply` or `no_reply`).
 5. `no_reply` updates state and emits `followup.no_reply` without outbound message.
 6. `reply` persists an assistant message, enqueues channel send (non-web), and emits `followup.sent`.
+
+## Human Escalation Flow
+
+1. Agents request escalation via `request_human_escalation` (main-agent-only policy gate).
+2. Request rows are persisted in `human_escalations` with status `queued` and event `human.escalation.requested`.
+3. Dispatcher task resolves configured targets (`HUMAN_ESCALATION_CHANNEL_TYPE` + `HUMAN_ESCALATION_TARGETS`) into channel threads.
+4. Dispatcher persists an escalation assistant message on the target thread and enqueues channel send.
+5. Success/failure is recorded via `human.escalation.dispatch.end|failed` and persisted status updates.
 
 ## Orchestrator Reliability Hardening
 

@@ -4,6 +4,17 @@
 **Rebaseline:** 2026-02-18 (repo/test evidence alignment pass)
 **Canonical source note:** This file supersedes fragmented plan docs as the execution source of truth.
 
+## Ralph Sprint v2.0 (2026-02-22 → 2026-02-28)
+
+- [ ] Add admin API and UI drilldown for human_escalations queue visibility and replay controls
+      Accept: GET /api/v1/admin/human-escalations returns paginated list; admin UI shows queue; replay action re-dispatches a queued escalation
+
+- [ ] Add integration test coverage for non-main-to-main escalation request patterns through session messaging
+      Accept: test_human_escalation_integration.py covers escalation triggered from feature_builder actor; verifies dispatch path and DB persistence
+
+- [ ] Run full quality gates and verify env rollout values for HUMAN_ESCALATION_TARGETS in each deployment environment
+      Accept: make lint, make typecheck, make test-gates, make docs-check all pass; runbook section for HUMAN_ESCALATION_TARGETS configuration is verified and documented
+
 ## Mission and Operating Model
 
 Deliver a self-improving Jarvis that combines deterministic governance with agentic execution across self-update, memory, and WhatsApp channels.
@@ -49,7 +60,27 @@ Tier flow: `working -> episodic -> semantic/procedural`, with low-importance sta
 | WhatsApp Channel + Admin UX | 7 | 0 | 0 |
 | Documentation + Ops Hardening | 2 | 1 | 1 |
 
-_Last updated: 2026-02-22 (Productize Self-Build + Web-Based Approval Workflow)_
+_Last updated: 2026-02-22 (Auto-Continue + Human Escalation Routing)_
+
+## Execution Update (2026-02-22, Auto-Continue + Human Escalation Routing)
+
+- Completed:
+  - Added `human_escalations` persistence + dispatch model (`070_human_escalations.sql`).
+  - Added main-agent escalation tool permission (`071_request_human_escalation_tool_permission.sql`).
+  - Added `request_human_escalation` tool and policy gate (main-only).
+  - Added dispatcher task registration/scheduling for queued escalation delivery.
+  - Added build-terminal incompleteness detection (`agent.response.incomplete`) and integrated it into feature-build retry/failure classification.
+  - Added exhausted-build escalation path to configured channel targets.
+  - Updated configuration/docs for escalation channel settings and retry behavior.
+
+- Missing tasks discovered during implementation:
+  - Add admin API/UI drilldown for `human_escalations` queue visibility and replay controls.
+  - Add integration coverage for non-main-to-main escalation request patterns through session messaging.
+  - Add explicit runbook verification checklist for configured escalation target reachability by channel.
+
+- Remaining tasks before handoff:
+  - Run full quality gates (`make lint`, `make typecheck`, `make test-gates`, `make docs-check`) after targeted validation.
+  - Confirm env rollout values for `HUMAN_ESCALATION_TARGETS` in each deployment environment.
 
 ## Execution Update (2026-02-22, Self-Build + Web Approval Workflow)
 

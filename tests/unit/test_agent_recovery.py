@@ -331,4 +331,4 @@ def test_agent_step_finalizes_feature_build_run_failed_when_retry_disabled(monke
     assert row is not None
     assert str(row["status"]) == "failed"
     assert str(row["retry_state"]) == "none"
-    assert "degraded response" in str(row["summary"]).lower()
+    assert "terminal response" in str(row["summary"]).lower()

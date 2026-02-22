@@ -16,6 +16,7 @@ from jarvis.cli.chat import (
     resolve_thread,
     send_and_wait,
 )
+from jarvis.cli.ralph import ralph_group
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.memory.skills import SkillsService
@@ -336,6 +337,9 @@ def test_gates(fail_fast: bool, json_output: bool) -> None:
     from jarvis.cli.test_gates import run_test_gates
 
     run_test_gates(fail_fast=fail_fast, json_output=json_output)
+
+
+cli.add_command(ralph_group)
 
 
 @cli.group("skill")
