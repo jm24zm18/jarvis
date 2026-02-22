@@ -35,6 +35,14 @@
 4. A periodic reaper task scans stale `running` attempts and requeues recovery attempts when under the max-attempt budget.
 5. Trace-scoped success dedupe is enforced so only one successful attempt publishes the final result for a given `trace_id`.
 
+## Runtime Stall Detection and Recovery Flow
+
+1. A periodic watchdog (`watchdog_stall_check`) compares the age of latest inbound events to any subsequent system progress (outgoing messages or intermediate non-system events).
+2. If inbound traffic exists but the system stalls beyond a configured threshold (`stall_detect_threshold_seconds`, default 90s), a stall is declared.
+3. The system emits an explicit `runtime.stall.detected` event.
+4. The system self-heals by actively triggering an `enqueue_restart` with `runtime.recover.start` and `runtime.recover.end` emissions.
+5. A cooldown period (`stall_recovery_cooldown_seconds`, default 600s) acts as a safety measure preventing runaway restart loops.
+
 ## Self-Update Flow
 
 1. Propose patch -> persist metadata.

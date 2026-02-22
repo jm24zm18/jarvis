@@ -118,6 +118,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     poller_task, poller_stop = start_notification_poller()
     task_runner = get_task_runner()
     periodic = get_periodic_scheduler()
+    
+    periodic.add("jarvis.tasks.channel.cleanup_stale_typing", interval_seconds=10.0)
+    periodic.add("jarvis.tasks.system.watchdog_stall_check", interval_seconds=30.0)
+    periodic.add("jarvis.tasks.system.update_liveness_probe", interval_seconds=5.0)
+
     periodic_task = asyncio.create_task(periodic.run())
     yield
     poller_stop.set()

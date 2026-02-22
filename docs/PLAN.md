@@ -49,7 +49,19 @@ Tier flow: `working -> episodic -> semantic/procedural`, with low-importance sta
 | WhatsApp Channel + Admin UX | 7 | 0 | 0 |
 | Documentation + Ops Hardening | 2 | 1 | 1 |
 
-_Last updated: 2026-02-20 (Packet 9: framework audit + multi-channel media Phase 1)_
+_Last updated: 2026-02-21 (WhatsApp API Stabilization & Stall Recovery)_
+
+## Execution Update (2026-02-21, WhatsApp Processing Stabilization)
+
+- Discovered critical missing operational stability: API/event loop stalls after an assistant message is drafted but before outbound dispatch finishes, locking WhatsApp into a stuck "typing" indicator and preventing new messages.
+- Implemented task scope:
+  - Made outbound dispatch failure observable (`channel.dispatch.enqueue.failed`) and recoverable via `tools_io_retry`.
+  - Protected WhatsApp "paused" presence via a `finally` block and augmented `cleanup_stale_typing` periodic TTL loop.
+  - Deployed `watchdog_stall_check` matching events to track age-based staleness and self-recovered with a rate-limited `enqueue_restart`.
+  - Improved health checks to export internal liveness latency probes (`/metrics` for `last_message_write_age_seconds`).
+- Remaining tasks before handoff:
+  - Validated manually, code logic tested via test suite.
+
 
 ## Execution Update (2026-02-21, CBAC + Sandbox + Multimedia Continuation)
 

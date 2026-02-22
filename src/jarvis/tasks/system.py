@@ -173,3 +173,86 @@ def db_vacuum() -> dict[str, str]:
         conn.execute("VACUUM")
     _emit(trace_id, "system.db_maintenance", {"action": "vacuum", "status": "ok"})
     return {"action": "vacuum", "status": "ok"}
+
+
+def watchdog_stall_check() -> dict[str, object]:
+    from jarvis.config import get_settings
+    from datetime import datetime, UTC
+    import time
+
+    settings = get_settings()
+    if int(getattr(settings, "stall_detect_enabled", 1)) != 1:
+        return {"status": "disabled"}
+
+    threshold_s = int(getattr(settings, "stall_detect_threshold_seconds", 90))
+    cooldown_s = int(getattr(settings, "stall_recovery_cooldown_seconds", 600))
+    now = datetime.now(UTC)
+
+    with get_conn() as conn:
+        state = get_system_state(conn)
+        if state.get("restarting", 0) == 1 or state.get("lockdown", 0) == 1:
+            return {"status": "skipped_state"}
+
+        # Cooldown check
+        row_recovery = conn.execute(
+            "SELECT MAX(created_at) as last_rec FROM events WHERE event_type = 'runtime.stall.detected'"
+        ).fetchone()
+        if row_recovery and row_recovery["last_rec"]:
+            last_rec = datetime.fromisoformat(row_recovery["last_rec"]).replace(tzinfo=UTC)
+            if (now - last_rec).total_seconds() < cooldown_s:
+                return {"status": "cooldown"}
+
+        row = conn.execute(
+            "SELECT "
+            "(SELECT MAX(created_at) FROM events WHERE event_type LIKE 'channel.inbound%') as last_inbound, "
+            "(SELECT MAX(created_at) FROM messages) as last_msg, "
+            "(SELECT MAX(created_at) FROM events) as last_event"
+        ).fetchone()
+
+        last_inbound_str = row["last_inbound"] if row else None
+        last_msg_str = row["last_msg"] if row else None
+
+        if not last_inbound_str:
+            return {"status": "ok", "reason": "no_inbound"}
+
+        last_inbound = datetime.fromisoformat(last_inbound_str).replace(tzinfo=UTC)
+        age_s = (now - last_inbound).total_seconds()
+
+        if age_s < threshold_s:
+            return {"status": "ok", "reason": "below_threshold"}
+
+        if last_msg_str:
+            last_msg = datetime.fromisoformat(last_msg_str).replace(tzinfo=UTC)
+            if last_msg > last_inbound:
+                return {"status": "ok", "reason": "progress_made"}
+
+        # Stall detected!
+        trace_id = new_id("trc")
+        _emit(
+            trace_id, "runtime.stall.detected",
+            {
+                "threshold_s": threshold_s,
+                "inbound_age_s": age_s,
+                "last_inbound": last_inbound_str,
+                "last_msg": last_msg_str,
+            },
+        )
+        _emit(trace_id, "runtime.recover.start", {"strategy": "enqueue_restart"})
+        enqueue_restart(trace_id)
+        _emit(trace_id, "runtime.recover.end", {"status": "restarting"})
+        return {"status": "stalled", "recovery": "trigged"}
+
+
+_LIVENESS_TS: float = 0.0
+
+def update_liveness_probe() -> dict[str, object]:
+    global _LIVENESS_TS
+    import time
+    _LIVENESS_TS = time.monotonic()
+    return {"status": "ok", "ts": _LIVENESS_TS}
+
+def get_liveness_age_seconds() -> float:
+    import time
+    if _LIVENESS_TS == 0.0:
+        return 0.0
+    return time.monotonic() - _LIVENESS_TS

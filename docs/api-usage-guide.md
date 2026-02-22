@@ -63,6 +63,20 @@ Governance evolution visibility:
 
 Web admin trace drill-down uses `trace_id` and optional `thread_id` query parameters to pivot into `/admin/events`.
 
+## Local Git Interface
+
+Admin-only operations for interacting with the local repository:
+
+- View Status: `GET /api/v1/repo/status`
+- View Commit Log: `GET /api/v1/repo/log`
+- View Branches: `GET /api/v1/repo/branches`
+- View File Diff: `GET /api/v1/repo/diff` (`mode` queries either `working` or `staged`)
+- Checkout Branch: `POST /api/v1/repo/checkout`
+- Stage Files: `POST /api/v1/repo/stage`
+- Unstage Files: `POST /api/v1/repo/unstage`
+- Commit: `POST /api/v1/repo/commit`
+- Push: `POST /api/v1/repo/push`
+
 ## System and Lockdown
 
 - Runtime status: `GET /api/v1/system/status`

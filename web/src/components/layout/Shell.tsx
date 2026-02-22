@@ -20,6 +20,8 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeft,
+  GitBranch,
+  Map,
 } from "lucide-react";
 import { useThemeStore } from "../../stores/theme";
 import { useAuthStore } from "../../stores/auth";
@@ -40,6 +42,8 @@ const navGroups = [
       { label: "Agents", to: "/admin/agents", icon: Bot },
       { label: "Providers", to: "/admin/providers", icon: Server },
       { label: "Channels", to: "/admin/channels", icon: Smartphone },
+      { label: "Repo", to: "/admin/repo", icon: GitBranch },
+      { label: "Roadmap", to: "/admin/roadmap", icon: Map },
       { label: "Memory", to: "/admin/memory", icon: Brain },
       { label: "Schedules", to: "/admin/schedules", icon: Clock },
       { label: "Self-Update", to: "/admin/selfupdate", icon: RefreshCw },
@@ -118,14 +122,13 @@ export default function Shell({ children }: PropsWithChildren) {
                       key={item.to}
                       to={item.to}
                       title={collapsed ? item.label : undefined}
-                      className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition ${
-                        active
-                          ? "bg-[#13293d] text-white dark:bg-slate-200 dark:text-slate-900"
-                          : "text-[var(--text-secondary)] hover:bg-mist hover:text-[var(--text-primary)]"
-                      } ${collapsed ? "justify-center" : ""}`}
+                      className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-all duration-200 ${active
+                          ? "bg-[var(--color-brand)] text-white shadow-md"
+                          : "text-[var(--text-secondary)] hover:bg-[var(--bg-mist)] hover:text-[var(--text-primary)]"
+                        } ${collapsed ? "justify-center" : ""}`}
                     >
                       <Icon size={18} />
-                      {!collapsed && <span>{item.label}</span>}
+                      {!collapsed && <span className={active ? "font-semibold" : "font-medium"}>{item.label}</span>}
                     </Link>
                   );
                 })}
@@ -153,8 +156,8 @@ export default function Shell({ children }: PropsWithChildren) {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-auto p-4 md:p-6">
-        <div className="mx-auto max-w-7xl">{children}</div>
+      <main className="flex-1 overflow-auto p-4 md:p-6 bg-[var(--bg-primary)]">
+        <div className="mx-auto max-w-7xl animate-fade-in">{children}</div>
       </main>
     </div>
   );

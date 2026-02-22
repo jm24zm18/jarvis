@@ -21,6 +21,8 @@ From `web/src/App.tsx`:
 - `/admin/bugs`
 - `/admin/governance`
 - `/admin/channels`
+- `/admin/repo`
+- `/admin/roadmap`
 
 Unknown routes redirect to `/chat` after auth.
 

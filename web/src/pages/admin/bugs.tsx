@@ -198,11 +198,10 @@ export default function AdminBugsPage() {
             <button
               key={bug.id}
               onClick={() => setSelectedId(bug.id)}
-              className={`w-full rounded-xl border p-3 text-left transition ${
-                selectedId === bug.id
-                  ? "border-ember bg-mist"
-                  : "border-[var(--border-default)] bg-surface hover:border-[var(--border-strong)]"
-              }`}
+              className={`w-full rounded-xl border p-3 text-left transition-all duration-200 ${selectedId === bug.id
+                  ? "border-[var(--color-brand)] bg-[var(--bg-mist)] shadow-md translate-x-1"
+                  : "border-[var(--border-default)] bg-surface hover:border-[var(--border-strong)] hover:shadow-sm"
+                }`}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">

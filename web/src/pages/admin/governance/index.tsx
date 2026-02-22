@@ -298,7 +298,7 @@ export default function AdminGovernancePage() {
       <Card className="mt-6" header={<h3 className="font-display text-base text-[var(--text-primary)]">Evolution Items</h3>}>
         <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-4">
           <select
-            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            className="rounded border border-[var(--border-default)] bg-surface px-2 py-1 text-sm outline-none focus:border-[var(--color-brand)]"
             value={evolutionStatus}
             onChange={(event) => setEvolutionStatus(event.target.value)}
           >
@@ -308,19 +308,19 @@ export default function AdminGovernancePage() {
             <option value="blocked">blocked</option>
           </select>
           <input
-            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            className="rounded border border-[var(--border-default)] bg-surface px-2 py-1 text-sm outline-none focus:border-[var(--color-brand)] placeholder:text-[var(--text-muted)]"
             placeholder="Filter trace_id"
             value={evolutionTraceId}
             onChange={(event) => setEvolutionTraceId(event.target.value)}
           />
           <input
-            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            className="rounded border border-[var(--border-default)] bg-surface px-2 py-1 text-sm outline-none focus:border-[var(--color-brand)] text-[var(--text-primary)]"
             type="datetime-local"
             value={evolutionFrom}
             onChange={(event) => setEvolutionFrom(event.target.value)}
           />
           <input
-            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            className="rounded border border-[var(--border-default)] bg-surface px-2 py-1 text-sm outline-none focus:border-[var(--color-brand)] text-[var(--text-primary)]"
             type="datetime-local"
             value={evolutionTo}
             onChange={(event) => setEvolutionTo(event.target.value)}

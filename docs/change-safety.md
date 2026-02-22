@@ -20,6 +20,8 @@
   - Policy `R9` scope filtering must not be bypassed in tool execution paths.
 - Media attachment access must enforce owner-or-admin checks on download routes.
 - Self-update sandbox mode must not execute smoke commands directly on host when `SELFUPDATE_SANDBOX_ENABLED=1`.
+- `channel.typing.clear` events must be unequivocally guaranteed (e.g., via `finally` blocks) to prevent stuck client indicators.
+- The system must maintain a periodic stall watchdog covering edge cases where thread processing is live but outbound loops hang, guaranteeing `runtime.stall.detected` emission and fallback recovery.
 
 ## High-Risk Files
 

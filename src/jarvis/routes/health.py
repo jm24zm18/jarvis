@@ -23,6 +23,9 @@ _metrics: dict[str, int] = {
     "channel_messages_sent": 0,
     "channel_messages_failed": 0,
     "tokens_used_total": 0,
+    "task_runner_enqueue_failures_total": 0,
+    "whatsapp_typing_active_threads_set": 0,
+    "whatsapp_typing_active_threads_clear": 0,
 }
 
 
@@ -48,13 +51,42 @@ async def metrics() -> JSONResponse:
         failure_rows = conn.execute(
             "SELECT error_summary, error_details_json FROM failure_capsules"
         ).fetchall()
+        typing_count = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM channel_typing_state"
+        ).fetchone()
+
+        last_event = conn.execute("SELECT MAX(created_at) as ts FROM events").fetchone()
+        last_msg = conn.execute("SELECT MAX(created_at) as ts FROM messages").fetchone()
 
     db_stats = {
         "messages_total": int(msg_count["cnt"]) if msg_count else 0,
         "threads_total": int(thread_count["cnt"]) if thread_count else 0,
         "events_total": int(event_count["cnt"]) if event_count else 0,
         "memory_items_count": int(memory_items_count["cnt"]) if memory_items_count else 0,
+        "whatsapp_typing_active_threads": int(typing_count["cnt"]) if typing_count else 0,
     }
+    
+    from datetime import datetime, UTC
+    now = datetime.now(UTC)
+    def _age(row) -> float:
+        if row and row["ts"]:
+            ts = datetime.fromisoformat(row["ts"]).replace(tzinfo=UTC)
+            return (now - ts).total_seconds()
+        return -1.0
+
+    last_event_age = _age(last_event)
+    last_msg_age = _age(last_msg)
+    
+    from jarvis.tasks import get_task_runner
+    from jarvis.tasks.system import get_liveness_age_seconds
+    
+    runtime_stats = {
+        "task_runner_in_flight": get_task_runner().in_flight,
+        "last_event_write_age_seconds": last_event_age,
+        "last_message_write_age_seconds": last_msg_age,
+        "liveness_probe_age_seconds": get_liveness_age_seconds(),
+    }
+
     runs = len(recon_rows)
     runs_with_changes = 0
     tokens_saved_values: list[float] = []
@@ -118,7 +150,7 @@ async def metrics() -> JSONResponse:
         "memory_reconciliation_rate": (runs_with_changes / runs) if runs > 0 else 1.0,
         "memory_hallucination_incidents": hallucination_incidents,
     }
-    return JSONResponse(content={**_metrics, **db_stats, **kpi_stats})
+    return JSONResponse(content={**_metrics, **db_stats, **kpi_stats, **runtime_stats})
 
 
 @router.get("/healthz")

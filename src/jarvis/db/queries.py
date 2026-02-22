@@ -1460,3 +1460,53 @@ def list_evolution_items(
             }
         )
     return items
+
+
+def set_typing_state(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    recipient: str,
+    channel_type: str,
+) -> None:
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO channel_typing_state(thread_id, recipient, channel_type, set_at) "
+            "VALUES(?,?,?,?) "
+            "ON CONFLICT(thread_id, recipient) DO UPDATE SET set_at=excluded.set_at, channel_type=excluded.channel_type"
+        ),
+        (thread_id, recipient, channel_type, now),
+    )
+
+
+def clear_typing_state(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    recipient: str,
+) -> None:
+    conn.execute(
+        "DELETE FROM channel_typing_state WHERE thread_id=? AND recipient=?",
+        (thread_id, recipient),
+    )
+
+
+def get_stale_typing_states(
+    conn: sqlite3.Connection,
+    cutoff_iso: str,
+) -> list[dict[str, str]]:
+    rows = conn.execute(
+        (
+            "SELECT thread_id, recipient, channel_type, set_at "
+            "FROM channel_typing_state WHERE set_at < ?"
+        ),
+        (cutoff_iso,),
+    ).fetchall()
+    return [
+        {
+            "thread_id": str(row["thread_id"]),
+            "recipient": str(row["recipient"]),
+            "channel_type": str(row["channel_type"]),
+            "set_at": str(row["set_at"]),
+        }
+        for row in rows
+    ]

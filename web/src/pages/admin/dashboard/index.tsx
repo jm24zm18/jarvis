@@ -58,9 +58,8 @@ export default function AdminDashboardPage() {
               </p>
             </div>
             <div
-              className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-                lockdown ? "bg-red-100 dark:bg-red-900/30" : "bg-emerald-100 dark:bg-emerald-900/30"
-              }`}
+              className={`flex h-10 w-10 items-center justify-center rounded-lg ${lockdown ? "bg-red-100 dark:bg-red-900/30" : "bg-emerald-100 dark:bg-emerald-900/30"
+                }`}
             >
               {lockdown ? (
                 <Lock className="h-5 w-5 text-red-600 dark:text-red-400" />
@@ -87,18 +86,16 @@ export default function AdminDashboardPage() {
               </p>
             </div>
             <div
-              className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-                data?.providers.primary
+              className={`flex h-10 w-10 items-center justify-center rounded-lg ${data?.providers.primary
                   ? "bg-emerald-100 dark:bg-emerald-900/30"
                   : "bg-red-100 dark:bg-red-900/30"
-              }`}
+                }`}
             >
               <Server
-                className={`h-5 w-5 ${
-                  data?.providers.primary
+                className={`h-5 w-5 ${data?.providers.primary
                     ? "text-emerald-600 dark:text-emerald-400"
                     : "text-red-600 dark:text-red-400"
-                }`}
+                  }`}
               />
             </div>
           </div>
@@ -120,18 +117,16 @@ export default function AdminDashboardPage() {
               </p>
             </div>
             <div
-              className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-                data?.providers.fallback
+              className={`flex h-10 w-10 items-center justify-center rounded-lg ${data?.providers.fallback
                   ? "bg-emerald-100 dark:bg-emerald-900/30"
                   : "bg-amber-100 dark:bg-amber-900/30"
-              }`}
+                }`}
             >
               <Server
-                className={`h-5 w-5 ${
-                  data?.providers.fallback
+                className={`h-5 w-5 ${data?.providers.fallback
                     ? "text-emerald-600 dark:text-emerald-400"
                     : "text-amber-600 dark:text-amber-400"
-                }`}
+                  }`}
               />
             </div>
           </div>
@@ -153,18 +148,16 @@ export default function AdminDashboardPage() {
               </p>
             </div>
             <div
-              className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-                (data?.scheduler.deferred_total ?? 0) > 0
+              className={`flex h-10 w-10 items-center justify-center rounded-lg ${(data?.scheduler.deferred_total ?? 0) > 0
                   ? "bg-amber-100 dark:bg-amber-900/30"
                   : "bg-emerald-100 dark:bg-emerald-900/30"
-              }`}
+                }`}
             >
               <Calendar
-                className={`h-5 w-5 ${
-                  (data?.scheduler.deferred_total ?? 0) > 0
+                className={`h-5 w-5 ${(data?.scheduler.deferred_total ?? 0) > 0
                     ? "text-amber-600 dark:text-amber-400"
                     : "text-emerald-600 dark:text-emerald-400"
-                }`}
+                  }`}
               />
             </div>
           </div>
@@ -245,9 +238,8 @@ export default function AdminDashboardPage() {
                     </div>
                     <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--bg-mist)]">
                       <div
-                        className={`h-full rounded-full transition-all ${
-                          isHigh ? "bg-amber-500" : "bg-leaf"
-                        }`}
+                        className={`h-full rounded-full transition-all ${isHigh ? "bg-[var(--color-danger)]" : "bg-[var(--color-brand)]"
+                          }`}
                         style={{ width: `${pct}%` }}
                       />
                     </div>

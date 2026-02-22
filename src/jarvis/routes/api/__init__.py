@@ -13,6 +13,7 @@ from jarvis.routes.api import (
     memory,
     messages,
     permissions,
+    repo,
     schedules,
     selfupdate,
     stories,
@@ -38,3 +39,4 @@ router.include_router(channels.router)
 router.include_router(webhooks.router)
 router.include_router(governance.router)
 router.include_router(stories.router)
+router.include_router(repo.router, prefix="/repo")

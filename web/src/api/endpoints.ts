@@ -30,6 +30,10 @@ import type {
   GovernanceSlo,
   GovernanceSloHistoryItem,
   EvolutionItem,
+  FeatureRequest,
+  RepoStatus,
+  RepoCommit,
+  RepoBranchSet,
 } from "../types";
 
 export const login = (password: string) =>
@@ -251,6 +255,9 @@ export const listBugs = (params: {
   return apiFetch<{ items: BugReport[]; total: number }>(`/api/v1/bugs${suffix}`);
 };
 
+export const listFeatureRequests = () =>
+  apiFetch<{ items: FeatureRequest[]; total: number }>("/api/v1/feature-requests");
+
 export const createBug = (payload: {
   title: string;
   description: string;
@@ -259,6 +266,18 @@ export const createBug = (payload: {
   trace_id?: string;
 }) =>
   apiFetch<{ id: string }>("/api/v1/bugs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const createFeatureRequest = (payload: {
+  title: string;
+  description: string;
+  priority: string;
+  thread_id?: string;
+  trace_id?: string;
+}) =>
+  apiFetch<{ id: string }>("/api/v1/feature-requests", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -437,3 +456,46 @@ export const uploadMedia = (file: File, threadId?: string) => {
     { method: "POST", body: form },
   );
 };
+
+export const repoStatus = () => apiFetch<RepoStatus>("/api/v1/repo/status");
+
+export const repoLog = (limit = 50) =>
+  apiFetch<RepoCommit[]>(`/api/v1/repo/log?limit=${limit}`);
+
+export const repoBranches = () => apiFetch<RepoBranchSet>("/api/v1/repo/branches");
+
+export const repoDiff = (mode: "working" | "staged", path?: string) => {
+  const qs = new URLSearchParams({ mode });
+  if (path) qs.set("path", path);
+  return apiFetch<string>(`/api/v1/repo/diff?${qs.toString()}`);
+};
+
+export const repoCheckout = (payload: { branch?: string; create_branch?: string }) =>
+  apiFetch<{ status: string }>("/api/v1/repo/checkout", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const repoStage = (payload: { paths?: string[]; all?: boolean }) =>
+  apiFetch<{ status: string }>("/api/v1/repo/stage", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const repoUnstage = (paths: string[]) =>
+  apiFetch<{ status: string }>("/api/v1/repo/unstage", {
+    method: "POST",
+    body: JSON.stringify(paths),
+  });
+
+export const repoCommit = (message: string) =>
+  apiFetch<{ status: string }>("/api/v1/repo/commit", {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+
+export const repoPush = (set_upstream = false) =>
+  apiFetch<{ status: string }>("/api/v1/repo/push", {
+    method: "POST",
+    body: JSON.stringify({ set_upstream }),
+  });

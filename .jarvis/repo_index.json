@@ -121,6 +121,7 @@
     "src/jarvis/routes/api/memory.py",
     "src/jarvis/routes/api/messages.py",
     "src/jarvis/routes/api/permissions.py",
+    "src/jarvis/routes/api/repo.py",
     "src/jarvis/routes/api/schedules.py",
     "src/jarvis/routes/api/selfupdate.py",
     "src/jarvis/routes/api/stories.py",
@@ -298,7 +299,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-22T00:16:25.583151+00:00",
+  "generated_at": "2026-02-22T02:18:08.859460+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -538,6 +539,10 @@
     {
       "file": "src/jarvis/db/migrations/062_media_attachments.sql",
       "number": 62
+    },
+    {
+      "file": "src/jarvis/db/migrations/063_channel_typing_state.sql",
+      "number": 63
     }
   ],
   "protected_modules": [

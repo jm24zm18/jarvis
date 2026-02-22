@@ -95,6 +95,11 @@
    - `memory_avg_tokens_saved`
    - `memory_reconciliation_rate`
    - `memory_hallucination_incidents`
+4. Monitor `/metrics` runtime liveness and WhatsApp KPI fields for stall-detection:
+   - `task_runner_in_flight`
+   - `last_event_write_age_seconds`
+   - `last_message_write_age_seconds`
+   - `whatsapp_typing_active_threads_set/clear`
 
 ### Memory Conflict Resolution Operator Flow
 
@@ -183,6 +188,10 @@
    - recreate/disconnect instance from admin channel APIs
    - regenerate QR / pairing code
    - confirm sidecar reachability and credentials (`EVOLUTION_API_URL`, `EVOLUTION_API_KEY`)
+7. If WhatsApp is stuck showing "typing..." for extended periods or messages are missing (loop stalls):
+   - Check the `/metrics` endpoint for mismatched `whatsapp_typing_active_threads_set` and `_clear` counters.
+   - Confirm the `jarvis.tasks.channel.cleanup_stale_typing` periodic TTL task is running in-process. 
+   - Check if the runtime naturally recovered via the `watchdog_stall_check`. The watchdog emits `runtime.stall.detected` and performs an `enqueue_restart` when it detects an inbound message with no outbound progress. Monitor `runtime.recover.*` events.
 
 ## Outage-Class Diagnostics Evidence
 

@@ -41,6 +41,7 @@ from jarvis.db.queries import (
     insert_whatsapp_media,
     prune_whatsapp_thread_map_orphans,
     record_external_message,
+    set_typing_state,
     thread_exists,
     upsert_whatsapp_thread_map,
 )
@@ -680,9 +681,28 @@ async def inbound(
             try:
                 _send_presence = getattr(adapter, "send_presence", None)
                 if callable(_send_presence):
+                    recipient_jid = str(msg.sender_id or remote_jid)
                     await _send_presence(
-                        recipient=str(msg.sender_id or remote_jid),
+                        recipient=recipient_jid,
                         presence="composing",
+                    )
+                    set_typing_state(conn, thread_id, recipient_jid, "whatsapp")
+                    from jarvis.routes.health import increment_metric
+                    increment_metric("whatsapp_typing_active_threads_set")
+                    emit_event(
+                        conn,
+                        EventInput(
+                            trace_id=trace_id,
+                            span_id=new_id("spn"),
+                            parent_span_id=None,
+                            thread_id=thread_id,
+                            event_type="channel.typing.set",
+                            component="channels.whatsapp",
+                            actor_type="system",
+                            actor_id="whatsapp",
+                            payload_json=json.dumps({"reason": "inbound_acknowledged", "recipient": recipient_jid}),
+                            payload_redacted_json=json.dumps({"reason": "inbound_acknowledged"}),
+                        ),
                     )
             except Exception:
                 pass  # Typing indicator is best-effort, don't block on failure

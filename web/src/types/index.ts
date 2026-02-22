@@ -252,6 +252,35 @@ export interface BugReport {
   updated_at: string;
 }
 
+export type FeatureRequest = BugReport;
+
+export interface RepoStatus {
+  branch: string;
+  upstream: string;
+  ahead: number;
+  behind: number;
+  staged: string[];
+  unstaged: string[];
+  untracked: string[];
+  conflicted: string[];
+  is_clean: boolean;
+}
+
+export interface RepoCommit {
+  sha: string;
+  short_sha: string;
+  subject: string;
+  author_name: string;
+  author_email: string;
+  authored_at: string;
+}
+
+export interface RepoBranchSet {
+  current: string;
+  local: string[];
+  remote: string[];
+}
+
 export interface FitnessSnapshot {
   id: string;
   period_start: string;

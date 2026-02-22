@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 from jarvis.config import get_settings  # noqa: E402
 from jarvis.db.connection import get_conn  # noqa: E402
 from jarvis.db.queries import now_iso  # noqa: E402
+from jarvis.events.models import EventInput  # noqa: E402
+from jarvis.events.writer import emit_event, redact_payload  # noqa: E402
+from jarvis.ids import new_id  # noqa: E402
 from jarvis.memory.skills import SkillsService  # noqa: E402
 from jarvis.orchestrator.step import run_agent_step  # noqa: E402
 from jarvis.plugins.base import PluginContext  # noqa: E402
@@ -238,6 +241,31 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                         str(channel_row["channel_type"]) if channel_row is not None else ""
                     )
                     if channel_type and channel_type != "web":
+                        def _emit(evt_type: str, evt_payload: dict[str, object]) -> None:
+                            emit_event(
+                                conn,
+                                EventInput(
+                                    trace_id=trace_id,
+                                    span_id=new_id("spn"),
+                                    parent_span_id=None,
+                                    thread_id=thread_id,
+                                    event_type=evt_type,
+                                    component="agent",
+                                    actor_type="system",
+                                    actor_id="agent",
+                                    payload_json=json.dumps(evt_payload),
+                                    payload_redacted_json=json.dumps(redact_payload(evt_payload)),
+                                ),
+                            )
+
+                        _emit(
+                            "channel.dispatch.enqueue.start",
+                            {
+                                "message_id": message_id,
+                                "channel_type": channel_type,
+                            },
+                        )
+
                         ok = get_task_runner().send_task(
                             "jarvis.tasks.channel.send_channel_message",
                             kwargs={
@@ -247,8 +275,60 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                             },
                             queue="tools_io",
                         )
-                        if not ok:
-                            logger.error("Failed to dispatch %s send task", channel_type)
+                        if ok:
+                            _emit(
+                                "channel.dispatch.enqueue.end",
+                                {
+                                    "message_id": message_id,
+                                    "channel_type": channel_type,
+                                },
+                            )
+                        else:
+                            logger.warning(
+                                "Failed to dispatch %s send task thread_id=%s message_id=%s trace_id=%s",
+                                channel_type,
+                                thread_id,
+                                message_id,
+                                trace_id,
+                            )
+                            _emit(
+                                "channel.dispatch.enqueue.failed",
+                                {
+                                    "message_id": message_id,
+                                    "channel_type": channel_type,
+                                    "attempt": 1,
+                                    "queue": "tools_io",
+                                },
+                            )
+                            fallback_ok = get_task_runner().send_task(
+                                "jarvis.tasks.channel.send_channel_message",
+                                kwargs={
+                                    "thread_id": thread_id,
+                                    "message_id": message_id,
+                                    "channel_type": channel_type,
+                                },
+                                queue="tools_io_retry",
+                            )
+                            if not fallback_ok:
+                                logger.error(
+                                    "Fallback dispatch to tools_io_retry failed for %s "
+                                    "thread_id=%s message_id=%s trace_id=%s",
+                                    channel_type,
+                                    thread_id,
+                                    message_id,
+                                    trace_id,
+                                )
+                                _emit(
+                                    "channel.dispatch.enqueue.failed",
+                                    {
+                                        "message_id": message_id,
+                                        "channel_type": channel_type,
+                                        "attempt": 2,
+                                        "queue": "tools_io_retry",
+                                    },
+                                )
+                                from jarvis.routes.health import increment_metric
+                                increment_metric("task_runner_enqueue_failures_total")
                 else:
                     # Worker auto-reply: send result back to main agent
                     row = conn.execute(
