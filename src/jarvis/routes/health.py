@@ -1,6 +1,8 @@
 """Health and readiness routes."""
 
 import json
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -13,6 +15,8 @@ from jarvis.events.writer import emit_event
 from jarvis.ids import new_id
 from jarvis.providers.factory import build_fallback_provider, build_primary_provider
 from jarvis.providers.router import ProviderRouter
+from jarvis.tasks import get_task_runner
+from jarvis.tasks.system import get_liveness_age_seconds
 
 router = APIRouter(tags=["health"])
 
@@ -65,10 +69,9 @@ async def metrics() -> JSONResponse:
         "memory_items_count": int(memory_items_count["cnt"]) if memory_items_count else 0,
         "whatsapp_typing_active_threads": int(typing_count["cnt"]) if typing_count else 0,
     }
-    
-    from datetime import datetime, UTC
     now = datetime.now(UTC)
-    def _age(row) -> float:
+
+    def _age(row: Any) -> float:
         if row and row["ts"]:
             ts = datetime.fromisoformat(row["ts"]).replace(tzinfo=UTC)
             return (now - ts).total_seconds()
@@ -76,10 +79,6 @@ async def metrics() -> JSONResponse:
 
     last_event_age = _age(last_event)
     last_msg_age = _age(last_msg)
-    
-    from jarvis.tasks import get_task_runner
-    from jarvis.tasks.system import get_liveness_age_seconds
-    
     runtime_stats = {
         "task_runner_in_flight": get_task_runner().in_flight,
         "last_event_write_age_seconds": last_event_age,

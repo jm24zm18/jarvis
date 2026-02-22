@@ -285,7 +285,8 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                             )
                         else:
                             logger.warning(
-                                "Failed to dispatch %s send task thread_id=%s message_id=%s trace_id=%s",
+                                "Failed to dispatch %s send task "
+                                "thread_id=%s message_id=%s trace_id=%s",
                                 channel_type,
                                 thread_id,
                                 message_id,

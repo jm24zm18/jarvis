@@ -62,6 +62,31 @@ _Last updated: 2026-02-21 (WhatsApp API Stabilization & Stall Recovery)_
 - Remaining tasks before handoff:
   - Validated manually, code logic tested via test suite.
 
+## Execution Update (2026-02-22, Stall Recovery Hardening + Wiring Fixes)
+
+- Closed implementation gaps in the 2026-02-21 stabilization patch:
+  - Registered new periodic/runtime tasks in task registry:
+    - `jarvis.tasks.channel.cleanup_stale_typing`
+    - `jarvis.tasks.system.watchdog_stall_check`
+    - `jarvis.tasks.system.update_liveness_probe`
+  - Moved scheduler wiring to `tasks/__init__.py` to prevent duplicate registrations across app lifespans.
+  - Added missing config contract/env keys:
+    - `STALL_DETECT_ENABLED`
+    - `STALL_DETECT_THRESHOLD_SECONDS`
+    - `STALL_RECOVERY_COOLDOWN_SECONDS`
+    - `WHATSAPP_TYPING_TTL_SECONDS`
+  - Fixed watchdog correctness and safety:
+    - imported `get_system_state`
+    - normalized timestamp parsing to UTC
+    - explicit `restart_enqueued` status in recovery result payload
+  - Removed nested DB write pattern in channel typing-clear paths by allowing `_emit(..., conn=...)`:
+    - avoids opening a second write connection while the first write transaction is active.
+- Added regression tests:
+  - `tests/unit/test_channel_tasks.py` (typing clear guaranteed on outbound failure)
+  - `tests/unit/test_system_tasks.py` (stall watchdog recovery + disabled mode)
+- Remaining tasks before handoff:
+  - Run full gate sweep (`make test-gates`) before release promotion.
+
 
 ## Execution Update (2026-02-21, CBAC + Sandbox + Multimedia Continuation)
 

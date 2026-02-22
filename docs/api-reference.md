@@ -75,6 +75,15 @@ Auth levels:
 | `GET` | `/api/v1/permissions` | `admin` | `get_permissions_api_v1_permissions_get` | `-` | `200, 422` |
 | `DELETE` | `/api/v1/permissions/{principal_id}/{tool_name}` | `admin` | `delete_permission_api_v1_permissions__principal_id___tool_name__delete` | `-` | `200, 422` |
 | `PUT` | `/api/v1/permissions/{principal_id}/{tool_name}` | `admin` | `set_permission_api_v1_permissions__principal_id___tool_name__put` | `-` | `200, 422` |
+| `GET` | `/api/v1/repo/branches` | `admin` | `repo_branches_api_v1_repo_branches_get` | `-` | `200, 422` |
+| `POST` | `/api/v1/repo/checkout` | `admin` | `repo_checkout_api_v1_repo_checkout_post` | `application/json` | `200, 422` |
+| `POST` | `/api/v1/repo/commit` | `admin` | `repo_commit_api_v1_repo_commit_post` | `application/json` | `200, 422` |
+| `GET` | `/api/v1/repo/diff` | `admin` | `repo_diff_api_v1_repo_diff_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/repo/log` | `admin` | `repo_log_api_v1_repo_log_get` | `-` | `200, 422` |
+| `POST` | `/api/v1/repo/push` | `admin` | `repo_push_api_v1_repo_push_post` | `application/json` | `200, 422` |
+| `POST` | `/api/v1/repo/stage` | `admin` | `repo_stage_api_v1_repo_stage_post` | `application/json` | `200, 422` |
+| `GET` | `/api/v1/repo/status` | `admin` | `repo_status_api_v1_repo_status_get` | `-` | `200, 422` |
+| `POST` | `/api/v1/repo/unstage` | `admin` | `repo_unstage_api_v1_repo_unstage_post` | `application/json` | `200, 422` |
 | `GET` | `/api/v1/schedules` | `auth` | `list_schedules_api_v1_schedules_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/schedules` | `auth` | `create_schedule_api_v1_schedules_post` | `application/json` | `200, 422` |
 | `PATCH` | `/api/v1/schedules/{schedule_id}` | `auth` | `update_schedule_api_v1_schedules__schedule_id__patch` | `application/json` | `200, 422` |
@@ -125,12 +134,12 @@ Auth levels:
 
 - `title`: `Jarvis Agent Framework`
 - `version`: `0.1.0`
-- `path_count`: `92`
+- `path_count`: `101`
 
 ```json
 {
   "title": "Jarvis Agent Framework",
   "version": "0.1.0",
-  "path_count": 92
+  "path_count": 101
 }
 ```

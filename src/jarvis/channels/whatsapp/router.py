@@ -700,7 +700,9 @@ async def inbound(
                             component="channels.whatsapp",
                             actor_type="system",
                             actor_id="whatsapp",
-                            payload_json=json.dumps({"reason": "inbound_acknowledged", "recipient": recipient_jid}),
+                            payload_json=json.dumps(
+                                {"reason": "inbound_acknowledged", "recipient": recipient_jid}
+                            ),
                             payload_redacted_json=json.dumps({"reason": "inbound_acknowledged"}),
                         ),
                     )

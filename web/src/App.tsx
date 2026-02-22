@@ -16,6 +16,8 @@ import AdminProvidersPage from "./pages/admin/providers";
 import AdminBugsPage from "./pages/admin/bugs";
 import AdminGovernancePage from "./pages/admin/governance";
 import AdminChannelsPage from "./pages/admin/channels";
+import AdminRepoPage from "./pages/admin/repo";
+import AdminRoadmapPage from "./pages/admin/roadmap";
 import { me } from "./api/endpoints";
 import { useAuthStore } from "./stores/auth";
 
@@ -70,6 +72,8 @@ export default function App() {
                 <Route path="admin/bugs" element={<AdminBugsPage />} />
                 <Route path="admin/governance" element={<AdminGovernancePage />} />
                 <Route path="admin/channels" element={<AdminChannelsPage />} />
+                <Route path="admin/repo" element={<AdminRepoPage />} />
+                <Route path="admin/roadmap" element={<AdminRoadmapPage />} />
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Routes>
             </Shell>

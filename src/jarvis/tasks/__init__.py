@@ -37,6 +37,7 @@ def _register_tasks(runner: TaskRunner) -> None:
     runner.register("jarvis.tasks.backup.create_backup", backup.create_backup)
     runner.register("jarvis.tasks.channel.send_channel_message", channel.send_channel_message)
     runner.register("jarvis.tasks.channel.send_whatsapp_message", channel.send_whatsapp_message)
+    runner.register("jarvis.tasks.channel.cleanup_stale_typing", channel.cleanup_stale_typing)
     runner.register(
         "jarvis.tasks.github.github_issue_sync_bug_report",
         github.github_issue_sync_bug_report,
@@ -86,6 +87,8 @@ def _register_tasks(runner: TaskRunner) -> None:
     runner.register("jarvis.tasks.system.db_optimize", system.db_optimize)
     runner.register("jarvis.tasks.system.db_integrity_check", system.db_integrity_check)
     runner.register("jarvis.tasks.system.db_vacuum", system.db_vacuum)
+    runner.register("jarvis.tasks.system.watchdog_stall_check", system.watchdog_stall_check)
+    runner.register("jarvis.tasks.system.update_liveness_probe", system.update_liveness_probe)
 
 
 def get_task_runner() -> TaskRunner:
@@ -120,6 +123,9 @@ def get_periodic_scheduler() -> PeriodicScheduler:
         # Prune old events weekly (configurable via EVENT_RETENTION_DAYS).
         scheduler.add("jarvis.tasks.events.run_event_maintenance", 604800)
         scheduler.add("jarvis.tasks.system.db_vacuum", 2592000)
+        scheduler.add("jarvis.tasks.channel.cleanup_stale_typing", 10)
+        scheduler.add("jarvis.tasks.system.watchdog_stall_check", 30)
+        scheduler.add("jarvis.tasks.system.update_liveness_probe", 5)
         if settings.maintenance_enabled == 1 and settings.maintenance_interval_seconds > 0:
             scheduler.add(
                 "jarvis.tasks.maintenance.run_local_maintenance",

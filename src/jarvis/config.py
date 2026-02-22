@@ -146,6 +146,7 @@ class Settings(BaseSettings):
     )
     whatsapp_review_mode: str = Field(alias="WHATSAPP_REVIEW_MODE", default="unknown_only")
     whatsapp_allowed_senders: str = Field(alias="WHATSAPP_ALLOWED_SENDERS", default="")
+    whatsapp_typing_ttl_seconds: int = Field(alias="WHATSAPP_TYPING_TTL_SECONDS", default=20)
     evolution_api_url: str = Field(alias="EVOLUTION_API_URL", default="")
     evolution_api_key: str = Field(alias="EVOLUTION_API_KEY", default="")
     evolution_webhook_url: str = Field(alias="EVOLUTION_WEBHOOK_URL", default="")
@@ -311,6 +312,15 @@ class Settings(BaseSettings):
     exec_host_max_output_bytes: int = Field(alias="EXEC_HOST_MAX_OUTPUT_BYTES", default=1_000_000)
     exec_host_max_memory_mb: int = Field(alias="EXEC_HOST_MAX_MEMORY_MB", default=512)
     exec_host_max_cpu_seconds: int = Field(alias="EXEC_HOST_MAX_CPU_SECONDS", default=120)
+    stall_detect_enabled: int = Field(alias="STALL_DETECT_ENABLED", default=1)
+    stall_detect_threshold_seconds: int = Field(
+        alias="STALL_DETECT_THRESHOLD_SECONDS",
+        default=90,
+    )
+    stall_recovery_cooldown_seconds: int = Field(
+        alias="STALL_RECOVERY_COOLDOWN_SECONDS",
+        default=600,
+    )
 
     # Self-update smoke-gate sandboxing
     selfupdate_sandbox_enabled: int = Field(alias="SELFUPDATE_SANDBOX_ENABLED", default=0)

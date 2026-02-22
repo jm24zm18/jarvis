@@ -62,6 +62,9 @@ Source of truth: `src/jarvis/config.py`.
 | Variable | Type | Default | Description |
 |---|---|---|---|
 | `SCHEDULER_MAX_CATCHUP` | int | `10` | Global catch-up cap per schedule tick. |
+| `STALL_DETECT_ENABLED` | int | `1` | Enable periodic runtime stall watchdog and auto-recovery triggers. |
+| `STALL_DETECT_THRESHOLD_SECONDS` | int | `90` | Age threshold for inbound-without-progress before declaring a stall. |
+| `STALL_RECOVERY_COOLDOWN_SECONDS` | int | `600` | Minimum delay between consecutive stall-triggered recovery attempts. |
 | `AGENT_STEP_MAX_ATTEMPTS` | int | `3` | Max in-process attempts for one `trace_id` before exhaustion. |
 | `AGENT_STEP_RETRY_BASE_SECONDS` | int | `2` | Base backoff for retryable agent-step failures. |
 | `AGENT_STEP_RETRY_MAX_SECONDS` | int | `20` | Max backoff cap for retryable agent-step failures. |
@@ -102,6 +105,7 @@ Source of truth: `src/jarvis/config.py`.
 | `WHATSAPP_VOICE_LANGUAGE` | str | `` | Optional fixed language code for transcription; empty enables auto-detect. |
 | `WHATSAPP_REVIEW_MODE` | str | `unknown_only` | Sender review policy mode (`off`, `unknown_only`, `strict`) for WhatsApp ingress gating. |
 | `WHATSAPP_ALLOWED_SENDERS` | str | `` | Comma-separated sender allowlist for strict sender review mode. |
+| `WHATSAPP_TYPING_TTL_SECONDS` | int | `20` | TTL for stale WhatsApp typing markers before periodic auto-clear emits `paused`. |
 | `EVOLUTION_API_URL` | str | `` | Evolution API base URL for Baileys sidecar. |
 | `EVOLUTION_API_KEY` | str | `` | Evolution API key header value. |
 | `EVOLUTION_WEBHOOK_URL` | str | `` | Callback URL Evolution should post inbound events to (usually `/webhooks/whatsapp`). |

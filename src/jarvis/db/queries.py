@@ -1473,7 +1473,8 @@ def set_typing_state(
         (
             "INSERT INTO channel_typing_state(thread_id, recipient, channel_type, set_at) "
             "VALUES(?,?,?,?) "
-            "ON CONFLICT(thread_id, recipient) DO UPDATE SET set_at=excluded.set_at, channel_type=excluded.channel_type"
+            "ON CONFLICT(thread_id, recipient) DO UPDATE "
+            "SET set_at=excluded.set_at, channel_type=excluded.channel_type"
         ),
         (thread_id, recipient, channel_type, now),
     )
