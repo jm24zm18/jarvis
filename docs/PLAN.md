@@ -49,7 +49,26 @@ Tier flow: `working -> episodic -> semantic/procedural`, with low-importance sta
 | WhatsApp Channel + Admin UX | 7 | 0 | 0 |
 | Documentation + Ops Hardening | 2 | 1 | 1 |
 
-_Last updated: 2026-02-21 (WhatsApp API Stabilization & Stall Recovery)_
+_Last updated: 2026-02-22 (WhatsApp Pairing 401 Auto-Recovery + Diagnostics)_
+
+## Execution Update (2026-02-22, WhatsApp Pairing 401 Auto-Recovery + Diagnostics)
+
+- Discovered missing operational/task gap: WhatsApp sidecar could remain in `close` with repeated
+  `401 loggedOut`, while Admin UI showed only generic `QR not ready` messaging with no root-cause
+  diagnostics.
+- Implemented task scope:
+  - Baileys sidecar now records disconnect diagnostics in `/status`:
+    - `last_disconnect_code`
+    - `last_disconnect_reason`
+    - `last_error_at`
+    - `autoheal_attempted`
+  - Added one-shot auto-heal for `401 loggedOut`: clear auth and auto-reconnect once; if still logged
+    out, remain `close` and require explicit re-pair.
+  - API status endpoint now returns normalized `status` plus `diagnostics.*` fields for Admin UI.
+  - Admin Channels UI now surfaces disconnect reason and explicit 401 guidance.
+  - Added regression coverage for status diagnostics mapping and admin UI diagnostics copy contracts.
+- Remaining tasks before handoff:
+  - Run full quality gate sweep (`make test-gates`) before release promotion.
 
 ## Execution Update (2026-02-21, WhatsApp Processing Stabilization)
 

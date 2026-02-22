@@ -56,6 +56,16 @@ def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
             "error": str(exc),
         }
     evo_state = str(payload.get("instance", {}).get("state") or payload.get("state") or "unknown")
+    raw_disconnect_code = payload.get("last_disconnect_code")
+    disconnect_code = raw_disconnect_code if isinstance(raw_disconnect_code, int) else None
+    disconnect_reason = str(payload.get("last_disconnect_reason") or "").strip()
+    last_error_at = str(payload.get("last_error_at") or "").strip()
+    autoheal_attempted = bool(payload.get("autoheal_attempted"))
+    recoverable = not (
+        evo_state == "close"
+        and disconnect_code == status.HTTP_401_UNAUTHORIZED
+        and autoheal_attempted
+    )
     callback_status_code: int | None = None
     callback_payload: dict[str, object] = {}
     callback_ok = False
@@ -89,8 +99,16 @@ def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
     return {
         "enabled": True,
         "instance": client.instance,
+        "status": evo_state,
         "status_code": status_code,
         "payload": payload,
+        "diagnostics": {
+            "disconnect_code": disconnect_code,
+            "disconnect_reason": disconnect_reason,
+            "last_error_at": last_error_at,
+            "autoheal_attempted": autoheal_attempted,
+            "recoverable": recoverable,
+        },
         "callback": {
             "enabled": client.webhook_enabled,
             "url": client.webhook_url,

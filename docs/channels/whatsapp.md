@@ -64,6 +64,12 @@ If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path f
 
 - Jarvis can auto-configure Evolution callback settings via `EVOLUTION_WEBHOOK_*` vars.
 - `/api/v1/channels/whatsapp/status` includes callback health state (`enabled`, `configured`, `events`, and last status/error).
+- `/api/v1/channels/whatsapp/status` also includes normalized connector status and diagnostics:
+  - `status`: current sidecar state (`open`, `qr`, `connecting`, `close`, ...)
+  - `diagnostics.disconnect_code`: latest disconnect status code (for example `401`)
+  - `diagnostics.disconnect_reason`: latest disconnect reason (for example `loggedOut`)
+  - `diagnostics.autoheal_attempted`: whether one-shot logged-out auto-recovery was already used
+  - `diagnostics.recoverable`: whether reconnect can still be retried without manual re-pair
 - Non-`messages.upsert` events are accepted and ignored (`{"accepted": true, "degraded": false, "ignored": true}`) with no message/event writes.
 
 ## Sender Review Gate
@@ -85,6 +91,8 @@ If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path f
    - retry `GET /api/v1/channels/whatsapp/qrcode` or `POST /api/v1/channels/whatsapp/pairing-code`.
    - if pairing returns `503` with `qr_not_ready`, wait for status `qr` before retrying
      pairing-code request.
+   - if status remains `close` with `diagnostics.disconnect_code=401` and
+     `diagnostics.autoheal_attempted=true`, manual re-pair is required (`POST /api/v1/channels/whatsapp/reset`).
 3. Webhook receives `401 invalid_webhook_secret`:
    - ensure Evolution sends `X-WhatsApp-Secret` matching `WHATSAPP_WEBHOOK_SECRET`.
 4. Inbound appears accepted but no thread message created:

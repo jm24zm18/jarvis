@@ -25,6 +25,12 @@ export default function AdminChannelsPage() {
   });
 
   const status = String(statusQuery.data?.status ?? (statusQuery.data?.payload as Record<string, unknown> | undefined)?.state ?? "unknown");
+  const diagnostics = (statusQuery.data?.diagnostics as Record<string, unknown> | undefined) ?? {};
+  const disconnectCode = typeof diagnostics.disconnect_code === "number" ? diagnostics.disconnect_code : null;
+  const disconnectReason = String(diagnostics.disconnect_reason ?? "");
+  const autohealAttempted = Boolean(diagnostics.autoheal_attempted);
+  const recoverable = diagnostics.recoverable !== false;
+  const isLoggedOut = disconnectCode === 401 || /loggedout/i.test(disconnectReason);
 
   const qrQuery = useQuery({
     queryKey: ["whatsapp-qr"],
@@ -103,6 +109,11 @@ export default function AdminChannelsPage() {
             Disconnect
           </Button>
         </div>
+        {status !== "open" && (disconnectCode !== null || disconnectReason) ? (
+          <p className="mt-3 text-sm text-[var(--text-secondary)]">
+            Last disconnect: {disconnectCode !== null ? `HTTP ${disconnectCode}` : "unknown"}{disconnectReason ? ` (${disconnectReason})` : ""}{!recoverable ? ". Re-pair required." : "."}
+          </p>
+        ) : null}
       </Card>
 
       <Card className="mb-6" header={<h3 className="font-display text-base text-[var(--text-primary)]">Pairing Code</h3>}>
@@ -125,7 +136,9 @@ export default function AdminChannelsPage() {
                 : pairMutation.isError
                   ? `Error: ${String((pairMutation.error as Error)?.message ?? "unknown")}`
                   : status !== "qr"
-                    ? `QR not ready (state: ${status}). Initialize connection and wait for QR.`
+                    ? isLoggedOut && autohealAttempted
+                      ? `QR not ready (state: ${status}). Session logged out (401); automatic recovery already attempted. Use Force Re-pair, then Load QR.`
+                      : `QR not ready (state: ${status}). Initialize connection and wait for QR.`
                   : String(pairMutation.data?.code ?? "-")}
             </div>
           </div>

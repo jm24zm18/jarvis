@@ -250,7 +250,13 @@ def test_whatsapp_status_reports_callback_health(monkeypatch) -> None:
         webhook_events = ["messages.upsert"]
 
         async def status(self) -> tuple[int, dict[str, object]]:
-            return 200, {"state": "open"}
+            return 200, {
+                "state": "close",
+                "last_disconnect_code": 401,
+                "last_disconnect_reason": "loggedOut",
+                "last_error_at": "2026-02-22T14:00:00Z",
+                "autoheal_attempted": True,
+            }
 
         async def configure_webhook(self) -> tuple[int, dict[str, object]]:
             return 200, {"configured": True}
@@ -261,9 +267,14 @@ def test_whatsapp_status_reports_callback_health(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["enabled"] is True
+    assert payload["status"] == "close"
     assert payload["callback"]["enabled"] is True
     assert payload["callback"]["configured"] is True
     assert payload["callback"]["events"] == ["messages.upsert"]
+    assert payload["diagnostics"]["disconnect_code"] == 401
+    assert payload["diagnostics"]["disconnect_reason"] == "loggedOut"
+    assert payload["diagnostics"]["autoheal_attempted"] is True
+    assert payload["diagnostics"]["recoverable"] is False
 
 
 def test_whatsapp_create_includes_callback_result(monkeypatch) -> None:

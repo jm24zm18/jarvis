@@ -22,6 +22,11 @@ let currentPairingCode = null;
 let connectionState = "close";
 let isConnecting = false;  // Prevent overlapping connection attempts
 let reconnectTimer = null;
+let lastDisconnectCode = null;
+let lastDisconnectReason = "";
+let lastErrorAt = "";
+let autohealAttempted = false;
+let loggedOutAutohealUsed = false;
 
 const logger = pino({ level: 'info' });
 
@@ -41,6 +46,24 @@ function forceClearAuth() {
     } catch (e) {
         // Ignore
     }
+}
+
+function clearConnectionDiagnostics() {
+    lastDisconnectCode = null;
+    lastDisconnectReason = "";
+    lastErrorAt = "";
+    autohealAttempted = false;
+}
+
+function asDisconnectReason(statusCode, lastDisconnect) {
+    if (statusCode === DisconnectReason.loggedOut) {
+        return "loggedOut";
+    }
+    const message = String(lastDisconnect?.error?.message || "").trim();
+    if (!message) {
+        return "unknown";
+    }
+    return message;
 }
 
 async function connectToWhatsApp() {
@@ -105,8 +128,13 @@ async function connectToWhatsApp() {
                     isConnecting = false;  // Allow new connection attempts
 
                     const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+                    const reason = asDisconnectReason(statusCode, lastDisconnect);
+                    lastDisconnectCode = typeof statusCode === "number" ? statusCode : null;
+                    lastDisconnectReason = reason;
+                    lastErrorAt = new Date().toISOString();
+
                     const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                    logger.info(`connection closed (status: ${statusCode}), reconnecting: ${shouldReconnect}`);
+                    logger.info(`connection closed (status: ${statusCode}, reason: ${reason}), reconnecting: ${shouldReconnect}`);
 
                     if (shouldReconnect) {
                         // Reconnect after delay, prevent overlapping
@@ -114,6 +142,12 @@ async function connectToWhatsApp() {
                     } else {
                         sock = null;
                         forceClearAuth();
+                        if (!loggedOutAutohealUsed) {
+                            loggedOutAutohealUsed = true;
+                            autohealAttempted = true;
+                            logger.info("loggedOut detected; attempting one automatic re-pair reconnect");
+                            reconnectTimer = setTimeout(() => connectToWhatsApp(), 1000);
+                        }
                     }
                 } else if (connection === 'open') {
                     logger.info('opened connection');
@@ -121,6 +155,8 @@ async function connectToWhatsApp() {
                     currentPairingCode = null;
                     connectionState = "open";
                     isConnecting = false;  // Connection established
+                    loggedOutAutohealUsed = false;
+                    clearConnectionDiagnostics();
                 }
             } catch (err) {
                 logger.error(`Connection update error: ${err.message}`);
@@ -159,7 +195,13 @@ async function connectToWhatsApp() {
 
 // API endpoints
 app.get("/status", (req, res) => {
-    res.json({ state: connectionState });
+    res.json({
+        state: connectionState,
+        last_disconnect_code: lastDisconnectCode,
+        last_disconnect_reason: lastDisconnectReason,
+        last_error_at: lastErrorAt,
+        autoheal_attempted: autohealAttempted,
+    });
 });
 
 app.post("/start", async (req, res) => {
@@ -179,6 +221,8 @@ app.post("/start", async (req, res) => {
         sock = null;
     }
     isConnecting = false;
+    loggedOutAutohealUsed = false;
+    clearConnectionDiagnostics();
     // Only clear auth if no saved credentials exist — don't force re-pair unnecessarily
     const credsPath = path.join(AUTH_DIR, 'creds.json');
     if (!fs.existsSync(credsPath)) {
@@ -205,6 +249,8 @@ app.post("/reset", async (req, res) => {
     connectionState = "close";
     currentQr = null;
     currentPairingCode = null;
+    loggedOutAutohealUsed = false;
+    clearConnectionDiagnostics();
     forceClearAuth();
     connectToWhatsApp();
     res.json({ state: "connecting" });
@@ -277,6 +323,8 @@ app.post("/disconnect", (req, res) => {
     connectionState = "close";
     currentQr = null;
     currentPairingCode = null;
+    loggedOutAutohealUsed = false;
+    clearConnectionDiagnostics();
     forceClearAuth();
     res.json({ ok: true });
 });
