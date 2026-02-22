@@ -53,6 +53,9 @@ Source of truth: `src/jarvis/config.py`.
 | `SELFUPDATE_SMOKE_PROFILE` | str | `dev` | Smoke profile (`dev`/`prod`). |
 | `SELFUPDATE_READYZ_URL` | str | `` | Readiness URL for apply watchdog. |
 | `SELFUPDATE_READYZ_ATTEMPTS` | int | `3` | Readiness retry attempts. |
+| `SELFUPDATE_SANDBOX_ENABLED` | int | `0` | When `1`, run smoke-gate checks inside Docker sandbox instead of host process. |
+| `SELFUPDATE_SANDBOX_IMAGE` | str | `jarvis-sandbox:latest` | Docker image used for sandboxed smoke checks. |
+| `SELFUPDATE_SANDBOX_TIMEOUT_SECONDS` | int | `300` | Timeout for each sandboxed smoke command. |
 
 ### Scheduler, Restart, and RabbitMQ Mgmt
 
@@ -88,6 +91,8 @@ Source of truth: `src/jarvis/config.py`.
 | `WHATSAPP_MEDIA_MAX_BYTES` | int | `10485760` | Max bytes accepted per inbound media download; oversized payloads are blocked. |
 | `WHATSAPP_MEDIA_ALLOWED_MIME_PREFIXES` | str | `audio/,image/,video/,application/pdf` | Comma-separated MIME prefixes allowed for inbound media persistence. |
 | `WHATSAPP_MEDIA_ALLOWED_HOSTS` | str | `` | Optional comma-separated HTTPS host allowlist for inbound media URLs. |
+| `MEDIA_STORAGE_DIR` | str | `/var/lib/jarvis/media` | Root directory for unified media attachment storage (`media_attachments`). |
+| `MEDIA_MAX_UPLOAD_BYTES` | int | `20971520` | Maximum bytes accepted by `POST /api/v1/media/upload`. |
 | `WHATSAPP_VOICE_TRANSCRIBE_ENABLED` | int | `1` | Enable voice-note transcript generation for inbound audio messages. |
 | `WHATSAPP_VOICE_TRANSCRIBE_BACKEND` | str | `stub` | Voice-note transcription backend selector (`stub`, `faster_whisper`). |
 | `WHATSAPP_VOICE_TRANSCRIBE_TIMEOUT_SECONDS` | int | `20` | Timeout for media download/transcription operations on voice notes. |

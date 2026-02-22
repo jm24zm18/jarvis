@@ -48,8 +48,9 @@ class _FakeRuntime:
         caller_id: str,
         trace_id: str,
         thread_id: str | None = None,
+        token_scopes: frozenset[str] | None = None,
     ) -> dict[str, object]:
-        del conn, tool_name, arguments, caller_id, trace_id, thread_id
+        del conn, tool_name, arguments, caller_id, trace_id, thread_id, token_scopes
         self.execute_calls += 1
         return {"ok": True}
 
@@ -786,8 +787,9 @@ class _FailingRuntime(_FakeRuntime):
         caller_id: str,
         trace_id: str,
         thread_id: str | None = None,
+        token_scopes: frozenset[str] | None = None,
     ) -> dict[str, object]:
-        del conn, tool_name, arguments, caller_id, trace_id, thread_id
+        del conn, tool_name, arguments, caller_id, trace_id, thread_id, token_scopes
         self.execute_calls += 1
         raise RuntimeError("tool failed")
 

@@ -51,6 +51,21 @@ Tier flow: `working -> episodic -> semantic/procedural`, with low-importance sta
 
 _Last updated: 2026-02-20 (Packet 9: framework audit + multi-channel media Phase 1)_
 
+## Execution Update (2026-02-21, CBAC + Sandbox + Multimedia Continuation)
+
+- Completed implementation closure for the CBAC + sandbox + multimedia plan:
+  - Added missing media unit/integration coverage (`tests/unit/test_media_service.py`, `tests/integration/test_media_upload_api.py`).
+  - Added sandbox artifact summary persistence for self-update smoke runs in sandbox mode (`artifact.json["sandbox"]`) and API retrieval path.
+  - Updated docs/contracts for CBAC scope gates, media endpoints, sandbox endpoint, and `mda_` ID prefix consistency.
+  - Synced new config keys across `.env.example` and configuration docs:
+    - `SELFUPDATE_SANDBOX_ENABLED`, `SELFUPDATE_SANDBOX_IMAGE`, `SELFUPDATE_SANDBOX_TIMEOUT_SECONDS`
+    - `MEDIA_STORAGE_DIR`, `MEDIA_MAX_UPLOAD_BYTES`
+- Full gate sweep status:
+  - `make lint`: passed
+  - `make typecheck`: passed
+  - `make docs-check`: passed (after `make docs-generate`)
+  - `make test-gates`: passed
+
 ## Execution Update (2026-02-21)
 
 - Discovered missing task: WhatsApp webhook reliability gap where stale

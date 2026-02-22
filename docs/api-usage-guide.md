@@ -16,10 +16,21 @@ Bearer headers remain supported for compatibility and CLI/test flows.
 
 1. List threads: `GET /api/v1/threads`
 2. Create a web thread: `POST /api/v1/threads`
-3. Post message: `POST /api/v1/messages/{thread_id}`
-4. Read message history: `GET /api/v1/messages/{thread_id}`
+3. Post message: `POST /api/v1/threads/{thread_id}/messages`
+4. Read message history: `GET /api/v1/threads/{thread_id}/messages`
 
 Ownership is enforced for non-admin users across thread and message APIs.
+
+## Media Flow
+
+- Upload attachment: `POST /api/v1/media/upload` (multipart `file`, optional `thread_id`)
+- Download attachment: `GET /api/v1/media/{attachment_id}`
+- Download image thumbnail: `GET /api/v1/media/{attachment_id}/thumb`
+
+Scope enforcement:
+- Upload requires `media:write`.
+- Download/thumbnail requires `media:read`.
+- Non-admin callers can only fetch attachments they own.
 
 ## Memory Flow
 
@@ -43,6 +54,7 @@ Admin-only operations:
 - Check one patch: `GET /api/v1/selfupdate/patches/{trace_id}`
 - Approve apply: `POST /api/v1/selfupdate/patches/{trace_id}/approve`
 - Timeline/checks: `GET /api/v1/selfupdate/patches/{trace_id}/timeline`, `GET /api/v1/selfupdate/patches/{trace_id}/checks`
+- Sandbox summary: `GET /api/v1/selfupdate/patches/{trace_id}/sandbox`
 
 Governance evolution visibility:
 

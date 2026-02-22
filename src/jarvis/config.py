@@ -312,6 +312,19 @@ class Settings(BaseSettings):
     exec_host_max_memory_mb: int = Field(alias="EXEC_HOST_MAX_MEMORY_MB", default=512)
     exec_host_max_cpu_seconds: int = Field(alias="EXEC_HOST_MAX_CPU_SECONDS", default=120)
 
+    # Self-update smoke-gate sandboxing
+    selfupdate_sandbox_enabled: int = Field(alias="SELFUPDATE_SANDBOX_ENABLED", default=0)
+    selfupdate_sandbox_image: str = Field(
+        alias="SELFUPDATE_SANDBOX_IMAGE", default="jarvis-sandbox:latest"
+    )
+    selfupdate_sandbox_timeout_seconds: int = Field(
+        alias="SELFUPDATE_SANDBOX_TIMEOUT_SECONDS", default=300
+    )
+
+    # Media storage
+    media_storage_dir: str = Field(alias="MEDIA_STORAGE_DIR", default="/var/lib/jarvis/media")
+    media_max_upload_bytes: int = Field(alias="MEDIA_MAX_UPLOAD_BYTES", default=20_971_520)
+
 
 def validate_settings_for_env(settings: Settings) -> None:
     import logging as _logging

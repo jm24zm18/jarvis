@@ -432,6 +432,7 @@ async def run_agent_step(
     actor_id: str = "main",
     notify_fn: Callable[[str, dict[str, object]], None] | None = None,
     progress_fn: Callable[[str, dict[str, object]], None] | None = None,
+    token_scopes: frozenset[str] | None = None,
 ) -> str:
     settings = get_settings()
     admin_ids = {item.strip() for item in settings.admin_whatsapp_ids.split(",") if item.strip()}
@@ -979,6 +980,7 @@ async def run_agent_step(
                     caller_id=actor_id,
                     trace_id=trace_id,
                     thread_id=thread_id,
+                    token_scopes=token_scopes,
                 )
                 if notify_fn is not None:
                     notify_fn(

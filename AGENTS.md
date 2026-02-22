@@ -7,9 +7,9 @@ Primary AI-agent operating guide for this repository.
 - Stack: FastAPI + in-process asyncio task runner + SQLite + React/Vite web UI.
 - Channels: WhatsApp (Evolution API) + Telegram (Bot API).
 - Runtime: API (`make api`) + Docker services (`make dev`).
-- DB migrations: `src/jarvis/db/migrations/001..055` auto-run at startup and via `make migrate`.
+- DB migrations: `src/jarvis/db/migrations/001..062` auto-run at startup and via `make migrate`.
 - Tool runtime is deny-by-default (`src/jarvis/tools/runtime.py`, `src/jarvis/policy/engine.py`).
-- Auth/RBAC: bearer session tokens with `user`/`admin` roles and ownership scoping.
+- Auth/RBAC: bearer session tokens with `user`/`admin` roles, CBAC scopes, and ownership scoping.
 
 ## Commands
 
@@ -46,7 +46,7 @@ uv run jarvis skill list
 
 ## Architecture Invariants
 
-- IDs are type-prefixed (`usr_`, `thr_`, `msg_`, `trc_`, `spn_`, `sch_`).
+- IDs are type-prefixed (`usr_`, `thr_`, `msg_`, `trc_`, `spn_`, `sch_`, `mda_`).
 - Event names are dot-separated (`channel.inbound`, `agent.step.end`, `tool.call.start`).
 - Agent bundle contract in `agents/<id>/` is mandatory:
   - `identity.md` (frontmatter includes `allowed_tools`)

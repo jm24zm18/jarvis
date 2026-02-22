@@ -55,20 +55,23 @@ Auth levels:
 | `POST` | `/api/v1/governance/remediations/{remediation_id}/feedback` | `admin` | `remediation_feedback_api_v1_governance_remediations__remediation_id__feedback_post` | `application/json` | `200, 422` |
 | `GET` | `/api/v1/governance/slo` | `admin` | `governance_slo_api_v1_governance_slo_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/governance/slo/history` | `admin` | `governance_slo_history_api_v1_governance_slo_history_get` | `-` | `200, 422` |
-| `GET` | `/api/v1/memory` | `auth` | `search_memory_api_v1_memory_get` | `-` | `200, 422` |
-| `GET` | `/api/v1/memory/consistency` | `auth` | `get_consistency_api_v1_memory_consistency_get` | `-` | `200, 422` |
-| `GET` | `/api/v1/memory/export` | `auth` | `memory_export_api_v1_memory_export_get` | `-` | `200, 422` |
-| `GET` | `/api/v1/memory/kb` | `auth` | `search_kb_api_v1_memory_kb_get` | `-` | `200, 422` |
+| `POST` | `/api/v1/media/upload` | `public` | `upload_media_api_v1_media_upload_post` | `multipart/form-data` | `200, 422` |
+| `GET` | `/api/v1/media/{attachment_id}` | `public` | `download_media_api_v1_media__attachment_id__get` | `-` | `200, 422` |
+| `GET` | `/api/v1/media/{attachment_id}/thumb` | `public` | `download_thumbnail_api_v1_media__attachment_id__thumb_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/memory` | `public` | `search_memory_api_v1_memory_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/memory/consistency` | `public` | `get_consistency_api_v1_memory_consistency_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/memory/export` | `public` | `memory_export_api_v1_memory_export_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/memory/kb` | `public` | `search_kb_api_v1_memory_kb_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/memory/kb` | `auth` | `upsert_kb_api_v1_memory_kb_post` | `application/json` | `200, 422` |
 | `POST` | `/api/v1/memory/maintenance/run` | `admin` | `memory_maintenance_run_api_v1_memory_maintenance_run_post` | `-` | `200, 422` |
 | `GET` | `/api/v1/memory/state/consistency/report` | `admin` | `state_consistency_report_api_v1_memory_state_consistency_report_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/memory/state/failures` | `admin` | `state_failures_api_v1_memory_state_failures_get` | `-` | `200, 422` |
-| `GET` | `/api/v1/memory/state/graph/{uid}` | `auth` | `state_graph_api_v1_memory_state_graph__uid__get` | `-` | `200, 422` |
+| `GET` | `/api/v1/memory/state/graph/{uid}` | `public` | `state_graph_api_v1_memory_state_graph__uid__get` | `-` | `200, 422` |
 | `GET` | `/api/v1/memory/state/review/conflicts` | `admin` | `state_review_conflicts_api_v1_memory_state_review_conflicts_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/memory/state/review/{uid}/resolve` | `admin` | `state_review_resolve_api_v1_memory_state_review__uid__resolve_post` | `application/json` | `200, 422` |
-| `GET` | `/api/v1/memory/state/search` | `auth` | `state_search_api_v1_memory_state_search_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/memory/state/search` | `public` | `state_search_api_v1_memory_state_search_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/memory/state/stats` | `admin` | `state_stats_api_v1_memory_state_stats_get` | `-` | `200, 422` |
-| `GET` | `/api/v1/memory/stats` | `auth` | `memory_stats_api_v1_memory_stats_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/memory/stats` | `public` | `memory_stats_api_v1_memory_stats_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/permissions` | `admin` | `get_permissions_api_v1_permissions_get` | `-` | `200, 422` |
 | `DELETE` | `/api/v1/permissions/{principal_id}/{tool_name}` | `admin` | `delete_permission_api_v1_permissions__principal_id___tool_name__delete` | `-` | `200, 422` |
 | `PUT` | `/api/v1/permissions/{principal_id}/{tool_name}` | `admin` | `set_permission_api_v1_permissions__principal_id___tool_name__put` | `-` | `200, 422` |
@@ -80,6 +83,7 @@ Auth levels:
 | `GET` | `/api/v1/selfupdate/patches/{trace_id}` | `admin` | `patch_detail_api_v1_selfupdate_patches__trace_id__get` | `-` | `200, 422` |
 | `POST` | `/api/v1/selfupdate/patches/{trace_id}/approve` | `admin` | `approve_patch_api_v1_selfupdate_patches__trace_id__approve_post` | `-` | `200, 422` |
 | `GET` | `/api/v1/selfupdate/patches/{trace_id}/checks` | `admin` | `patch_checks_api_v1_selfupdate_patches__trace_id__checks_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/selfupdate/patches/{trace_id}/sandbox` | `admin` | `patch_sandbox_api_v1_selfupdate_patches__trace_id__sandbox_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/selfupdate/patches/{trace_id}/timeline` | `admin` | `patch_timeline_api_v1_selfupdate_patches__trace_id__timeline_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/stories/run` | `admin` | `run_stories_api_v1_stories_run_post` | `-` | `200, 422` |
 | `GET` | `/api/v1/stories/runs` | `admin` | `list_story_runs_api_v1_stories_runs_get` | `-` | `200, 422` |
@@ -121,12 +125,12 @@ Auth levels:
 
 - `title`: `Jarvis Agent Framework`
 - `version`: `0.1.0`
-- `path_count`: `88`
+- `path_count`: `92`
 
 ```json
 {
   "title": "Jarvis Agent Framework",
   "version": "0.1.0",
-  "path_count": 88
+  "path_count": 92
 }
 ```

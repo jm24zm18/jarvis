@@ -1,5 +1,6 @@
 """FastAPI dependencies for web session auth."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from fastapi import Cookie, Depends, Header, HTTPException, status
@@ -35,10 +36,17 @@ def extract_session_token(
 class UserContext:
     user_id: str
     role: str
+    scopes: frozenset[str]
 
     @property
     def is_admin(self) -> bool:
         return self.role == "admin"
+
+    def has_scope(self, scope: str) -> bool:
+        if "*" in self.scopes or scope in self.scopes:
+            return True
+        ns = scope.split(":")[0]
+        return f"{ns}:*" in self.scopes
 
 
 def require_auth(
@@ -55,11 +63,23 @@ def require_auth(
         auth_data = validate_token(conn, raw_token)
     if auth_data is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid session")
-    user_id, role = auth_data
-    return UserContext(user_id=user_id, role=role)
+    user_id, role, scopes = auth_data
+    return UserContext(user_id=user_id, role=role, scopes=scopes)
 
 
 def require_admin(ctx: UserContext = Depends(require_auth)) -> UserContext:  # noqa: B008
     if not ctx.is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin required")
     return ctx
+
+
+def require_scope(scope: str) -> Callable[[UserContext], UserContext]:
+    """Dependency factory: requires the caller to hold the given CBAC scope."""
+    def _dep(ctx: UserContext = Depends(require_auth)) -> UserContext:  # noqa: B008
+        if not ctx.has_scope(scope):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"scope required: {scope}",
+            )
+        return ctx
+    return _dep

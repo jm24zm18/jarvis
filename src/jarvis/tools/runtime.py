@@ -25,6 +25,7 @@ class ToolRuntime:
         caller_id: str,
         trace_id: str,
         thread_id: str | None = None,
+        token_scopes: frozenset[str] | None = None,
     ) -> dict[str, Any]:
         span_id = new_id("spn")
 
@@ -101,7 +102,8 @@ class ToolRuntime:
             raise PolicyError("tool denied by policy: R3: unknown tool")
 
         allowed, reason = decision(
-            conn, caller_id, tool_name, arguments=arguments, trace_id=trace_id
+            conn, caller_id, tool_name, arguments=arguments, trace_id=trace_id,
+            token_scopes=token_scopes,
         )
         if not allowed:
             policy_payload = with_action_envelope(

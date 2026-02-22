@@ -117,6 +117,7 @@
     "src/jarvis/routes/api/channels.py",
     "src/jarvis/routes/api/events.py",
     "src/jarvis/routes/api/governance.py",
+    "src/jarvis/routes/api/media.py",
     "src/jarvis/routes/api/memory.py",
     "src/jarvis/routes/api/messages.py",
     "src/jarvis/routes/api/permissions.py",
@@ -297,7 +298,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-21T22:56:14.141834+00:00",
+  "generated_at": "2026-02-22T00:16:25.583151+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -529,6 +530,14 @@
     {
       "file": "src/jarvis/db/migrations/060_agent_run_attempts.sql",
       "number": 60
+    },
+    {
+      "file": "src/jarvis/db/migrations/061_cbac_scopes.sql",
+      "number": 61
+    },
+    {
+      "file": "src/jarvis/db/migrations/062_media_attachments.sql",
+      "number": 62
     }
   ],
   "protected_modules": [

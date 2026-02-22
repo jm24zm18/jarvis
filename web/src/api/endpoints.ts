@@ -426,3 +426,14 @@ export const whatsappReset = () =>
 
 export const telegramStatus = () =>
   apiFetch<Record<string, unknown>>("/api/v1/channels/telegram/status");
+
+export const uploadMedia = (file: File, threadId?: string) => {
+  const form = new FormData();
+  form.append("file", file);
+  if (threadId) form.append("thread_id", threadId);
+  // Do NOT set Content-Type header — browser sets multipart boundary automatically.
+  return apiFetch<{ attachment_id: string; url: string; mime_type: string; size_bytes: number }>(
+    "/api/v1/media/upload",
+    { method: "POST", body: form },
+  );
+};

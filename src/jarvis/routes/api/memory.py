@@ -6,7 +6,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from jarvis.auth.dependencies import UserContext, require_admin, require_auth
+from jarvis.auth.dependencies import UserContext, require_admin, require_auth, require_scope
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import store_consistency_report
 from jarvis.memory.knowledge import KnowledgeBaseService
@@ -56,7 +56,7 @@ def _resolve_state_agent_scope(
 
 @router.get("")
 def search_memory(
-    ctx: UserContext = Depends(require_auth),  # noqa: B008
+    ctx: UserContext = Depends(require_scope("memory:read")),  # noqa: B008
     q: str = "",
     thread_id: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
@@ -126,7 +126,7 @@ def search_memory(
 
 
 @router.get("/stats")
-def memory_stats(ctx: UserContext = Depends(require_auth)) -> dict[str, int]:  # noqa: B008
+def memory_stats(ctx: UserContext = Depends(require_scope("memory:read"))) -> dict[str, int]:  # noqa: B008
     with get_conn() as conn:
         if ctx.is_admin:
             total = conn.execute("SELECT COUNT(*) AS n FROM memory_items").fetchone()
@@ -157,7 +157,7 @@ def memory_stats(ctx: UserContext = Depends(require_auth)) -> dict[str, int]:  #
 
 @router.get("/consistency")
 def get_consistency(
-    ctx: UserContext = Depends(require_auth),  # noqa: B008
+    ctx: UserContext = Depends(require_scope("memory:read")),  # noqa: B008
     thread_id: str = "",
     from_ts: str | None = None,
     to_ts: str | None = None,
@@ -226,7 +226,7 @@ def get_consistency(
 
 @router.get("/kb")
 def search_kb(
-    ctx: UserContext = Depends(require_auth),  # noqa: B008
+    ctx: UserContext = Depends(require_scope("memory:read")),  # noqa: B008
     q: str = "",
     limit: int = Query(default=20, ge=1, le=100),
 ) -> dict[str, object]:
@@ -262,7 +262,7 @@ def memory_maintenance_run(
 
 @router.get("/state/search")
 def state_search(
-    ctx: UserContext = Depends(require_auth),  # noqa: B008
+    ctx: UserContext = Depends(require_scope("memory:read")),  # noqa: B008
     thread_id: str = "",
     q: str = "",
     k: int = Query(default=20, ge=1, le=100),
@@ -305,7 +305,7 @@ def state_failures(
 @router.get("/state/graph/{uid}")
 def state_graph(
     uid: str,
-    ctx: UserContext = Depends(require_auth),  # noqa: B008
+    ctx: UserContext = Depends(require_scope("memory:read")),  # noqa: B008
     depth: int = Query(default=2, ge=1, le=5),
     agent_id: str = Query(default="main", min_length=1, max_length=128),
 ) -> dict[str, object]:
@@ -423,7 +423,7 @@ def state_review_resolve(
 
 @router.get("/export")
 def memory_export(
-    ctx: UserContext = Depends(require_auth),  # noqa: B008
+    ctx: UserContext = Depends(require_scope("memory:read")),  # noqa: B008
     format: str = "jsonl",
     tier: str = "",
     thread_id: str | None = None,

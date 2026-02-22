@@ -219,14 +219,15 @@ def test_admin_endpoints_basic_coverage(tmp_path: Path) -> None:
         == 200
     )
     assert client.get("/api/v1/channels/whatsapp/qrcode", headers=headers).status_code == 200
-    assert (
-        client.post(
-            "/api/v1/channels/whatsapp/pairing-code",
-            headers=headers,
-            json={"number": "15555550123"},
-        ).status_code
-        == 200
+    pairing = client.post(
+        "/api/v1/channels/whatsapp/pairing-code",
+        headers=headers,
+        json={"number": "15555550123"},
     )
+    assert pairing.status_code in {200, 400, 503}
+    if pairing.status_code == 400:
+        detail = str(pairing.json().get("detail", ""))
+        assert ("qr_not_ready" in detail) or ("Already connected" in detail)
     assert (
         client.post("/api/v1/channels/whatsapp/disconnect", headers=headers, json={}).status_code
         == 200

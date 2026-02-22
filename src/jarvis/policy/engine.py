@@ -20,6 +20,22 @@ PATH_HINT_KEYS = {
     "repo_path",
 }
 
+# Maps CBAC scope strings to the set of tool names permitted under that scope.
+# Wildcard scope "*" bypasses this map entirely (checked before R9).
+SCOPE_TOOL_MAP: dict[str, frozenset[str]] = {
+    "memory:read": frozenset(
+        {"memory_search", "memory_list", "memory_export", "memory_stats"}
+    ),
+    "memory:write": frozenset(
+        {"memory_save", "memory_delete", "memory_clear", "memory_index"}
+    ),
+    "self:read": frozenset({"session_list", "session_history", "skill_list", "skill_read"}),
+    "self:write": frozenset({"session_send", "skill_write", "update_persona"}),
+    "media:read": frozenset(),   # API-tier scope; no agent tools require it
+    "media:write": frozenset(),  # API-tier scope; no agent tools require it
+    "tools:exec": frozenset({"exec_host", "web_search", "echo"}),
+}
+
 
 def _risk_rank(value: str) -> int:
     return {"low": 0, "medium": 1, "high": 2}.get(value.strip().lower(), 0)
@@ -143,6 +159,7 @@ def decision(
     tool_name: str,
     arguments: dict[str, Any] | None = None,
     trace_id: str | None = None,
+    token_scopes: frozenset[str] | None = None,
 ) -> tuple[bool, str]:
     state_row = conn.execute(
         "SELECT lockdown, restarting FROM system_state WHERE id='singleton'"
@@ -162,6 +179,18 @@ def decision(
     )
     if not gov_allowed:
         return False, gov_reason
+
+    # R9: CBAC token scope gate — only applies when a restricted token is in use.
+    if token_scopes is not None and "*" not in token_scopes:
+        allowed_by_scope: set[str] = set()
+        for s in token_scopes:
+            ns = s.split(":")[0]
+            for k, tools in SCOPE_TOOL_MAP.items():
+                if k == s or k == f"{ns}:*":
+                    allowed_by_scope.update(tools)
+        if tool_name not in allowed_by_scope:
+            return False, "R9: cbac.scope_denied"
+
     return True, "allow"
 
 

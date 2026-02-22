@@ -15,6 +15,11 @@
   mappings; stale rows must be pruned/remapped before `messages` insert.
 - Memory state reads/writes must enforce thread-scoped active-agent boundaries and emit governance denials on blocked mutation attempts.
 - Every `agent.step.start` must resolve to a terminal attempt status in `agent_run_attempts`; stale `running` attempts must be recoverable without duplicating final assistant publication for the same trace.
+- CBAC route and runtime gates must hold:
+  - API scope checks must use `require_scope(...)` for scoped resources.
+  - Policy `R9` scope filtering must not be bypassed in tool execution paths.
+- Media attachment access must enforce owner-or-admin checks on download routes.
+- Self-update sandbox mode must not execute smoke commands directly on host when `SELFUPDATE_SANDBOX_ENABLED=1`.
 
 ## High-Risk Files
 
@@ -40,6 +45,13 @@ uv run pytest tests/unit -q
 make test-gates
 uv run jarvis doctor
 curl -s http://127.0.0.1:8000/readyz
+```
+
+Sandbox-first self-update verification (when enabled):
+
+```bash
+docker build -f deploy/Dockerfile.sandbox -t jarvis-sandbox:latest .
+SELFUPDATE_SANDBOX_ENABLED=1 make api
 ```
 
 ## Rollback Guidance

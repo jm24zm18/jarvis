@@ -11,7 +11,7 @@ def test_create_session_retries_on_transient_db_lock(monkeypatch: pytest.MonkeyP
         def __init__(self) -> None:
             self.calls = 0
 
-        def execute(self, _query: str, _params: tuple[str, str, str, str, str, str]) -> None:
+        def execute(self, _query: str, _params: tuple[str, ...]) -> None:
             self.calls += 1
             if self.calls < 3:
                 raise sqlite3.OperationalError("database is locked")

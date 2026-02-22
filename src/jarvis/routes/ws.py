@@ -93,7 +93,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     if auth_data is None:
         await websocket.close(code=1008)
         return
-    user_id, role = auth_data
+    user_id, role, _scopes = auth_data
 
     await websocket.accept()
     await websocket.send_json({"type": "auth.ok", "user_id": user_id, "role": role})

@@ -42,6 +42,8 @@
 3. Validate patch format + protected paths + `git apply --check`.
 4. Deterministic replay check from recorded `baseline_ref`.
 5. Test in temporary worktree (profile-dependent smoke suite).
+   - Optional sandbox mode (`SELFUPDATE_SANDBOX_ENABLED=1`) runs smoke commands in Docker (`--read-only`, `--network=none`, constrained CPU/memory).
+   - Sandbox diff metadata is persisted under `artifact.json["sandbox"]` and exposed via `GET /api/v1/selfupdate/patches/{trace_id}/sandbox`.
 6. Admin approval -> apply patch.
 7. Readiness watchdog and rollback path enforce safety gates.
 
@@ -83,10 +85,22 @@
 
 ## Auth and Authorization
 
-- Session tokens map to `UserContext(user_id, role, is_admin)`.
+- Session tokens map to `UserContext(user_id, role, scopes, is_admin)`.
+- CBAC scope model:
+  - `*` grants all scopes.
+  - Exact match grants one capability (for example `media:read`).
+  - Namespace wildcard grants a family (`memory:*` -> `memory:read`, `memory:write`, etc.).
+- Restricted delegation tokens are minted via `mint_restricted_token(...)` and carry a short TTL plus explicit scope set.
 - Admin-only areas include lockdown controls, permissions, and self-update approvals.
 - Non-admin users are ownership-scoped for thread-linked resources.
 - WebSocket thread subscriptions enforce thread ownership for non-admin users.
+- Tool runtime policy includes scope gate `R9` (`cbac.scope_denied`) that intersects token scopes with allowed tool mappings before execution.
+
+## Media Attachment Architecture
+
+- Unified attachment table: `media_attachments` (`062_media_attachments.sql`) with `mda_` IDs.
+- Inbound channel media (WhatsApp/Telegram) writes to both channel-specific paths and unified attachment storage.
+- Message-list API enriches each message with a `media` array (`id`, `url`, `mime_type`, `thumbnail_url`, `size_bytes`) using a batched attachment lookup by `message_id`.
 
 ## Migration Ledger
 

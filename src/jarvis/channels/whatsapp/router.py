@@ -581,6 +581,7 @@ async def inbound(
                 if local_path:
                     bytes_value = media_result.get("bytes", 0)
                     num_bytes = int(bytes_value) if isinstance(bytes_value, int | str) else 0
+                    mime_str = str(media_result.get("mime_type", ""))
                     try:
                         media_id = insert_whatsapp_media(
                             conn,
@@ -588,7 +589,7 @@ async def inbound(
                             message_id=message_id,
                             media_type=msg.message_type,
                             local_path=local_path,
-                            mime_type=str(media_result.get("mime_type", "")),
+                            mime_type=mime_str,
                             num_bytes=num_bytes,
                         )
                     except Exception:
@@ -604,6 +605,21 @@ async def inbound(
                                 "external_msg_id": msg.external_msg_id,
                             },
                         )
+                    # Also store in the unified media_attachments table.
+                    try:
+                        from jarvis.media.service import MediaService as _MediaService
+                        _file_data = Path(local_path).read_bytes()
+                        _svc = _MediaService()
+                        _svc.upload(
+                            conn,
+                            owner_id=user_id,
+                            file_data=_file_data,
+                            filename=Path(local_path).name,
+                            mime_type=mime_str or "application/octet-stream",
+                            message_id=message_id,
+                        )
+                    except Exception:
+                        pass  # Non-fatal: backward-compat insert_whatsapp_media succeeded
 
             event_payload = {
                 "text": text,

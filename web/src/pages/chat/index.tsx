@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { Send, Search, Plus, Eye, EyeOff } from "lucide-react";
+import { Send, Search, Plus, Eye, EyeOff, Paperclip, Mic } from "lucide-react";
 import {
   createThread,
   getTrace,
@@ -11,8 +11,9 @@ import {
   listThreads,
   sendMessage,
   startOnboarding,
+  uploadMedia,
 } from "../../api/endpoints";
-import type { MessageItem, OnboardingStatus } from "../../types";
+import type { MediaAttachment, MessageItem, OnboardingStatus } from "../../types";
 import { useWebSocket } from "../../hooks/useWebSocket";
 import { useChatStore } from "../../stores/chat";
 import Button from "../../components/ui/Button";
@@ -92,7 +93,13 @@ export default function ChatPage() {
   const [threadFilter, setThreadFilter] = useState("");
   const panelTraceIdRef = useRef(panelTraceId);
   panelTraceIdRef.current = panelTraceId;
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const setThinking = useChatStore((s) => s.setThinking);
   const setDelegation = useChatStore((s) => s.setDelegation);
   const setActiveTrace = useChatStore((s) => s.setActiveTrace);
@@ -413,9 +420,74 @@ export default function ChatPage() {
     return groups;
   }, [messageItems]);
 
-  const handleSend = () => {
-    if (threadId && draft.trim()) sendMutation.mutate(draft.trim());
-  };
+  const handleMicPointerDown = useCallback(async () => {
+    if (!threadId) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+    } catch {
+      // Mic permission denied or API unsupported — silent failure
+    }
+  }, [threadId]);
+
+  const handleMicPointerUp = useCallback(async () => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state !== "recording") {
+      setIsRecording(false);
+      return;
+    }
+    setIsRecording(false);
+    const stopped = new Promise<void>((resolve) => { recorder.onstop = () => resolve(); });
+    recorder.stop();
+    recorder.stream.getTracks().forEach((t) => t.stop());
+    await stopped;
+    const chunks = audioChunksRef.current;
+    if (!chunks.length || !threadId) return;
+    const blob = new Blob(chunks, { type: "audio/webm" });
+    const file = new File([blob], `voice_${Date.now()}.webm`, { type: "audio/webm" });
+    setIsUploading(true);
+    try {
+      await uploadMedia(file, threadId);
+    } catch {
+      // Non-fatal
+    } finally {
+      setIsUploading(false);
+    }
+    sendMutation.mutate("[voice message]");
+  }, [sendMutation, threadId]);
+
+  const handleSend = useCallback(async () => {
+    if (!threadId) return;
+    const content = draft.trim();
+    const fileToUpload = pendingFile;
+    if (!content && !fileToUpload) return;
+    if (fileToUpload) {
+      setIsUploading(true);
+      setPendingFile(null);
+      try {
+        await uploadMedia(fileToUpload, threadId);
+      } catch {
+        // Non-fatal — upload failure doesn't block text send
+      } finally {
+        setIsUploading(false);
+      }
+      if (!content) {
+        sendMutation.mutate("[media uploaded]");
+        return;
+      }
+    }
+    if (content) sendMutation.mutate(content);
+  }, [draft, pendingFile, sendMutation, threadId]);
 
   return (
     <div className="flex h-[calc(100vh-3rem)] gap-4">
@@ -532,6 +604,35 @@ export default function ChatPage() {
                         <div className="max-h-[32rem] overflow-x-auto break-words">
                           <MarkdownLite content={msg.content} />
                         </div>
+                        {msg.media && msg.media.length > 0 && (
+                          <div className="mt-1.5 space-y-1.5">
+                            {(msg.media as MediaAttachment[]).map((att) => (
+                              <div key={att.id}>
+                                {att.mime_type.startsWith("image/") ? (
+                                  <img
+                                    src={att.thumbnail_url ?? att.url}
+                                    alt="attachment"
+                                    className="max-h-48 max-w-full rounded-lg object-cover cursor-pointer"
+                                    onClick={() => window.open(att.url, "_blank")}
+                                  />
+                                ) : att.mime_type.startsWith("audio/") ? (
+                                  <audio controls src={att.url} className="max-w-full" />
+                                ) : (
+                                  <a
+                                    href={att.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2 py-1.5 text-xs hover:bg-mist transition"
+                                  >
+                                    <Paperclip size={12} />
+                                    <span className="truncate">{att.mime_type}</span>
+                                    <span className="ml-auto text-[var(--text-muted)]">{Math.round(att.size_bytes / 1024)}KB</span>
+                                  </a>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <div className="absolute -bottom-4 right-2 hidden text-[10px] text-[var(--text-muted)] group-hover:block">
                           {new Date(msg.created_at).toLocaleTimeString()}
                         </div>
@@ -583,13 +684,50 @@ export default function ChatPage() {
 
         {/* Input area */}
         <div className="border-t border-[var(--border-default)] p-3">
+          {/* Pending file preview */}
+          {pendingFile && (
+            <div className="mb-2 flex items-center gap-2 rounded-lg border border-[var(--border-default)] bg-mist px-2.5 py-1.5 text-xs">
+              <Paperclip size={12} className="text-[var(--text-muted)]" />
+              <span className="flex-1 truncate text-[var(--text-primary)]">{pendingFile.name}</span>
+              <span className="text-[var(--text-muted)]">{Math.round(pendingFile.size / 1024)}KB</span>
+              <button
+                type="button"
+                className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                onClick={() => setPendingFile(null)}
+              >
+                ✕
+              </button>
+            </div>
+          )}
           <div className="flex items-end gap-2">
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept="image/*,audio/*,video/*,application/pdf,text/plain"
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null;
+                setPendingFile(f);
+                e.target.value = "";
+              }}
+            />
+            {/* Paperclip button */}
+            <button
+              type="button"
+              title="Attach file"
+              disabled={!threadId || isUploading}
+              onClick={() => fileInputRef.current?.click()}
+              className="flex h-[2.5rem] w-[2.5rem] shrink-0 items-center justify-center rounded-xl border border-[var(--border-strong)] bg-surface text-[var(--text-muted)] transition hover:text-[var(--text-primary)] disabled:opacity-40"
+            >
+              <Paperclip size={16} />
+            </button>
             <textarea
               ref={textareaRef}
               value={draft}
               placeholder={threadId ? "Type a message... (Shift+Enter for newline)" : "Create/select a thread first"}
               onChange={(e) => setDraft(e.target.value)}
-              disabled={!threadId || sendMutation.isPending}
+              disabled={!threadId || sendMutation.isPending || isUploading}
               rows={1}
               onKeyDown={(e) => {
                 if (e.key === "Tab" && showCommandSuggestions && commandSuggestions.length > 0) {
@@ -599,17 +737,33 @@ export default function ChatPage() {
                 }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  handleSend();
+                  void handleSend();
                 }
               }}
               className="max-h-40 min-h-[2.5rem] flex-1 resize-none rounded-xl border border-[var(--border-strong)] bg-surface px-3.5 py-2.5 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] focus:border-ember focus:ring-1 focus:ring-ember/30"
             />
+            {/* Mic button — hold to record */}
+            <button
+              type="button"
+              title="Hold to record voice"
+              disabled={!threadId || isUploading || sendMutation.isPending}
+              onPointerDown={() => { void handleMicPointerDown(); }}
+              onPointerUp={() => { void handleMicPointerUp(); }}
+              onPointerLeave={() => { void handleMicPointerUp(); }}
+              className={`flex h-[2.5rem] w-[2.5rem] shrink-0 items-center justify-center rounded-xl border transition disabled:opacity-40 ${
+                isRecording
+                  ? "border-ember bg-ember text-white"
+                  : "border-[var(--border-strong)] bg-surface text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              <Mic size={16} />
+            </button>
             <Button
-              onClick={handleSend}
-              disabled={!threadId || !draft.trim() || sendMutation.isPending || isTyping}
+              onClick={() => { void handleSend(); }}
+              disabled={!threadId || (!draft.trim() && !pendingFile) || sendMutation.isPending || isTyping || isUploading}
               icon={<Send size={16} />}
             >
-              Send
+              {isUploading ? "…" : "Send"}
             </Button>
           </div>
         </div>

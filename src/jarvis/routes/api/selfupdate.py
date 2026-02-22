@@ -100,3 +100,20 @@ def patch_timeline(
         transitions = list_selfupdate_transitions(conn, trace_id)
         checks = list_selfupdate_checks(conn, trace_id)
     return {"trace_id": trace_id, "transitions": transitions, "checks": checks}
+
+
+@router.get("/patches/{trace_id}/sandbox")
+def patch_sandbox(
+    trace_id: str, ctx: UserContext = Depends(require_admin)  # noqa: B008
+) -> dict[str, object]:
+    """Return sandbox diff-summary metadata stored in the patch artifact."""
+    del ctx
+    base = _patch_dir()
+    try:
+        artifact = read_artifact(trace_id, base)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"artifact not found: {exc}") from exc
+    sandbox_section = artifact.get("sandbox", {})
+    if not isinstance(sandbox_section, dict):
+        sandbox_section = {}
+    return {"trace_id": trace_id, **sandbox_section}

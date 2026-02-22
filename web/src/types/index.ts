@@ -7,12 +7,21 @@ export interface ThreadItem {
   last_message?: string | null;
 }
 
+export interface MediaAttachment {
+  id: string;
+  url: string;
+  mime_type: string;
+  thumbnail_url?: string | null;
+  size_bytes: number;
+}
+
 export interface MessageItem {
   id: string;
   role: "user" | "assistant" | string;
   speaker?: string;
   content: string;
   created_at: string;
+  media?: MediaAttachment[];
 }
 
 export interface OnboardingStatus {

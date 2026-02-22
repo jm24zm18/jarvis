@@ -179,7 +179,8 @@ def test_lockdown_route_is_reachable_after_successful_login() -> None:
     get_settings.cache_clear()
     client = _managed_client()
 
-    token, _user_id = _login(client, "alice")
+    _admin_token, _admin_user_id = _login(client, "bootstrap-admin")
+    token, _user_id = _login(client, "alice-after-admin")
     response = client.post(
         "/api/v1/system/lockdown",
         headers=_headers(token),

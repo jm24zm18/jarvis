@@ -9,6 +9,7 @@ from jarvis.routes.api import (
     channels,
     events,
     governance,
+    media,
     memory,
     messages,
     permissions,
@@ -28,6 +29,7 @@ router.include_router(messages.router)
 router.include_router(agents.router)
 router.include_router(events.router)
 router.include_router(memory.router)
+router.include_router(media.router)
 router.include_router(schedules.router)
 router.include_router(selfupdate.router)
 router.include_router(permissions.router)

@@ -123,7 +123,9 @@ def test_provider_config_requires_admin() -> None:
     get_settings.cache_clear()
     client = _managed_client()
 
-    token = _login(client)
+    _admin = _login_payload(client, "bootstrap-admin")
+    user = _login_payload(client, "non-admin-user")
+    token = str(user["token"])
     headers = {"Authorization": f"Bearer {token}"}
     response = client.get("/api/v1/auth/providers/config", headers=headers)
     assert response.status_code == 403
@@ -801,7 +803,9 @@ def test_evolution_items_require_admin() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = _managed_client()
-    token = _login(client)
+    _admin = _login_payload(client, "bootstrap-admin")
+    user = _login_payload(client, "non-admin-user-evo")
+    token = str(user["token"])
     headers = {"Authorization": f"Bearer {token}"}
 
     listing = client.get("/api/v1/governance/evolution/items", headers=headers)
