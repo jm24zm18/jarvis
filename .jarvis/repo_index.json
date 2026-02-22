@@ -302,7 +302,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-22T17:29:44.272072+00:00",
+  "generated_at": "2026-02-22T20:22:16.029634+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -566,6 +566,10 @@
     {
       "file": "src/jarvis/db/migrations/068_feature_request_idempotency_and_tool_permission.sql",
       "number": 68
+    },
+    {
+      "file": "src/jarvis/db/migrations/069_feature_build_retry_metadata.sql",
+      "number": 69
     }
   ],
   "protected_modules": [

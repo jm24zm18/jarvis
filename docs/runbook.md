@@ -332,6 +332,41 @@ Failure kind taxonomy:
 - `policy` — policy engine blocked the run (not retryable)
 - `runtime` — unexpected internal error
 
+Feature-build-specific checks:
+
+```sql
+-- 5. Build run status for a degraded trace (replace <trace_id>)
+SELECT id, feature_id, status, summary, created_at, updated_at
+FROM feature_request_build_runs
+WHERE trace_id = '<trace_id>'
+ORDER BY created_at DESC;
+
+-- 6. Confirm leak guard and quota context for the same trace
+SELECT event_type, created_at, payload_json
+FROM events
+WHERE trace_id = '<trace_id>'
+  AND event_type IN ('agent.response.leak_blocked', 'model.fallback', 'agent.response.degraded')
+ORDER BY created_at ASC;
+```
+
+Expected behavior for feature builds:
+- Degraded/leak-blocked terminal responses finalize the linked build run as `failed` immediately.
+- `summary` should include an operator-actionable reason (quota exhaustion, leak guard block, or degraded reason).
+- `running` status should only remain for actively executing runs, not terminal degraded outcomes.
+
+Automatic retry behavior (when enabled):
+- Retryable degraded reasons schedule the same build run for a later retry attempt.
+- Check retry state fields in `feature_request_build_runs`:
+  - `attempt_count`, `max_attempts`
+  - `retry_state` (`none|scheduled|running|exhausted`)
+  - `next_retry_at`
+  - `last_failure_reason`
+- Inspect retry events:
+  - `feature.build.retry.scheduled`
+  - `feature.build.retry.started`
+  - `feature.build.retry.exhausted`
+  - `feature.build.retry.succeeded_after_retry`
+
 ## Local Setup Smoke Validation
 
 1. Run `make setup-smoke`.

@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     agent_step_max_attempts: int = Field(alias="AGENT_STEP_MAX_ATTEMPTS", default=3)
     agent_step_retry_base_seconds: int = Field(alias="AGENT_STEP_RETRY_BASE_SECONDS", default=2)
     agent_step_retry_max_seconds: int = Field(alias="AGENT_STEP_RETRY_MAX_SECONDS", default=20)
+    feature_build_retry_on_degraded: int = Field(alias="FEATURE_BUILD_RETRY_ON_DEGRADED", default=1)
+    feature_build_retry_max_attempts: int = Field(alias="FEATURE_BUILD_RETRY_MAX_ATTEMPTS", default=5)
+    feature_build_retry_backoff_seconds: str = Field(
+        alias="FEATURE_BUILD_RETRY_BACKOFF_SECONDS",
+        default="30,120,300,600",
+    )
+    feature_build_retry_dispatch_interval_seconds: int = Field(
+        alias="FEATURE_BUILD_RETRY_DISPATCH_INTERVAL_SECONDS",
+        default=15,
+    )
     agent_run_reaper_interval_seconds: int = Field(
         alias="AGENT_RUN_REAPER_INTERVAL_SECONDS", default=30
     )

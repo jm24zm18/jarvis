@@ -10,7 +10,9 @@ from jarvis.db.queries import (
     consume_approval,
     create_approval,
     create_feature_build_run,
+    finalize_feature_build_run_by_trace,
     list_approvals,
+    list_due_feature_build_retries,
     list_feature_build_runs,
     now_iso,
     reconcile_stale_feature_build_runs,
@@ -158,6 +160,65 @@ def test_reconcile_stale_feature_build_runs_marks_stale_running_failed() -> None
     assert row is not None
     assert str(row["status"]) == "failed"
     assert "stale running timeout" in str(row["summary"])
+
+
+def test_finalize_feature_build_run_by_trace_updates_active_run() -> None:
+    with get_conn() as conn:
+        fid = _insert_feature(conn)
+        run_id = create_feature_build_run(
+            conn,
+            feature_id=fid,
+            created_by="usr_admin",
+            trace_id="trc_feature_finalize",
+        )
+        update_feature_build_run(conn, run_id, status="running")
+
+        updated = finalize_feature_build_run_by_trace(
+            conn,
+            "trc_feature_finalize",
+            status="failed",
+            summary="Build failed: degraded response.",
+        )
+        row = conn.execute(
+            "SELECT status, summary FROM feature_request_build_runs WHERE id=?",
+            (run_id,),
+        ).fetchone()
+
+    assert updated == run_id
+    assert row is not None
+    assert str(row["status"]) == "failed"
+    assert str(row["summary"]) == "Build failed: degraded response."
+
+
+def test_list_due_feature_build_retries_returns_only_due_rows() -> None:
+    with get_conn() as conn:
+        fid = _insert_feature(conn)
+        run_due = create_feature_build_run(conn, feature_id=fid, created_by="usr_admin")
+        run_future = create_feature_build_run(conn, feature_id=fid, created_by="usr_admin")
+        due_at = (datetime.now(UTC) - timedelta(seconds=5)).isoformat()
+        future_at = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
+        update_feature_build_run(
+            conn,
+            run_due,
+            status="running",
+            retry_state="scheduled",
+            next_retry_at=due_at,
+            attempt_count=2,
+        )
+        update_feature_build_run(
+            conn,
+            run_future,
+            status="running",
+            retry_state="scheduled",
+            next_retry_at=future_at,
+            attempt_count=2,
+        )
+
+        due_rows = list_due_feature_build_retries(conn, limit=20)
+
+    ids = {str(row["id"]) for row in due_rows}
+    assert run_due in ids
+    assert run_future not in ids
 
 
 # ---------------------------------------------------------------------------

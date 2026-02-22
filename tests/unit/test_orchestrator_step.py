@@ -623,6 +623,49 @@ def test_run_agent_step_blocks_internal_leak_output(monkeypatch) -> None:
     assert leak_evt is not None
 
 
+def test_run_agent_step_leak_guard_retry_recovers_final_output(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="We need to send a command next.",
+                    tool_calls=[],
+                ),
+                "fallback",
+            ),
+            (ModelResponse(text="Implemented and verified the requested change.", tool_calls=[]), "fallback"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550167")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "continue")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_leak_retry")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        leak_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.leak_blocked' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_step_leak_retry",),
+        ).fetchone()
+        degraded_evt = conn.execute(
+            "SELECT COUNT(*) AS c FROM events WHERE trace_id=? AND event_type='agent.response.degraded'",
+            ("trc_step_leak_retry",),
+        ).fetchone()
+    assert row is not None
+    assert str(row["content"]) == "Implemented and verified the requested change."
+    assert leak_evt is not None
+    assert degraded_evt is not None and int(degraded_evt["c"]) == 0
+    assert router.calls == 2
+
+
 def test_run_agent_step_rewrites_placeholder_to_degraded_response(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
     router = _SequenceRouter([(ModelResponse(text="I am an AI.", tool_calls=[]), "primary")])

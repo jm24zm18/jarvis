@@ -14,7 +14,13 @@ from jarvis.tasks import get_task_runner
 logger = logging.getLogger(__name__)
 from jarvis.config import get_settings  # noqa: E402
 from jarvis.db.connection import get_conn  # noqa: E402
-from jarvis.db.queries import create_feature_request, now_iso  # noqa: E402
+from jarvis.db.queries import (  # noqa: E402
+    create_feature_request,
+    finalize_feature_build_run_by_trace,
+    get_feature_build_run_by_trace,
+    now_iso,
+    update_feature_build_run,
+)
 from jarvis.events.models import EventInput  # noqa: E402
 from jarvis.events.writer import emit_event, redact_payload  # noqa: E402
 from jarvis.ids import new_id  # noqa: E402
@@ -46,11 +52,257 @@ from jarvis.tools.web_search import web_search  # noqa: E402
 _DEFAULT_EXEC_HOST_TIMEOUT_S = 120
 _BUILD_TEST_GATES_TIMEOUT_S = 600
 _BUILD_TEST_GATES_COMMAND = "uv run jarvis test-gates --fail-fast"
+_DEGRADED_RESPONSE_PREFIX = "I hit an internal response issue while processing that request."
 
 
 def _is_build_test_gates_command(command: str) -> bool:
     normalized = " ".join(command.strip().split()).lower()
     return normalized == _BUILD_TEST_GATES_COMMAND
+
+
+def _finalize_feature_build_run_from_trace_result(
+    conn: sqlite3.Connection,
+    *,
+    trace_id: str,
+    message_id: str | None = None,
+    failure_kind: str | None = None,
+    failure_error: str | None = None,
+) -> None:
+    """Finalize feature-build run (if any) linked to trace_id."""
+    run = get_feature_build_run_by_trace(conn, trace_id)
+    if run is None:
+        return
+    run_id = str(run["id"])
+    attempt_count = max(1, int(run.get("attempt_count", 1)))
+    max_attempts = max(attempt_count, int(run.get("max_attempts", attempt_count)))
+    settings = get_settings()
+
+    def _retry_delay_seconds(next_attempt: int) -> int:
+        raw = str(settings.feature_build_retry_backoff_seconds).strip()
+        values: list[int] = []
+        for part in raw.split(","):
+            item = part.strip()
+            if not item:
+                continue
+            try:
+                values.append(max(1, int(item)))
+            except ValueError:
+                continue
+        if not values:
+            values = [30, 120, 300, 600]
+        idx = max(0, min(len(values) - 1, next_attempt - 2))
+        return values[idx]
+
+    def _schedule_retry(reason: str, summary: str) -> None:
+        next_attempt = attempt_count + 1
+        if next_attempt > max_attempts:
+            update_feature_build_run(
+                conn,
+                run_id,
+                status="failed",
+                retry_state="exhausted",
+                next_retry_at="",
+                summary=f"Build failed after {attempt_count} attempts: {summary}",
+                last_failure_reason=reason,
+            )
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=str(run.get("thread_id") or "") or None,
+                    event_type="feature.build.retry.exhausted",
+                    component="feature_build",
+                    actor_type="system",
+                    actor_id="feature_build",
+                    payload_json=json.dumps(
+                        {
+                            "run_id": run_id,
+                            "attempt_count": attempt_count,
+                            "max_attempts": max_attempts,
+                            "reason": reason,
+                        }
+                    ),
+                    payload_redacted_json=json.dumps(
+                        redact_payload(
+                            {
+                                "run_id": run_id,
+                                "attempt_count": attempt_count,
+                                "max_attempts": max_attempts,
+                                "reason": reason,
+                            }
+                        )
+                    ),
+                ),
+            )
+            return
+
+        delay = _retry_delay_seconds(next_attempt)
+        next_retry_at = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
+        update_feature_build_run(
+            conn,
+            run_id,
+            status="running",
+            attempt_count=next_attempt,
+            retry_state="scheduled",
+            next_retry_at=next_retry_at,
+            summary=(
+                f"Retry scheduled ({next_attempt}/{max_attempts}) in {delay}s "
+                f"after degraded outcome: {summary}"
+            ),
+            last_failure_reason=reason,
+        )
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=str(run.get("thread_id") or "") or None,
+                event_type="feature.build.retry.scheduled",
+                component="feature_build",
+                actor_type="system",
+                actor_id="feature_build",
+                payload_json=json.dumps(
+                    {
+                        "run_id": run_id,
+                        "attempt_count": next_attempt,
+                        "max_attempts": max_attempts,
+                        "reason": reason,
+                        "next_retry_at": next_retry_at,
+                    }
+                ),
+                payload_redacted_json=json.dumps(
+                    redact_payload(
+                        {
+                            "run_id": run_id,
+                            "attempt_count": next_attempt,
+                            "max_attempts": max_attempts,
+                            "reason": reason,
+                            "next_retry_at": next_retry_at,
+                        }
+                    )
+                ),
+            ),
+        )
+
+    if failure_kind is not None:
+        detail = str(failure_error or "").strip()
+        if detail:
+            summary = f"Build failed: agent step {failure_kind}: {detail}"
+        else:
+            summary = f"Build failed: agent step {failure_kind}."
+        finalize_feature_build_run_by_trace(conn, trace_id, status="failed", summary=summary)
+        return
+
+    message_text = ""
+    if message_id:
+        row = conn.execute(
+            "SELECT content FROM messages WHERE id=? LIMIT 1",
+            (message_id,),
+        ).fetchone()
+        if row is not None:
+            message_text = str(row["content"] or "").strip()
+
+    leak_blocked = conn.execute(
+        (
+            "SELECT 1 FROM events WHERE trace_id=? AND event_type='agent.response.leak_blocked' "
+            "LIMIT 1"
+        ),
+        (trace_id,),
+    ).fetchone()
+    degraded_row = conn.execute(
+        (
+            "SELECT payload_json FROM events WHERE trace_id=? "
+            "AND event_type='agent.response.degraded' ORDER BY created_at DESC LIMIT 1"
+        ),
+        (trace_id,),
+    ).fetchone()
+    quota_row = conn.execute(
+        (
+            "SELECT 1 FROM events WHERE trace_id=? AND event_type='model.fallback' "
+            "AND json_extract(payload_json, '$.primary_failure_kind')='quota_retryable' LIMIT 1"
+        ),
+        (trace_id,),
+    ).fetchone()
+
+    degraded = bool(leak_blocked) or message_text.startswith(_DEGRADED_RESPONSE_PREFIX)
+    if degraded_row is not None:
+        degraded = True
+
+    if degraded:
+        retryable_reason: str | None = None
+        if quota_row is not None:
+            summary = (
+                "Build failed: provider quota exhausted during synthesis; "
+                "final response degraded."
+            )
+            retryable_reason = "quota_retryable"
+        elif leak_blocked is not None:
+            summary = "Build failed: final response blocked by leak guard."
+            retryable_reason = "final_output_leak_guard"
+        else:
+            reason = "unknown"
+            try:
+                payload = (
+                    json.loads(str(degraded_row["payload_json"]))
+                    if degraded_row is not None
+                    else {}
+                )
+                reason = str(payload.get("reason") or "unknown")
+            except Exception:
+                reason = "unknown"
+            summary = f"Build failed: degraded response ({reason})."
+            if reason in {
+                "placeholder_response_after_tool_loop",
+                "provider_error_terminal_synthesis",
+                "placeholder_response_after_terminal_synthesis",
+            }:
+                retryable_reason = reason
+
+        if int(settings.feature_build_retry_on_degraded) == 1 and retryable_reason is not None:
+            _schedule_retry(retryable_reason, summary)
+        else:
+            finalize_feature_build_run_by_trace(conn, trace_id, status="failed", summary=summary)
+        return
+
+    finalize_feature_build_run_by_trace(
+        conn,
+        trace_id,
+        status="succeeded",
+        summary="Build completed successfully.",
+    )
+    if attempt_count > 1:
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=str(run.get("thread_id") or "") or None,
+                event_type="feature.build.retry.succeeded_after_retry",
+                component="feature_build",
+                actor_type="system",
+                actor_id="feature_build",
+                payload_json=json.dumps(
+                    {
+                        "run_id": run_id,
+                        "attempt_count": attempt_count,
+                        "max_attempts": max_attempts,
+                    }
+                ),
+                payload_redacted_json=json.dumps(
+                    redact_payload(
+                        {
+                            "run_id": run_id,
+                            "attempt_count": attempt_count,
+                            "max_attempts": max_attempts,
+                        }
+                    )
+                ),
+            ),
+        )
 
 
 def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
@@ -184,6 +436,11 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                             "error": "trace already completed by another attempt",
                         },
                     )
+                    _finalize_feature_build_run_from_trace_result(
+                        conn,
+                        trace_id=trace_id,
+                        message_id=existing_success,
+                    )
                     return existing_success
 
                 finish_attempt(
@@ -199,6 +456,11 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                     trace_id=trace_id,
                     event_type="agent.step.end",
                     payload={"attempt": attempt_no, "message_id": message_id},
+                )
+                _finalize_feature_build_run_from_trace_result(
+                    conn,
+                    trace_id=trace_id,
+                    message_id=message_id,
                 )
 
                 if actor_id == "main":
@@ -418,6 +680,12 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                             "failure_kind": failure_kind,
                             "error": str(exc)[:500],
                         },
+                    )
+                    _finalize_feature_build_run_from_trace_result(
+                        conn,
+                        trace_id=trace_id,
+                        failure_kind=failure_kind,
+                        failure_error=str(exc),
                     )
             if not retryable:
                 raise

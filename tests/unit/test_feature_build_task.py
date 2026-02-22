@@ -1,6 +1,13 @@
+from datetime import UTC, datetime, timedelta
+
 from jarvis.db.connection import get_conn
-from jarvis.db.queries import create_feature_build_run, ensure_system_state, ensure_user
-from jarvis.tasks.feature_build import run_feature_build
+from jarvis.db.queries import (
+    create_feature_build_run,
+    ensure_system_state,
+    ensure_user,
+    update_feature_build_run,
+)
+from jarvis.tasks.feature_build import dispatch_due_feature_build_retries, run_feature_build
 
 
 def test_run_feature_build_uses_current_thread_channel_schema(monkeypatch) -> None:
@@ -72,3 +79,70 @@ def test_run_feature_build_marks_failed_on_internal_exception(monkeypatch) -> No
         assert row is not None
         assert str(row["status"]) == "failed"
         assert "RuntimeError: boom" in str(row["summary"])
+
+
+def test_dispatch_due_feature_build_retries_enqueues_due_run(monkeypatch) -> None:
+    queued: list[tuple[str, dict[str, object], str]] = []
+
+    class _Runner:
+        def send_task(self, name: str, kwargs: dict[str, object], queue: str) -> bool:
+            queued.append((name, kwargs, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        actor_id = ensure_user(conn, "web_admin_feature_build_retry")
+        now = datetime.now(UTC).isoformat()
+        feature_id = "bug_feature_build_retry"
+        conn.execute(
+            (
+                "INSERT INTO bug_reports"
+                "(id, kind, title, description, status, priority, reporter_id, assignee_agent, "
+                "thread_id, trace_id, github_issue_number, github_issue_url, github_synced_at, "
+                "github_sync_error, created_at, updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                feature_id,
+                "feature",
+                "Retry Feature",
+                "",
+                "open",
+                "medium",
+                actor_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                now,
+                now,
+            ),
+        )
+        run_id = create_feature_build_run(conn, feature_id=feature_id, created_by=actor_id)
+        due_at = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
+        update_feature_build_run(
+            conn,
+            run_id,
+            status="running",
+            retry_state="scheduled",
+            next_retry_at=due_at,
+            attempt_count=2,
+            max_attempts=5,
+            trace_id="trc_retry_dispatch_old",
+        )
+
+    result = dispatch_due_feature_build_retries(limit=20)
+    assert int(result["attempted"]) >= 1
+    assert int(result["dispatched"]) >= 1
+    assert queued
+    task_name, kwargs, queue = queued[0]
+    assert task_name == "jarvis.tasks.feature_build.run_feature_build"
+    assert str(kwargs["run_id"]) == run_id
+    assert str(kwargs["feature_id"]) == feature_id
+    assert str(kwargs["trace_id"]).startswith("trc_")
+    assert queue == "default"

@@ -1639,6 +1639,7 @@ def set_feature_request_approval(
 # ---------------------------------------------------------------------------
 
 BUILD_RUN_STATUSES = {"queued", "running", "succeeded", "failed", "timed_out", "cancelled"}
+BUILD_RUN_RETRY_STATES = {"none", "scheduled", "running", "exhausted"}
 
 
 def create_feature_build_run(
@@ -1655,11 +1656,26 @@ def create_feature_build_run(
     conn.execute(
         (
             "INSERT INTO feature_request_build_runs"
-            "(id, feature_id, trace_id, thread_id, status, summary,"
-            " created_by, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?)"
+            "(id, feature_id, trace_id, thread_id, status, summary, attempt_count, max_attempts, "
+            "retry_state, next_retry_at, last_failure_reason, created_by, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         ),
-        (run_id, feature_id, trace_id, thread_id, "queued", "", created_by, ts, ts),
+        (
+            run_id,
+            feature_id,
+            trace_id,
+            thread_id,
+            "queued",
+            "",
+            1,
+            5,
+            "none",
+            "",
+            "",
+            created_by,
+            ts,
+            ts,
+        ),
     )
     return run_id
 
@@ -1672,6 +1688,11 @@ def update_feature_build_run(
     trace_id: str | None = None,
     thread_id: str | None = None,
     summary: str | None = None,
+    attempt_count: int | None = None,
+    max_attempts: int | None = None,
+    retry_state: str | None = None,
+    next_retry_at: str | None = None,
+    last_failure_reason: str | None = None,
 ) -> None:
     """Partial update for a feature build run row."""
     updates: list[str] = []
@@ -1690,6 +1711,24 @@ def update_feature_build_run(
     if summary is not None:
         updates.append("summary=?")
         params.append(summary)
+    if attempt_count is not None:
+        updates.append("attempt_count=?")
+        params.append(max(1, int(attempt_count)))
+    if max_attempts is not None:
+        updates.append("max_attempts=?")
+        params.append(max(1, int(max_attempts)))
+    if retry_state is not None:
+        state = str(retry_state).strip()
+        if state not in BUILD_RUN_RETRY_STATES:
+            raise ValueError(f"Invalid retry_state: {retry_state}")
+        updates.append("retry_state=?")
+        params.append(state)
+    if next_retry_at is not None:
+        updates.append("next_retry_at=?")
+        params.append(str(next_retry_at))
+    if last_failure_reason is not None:
+        updates.append("last_failure_reason=?")
+        params.append(str(last_failure_reason)[:500])
     if not updates:
         return
     updates.append("updated_at=?")
@@ -1701,6 +1740,105 @@ def update_feature_build_run(
     )
 
 
+def finalize_feature_build_run_by_trace(
+    conn: sqlite3.Connection,
+    trace_id: str,
+    *,
+    status: str,
+    summary: str,
+) -> str | None:
+    """Finalize latest queued/running build run for a trace.
+
+    Returns run_id when a row was updated, else None.
+    """
+    trace = str(trace_id or "").strip()
+    if not trace:
+        return None
+    row = conn.execute(
+        (
+            "SELECT id FROM feature_request_build_runs "
+            "WHERE trace_id=? AND status IN ('queued','running') "
+            "ORDER BY created_at DESC LIMIT 1"
+        ),
+        (trace,),
+    ).fetchone()
+    if row is None:
+        return None
+    run_id = str(row["id"])
+    update_feature_build_run(
+        conn,
+        run_id,
+        status=status,
+        summary=str(summary or "").strip()[:500],
+        retry_state="none",
+        next_retry_at="",
+    )
+    return run_id
+
+
+def get_feature_build_run_by_trace(
+    conn: sqlite3.Connection,
+    trace_id: str,
+) -> dict[str, object] | None:
+    trace = str(trace_id or "").strip()
+    if not trace:
+        return None
+    row = conn.execute(
+        (
+            "SELECT * FROM feature_request_build_runs "
+            "WHERE trace_id=? ORDER BY created_at DESC LIMIT 1"
+        ),
+        (trace,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def get_feature_build_run(
+    conn: sqlite3.Connection,
+    run_id: str,
+) -> dict[str, object] | None:
+    row = conn.execute(
+        "SELECT * FROM feature_request_build_runs WHERE id=? LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def list_due_feature_build_retries(
+    conn: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    now_dt = now or datetime.now(UTC)
+    max_rows = max(1, int(limit))
+    rows = conn.execute(
+        (
+            "SELECT id, feature_id, trace_id, thread_id, created_by, attempt_count, max_attempts, "
+            "retry_state, next_retry_at, status "
+            "FROM feature_request_build_runs "
+            "WHERE status='running' AND retry_state='scheduled' AND next_retry_at!='' "
+            "ORDER BY next_retry_at ASC LIMIT ?"
+        ),
+        (max_rows,),
+    ).fetchall()
+    due: list[dict[str, object]] = []
+    for row in rows:
+        stamp = str(row["next_retry_at"] or "").strip()
+        if not stamp:
+            continue
+        try:
+            at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=UTC)
+        if at.astimezone(UTC) > now_dt:
+            continue
+        due.append(dict(row))
+    return due
+
+
 def list_feature_build_runs(
     conn: sqlite3.Connection,
     feature_id: str,
@@ -1709,6 +1847,7 @@ def list_feature_build_runs(
     rows = conn.execute(
         (
             "SELECT id, feature_id, trace_id, thread_id, status, summary, "
+            "attempt_count, max_attempts, retry_state, next_retry_at, last_failure_reason, "
             "created_by, created_at, updated_at "
             "FROM feature_request_build_runs WHERE feature_id=? "
             "ORDER BY created_at DESC LIMIT ?"

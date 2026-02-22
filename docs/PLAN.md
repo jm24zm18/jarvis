@@ -135,6 +135,58 @@ _Last updated: 2026-02-22 (Productize Self-Build + Web-Based Approval Workflow)_
 - Remaining tasks before handoff:
   - Run full gate sweep (`make test-gates`) before release promotion.
 
+## Execution Update (2026-02-22, Feature Build Degraded Finalization + Leak Retry)
+
+- Discovered missing task from live incident trace `trc_f677297aaccf4156bc3c3dbcf66d81ee`:
+  - repeated `model.fallback` quota events could end in `agent.response.leak_blocked`, but linked
+    `feature_request_build_runs` stayed `running` until stale sweeper timeout.
+- Implemented task scope:
+  - Added trace-scoped build-run finalizer helper in query layer:
+    - `finalize_feature_build_run_by_trace(...)` updates latest queued/running build row by `trace_id`.
+  - Wired `jarvis.tasks.agent.agent_step` to finalize linked feature build runs immediately:
+    - success path -> `succeeded`
+    - degraded/leak-blocked terminal output -> `failed` with actionable summary
+    - terminal non-retryable exception/retry-exhausted path -> `failed` with failure-kind summary
+  - Hardened orchestrator leak guard:
+    - when final output matches leak pattern, run one constrained terminal re-synthesis attempt
+      (no tool narration / internal planning text)
+    - only degrade if retry still fails or remains leak-patterned.
+  - Added regression coverage:
+    - orchestrator leak-retry recovery unit test
+    - agent trace-driven feature-build run finalization tests
+    - query helper unit test for trace finalizer.
+- Remaining tasks before handoff:
+  - Run targeted tests and full gate sweep (`make test-gates`) before release promotion.
+
+## Execution Update (2026-02-22, Feature Build Auto-Retry Reliability)
+
+- Implemented reliability-first recovery for degraded feature-build terminal outcomes.
+- Implemented task scope:
+  - Added migration `069_feature_build_retry_metadata.sql`:
+    - `attempt_count`, `max_attempts`, `retry_state`, `next_retry_at`, `last_failure_reason`
+    - retry dispatch index (`idx_frbr_retry_due`).
+  - Added config knobs:
+    - `FEATURE_BUILD_RETRY_ON_DEGRADED`
+    - `FEATURE_BUILD_RETRY_MAX_ATTEMPTS`
+    - `FEATURE_BUILD_RETRY_BACKOFF_SECONDS`
+    - `FEATURE_BUILD_RETRY_DISPATCH_INTERVAL_SECONDS`
+  - Updated build-run query layer to expose and mutate retry metadata.
+  - Added periodic retry dispatcher task:
+    - `jarvis.tasks.feature_build.dispatch_due_feature_build_retries`
+    - registered + scheduled in periodic scheduler.
+  - Updated `agent_step` feature-build finalization:
+    - retryable degraded outcomes schedule delayed retry attempts on same run row
+    - exhausted attempts emit terminal failed state + `feature.build.retry.exhausted`
+    - successful completion after retries emits `feature.build.retry.succeeded_after_retry`.
+  - Build-run list payload now includes retry metadata fields for UI/API consumers.
+  - Added/updated regression tests for:
+    - scheduled degraded retry behavior
+    - retry-disabled fallback to immediate failed
+    - due-retry query filtering
+    - due-retry dispatch task enqueue path.
+- Remaining tasks before handoff:
+  - Run full quality gate sweep (`make test-gates`) before release promotion.
+
 ## Execution Update (2026-02-22, Roadmap Build-Run Live Chat Window)
 
 - Implemented admin live monitoring inside roadmap Build Runs modal using existing thread/message

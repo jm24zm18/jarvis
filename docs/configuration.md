@@ -71,6 +71,10 @@ Source of truth: `src/jarvis/config.py`.
 | `AGENT_STEP_MAX_ATTEMPTS` | int | `3` | Max in-process attempts for one `trace_id` before exhaustion. |
 | `AGENT_STEP_RETRY_BASE_SECONDS` | int | `2` | Base backoff for retryable agent-step failures. |
 | `AGENT_STEP_RETRY_MAX_SECONDS` | int | `20` | Max backoff cap for retryable agent-step failures. |
+| `FEATURE_BUILD_RETRY_ON_DEGRADED` | int | `1` | When `1`, feature builds auto-retry retryable degraded terminal outcomes. |
+| `FEATURE_BUILD_RETRY_MAX_ATTEMPTS` | int | `5` | Max total attempts per feature build run (initial attempt included). |
+| `FEATURE_BUILD_RETRY_BACKOFF_SECONDS` | str | `30,120,300,600` | Comma-delimited retry delays (seconds) for scheduled feature-build retries. |
+| `FEATURE_BUILD_RETRY_DISPATCH_INTERVAL_SECONDS` | int | `15` | Periodic interval for scanning and dispatching due scheduled feature-build retries. |
 | `AGENT_RUN_REAPER_INTERVAL_SECONDS` | int | `30` | Periodic stale-attempt recovery scan interval. |
 | `AGENT_RUN_MODEL_STALE_MIN_SECONDS` | int | `780` | Minimum stale cutoff while phase=`model.run`. |
 | `AGENT_RUN_TOOL_STALE_MIN_SECONDS` | int | `240` | Minimum stale cutoff while phase=`tool.exec`. |

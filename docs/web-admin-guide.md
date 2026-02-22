@@ -82,6 +82,17 @@ Roadmap Build Runs modal (`/admin/roadmap`) includes a live chat-like monitor fo
    - `Open full Events trace` -> `/admin/events?trace_id=...`
    - `Open Chat thread` -> `/chat/:threadId`
 
+Run status expectations:
+- `running`: active execution only.
+- `succeeded`: terminal assistant response completed without degraded/leak-blocked outcome.
+- `failed`: immediate terminal failure (including degraded response, leak-guard block, queue/enqueue failure, or task exception).
+- `failed` with stale-timeout summary remains as a safety fallback if a run never reaches terminal reconciliation.
+
+Retry metadata (feature builds with auto-retry enabled):
+- Build run records include retry context: `attempt_count`, `max_attempts`, `retry_state`, `next_retry_at`, `last_failure_reason`.
+- `running` + `retry_state=scheduled` means a retry is queued for `next_retry_at`.
+- `retry_state=exhausted` means retry budget was consumed and the run is terminally failed.
+
 Empty/error states:
 - `No thread attached yet` when run has no `thread_id` yet.
 - `Build has not produced messages yet` when thread history is still empty.

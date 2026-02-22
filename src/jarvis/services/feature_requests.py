@@ -6,11 +6,13 @@ import sqlite3
 
 from fastapi import HTTPException
 
+from jarvis.config import get_settings
 from jarvis.db.queries import (
     create_feature_build_run,
     list_feature_build_runs,
     reconcile_stale_feature_build_runs,
     set_feature_request_approval,
+    update_feature_build_run,
 )
 
 
@@ -77,11 +79,18 @@ def enqueue_feature_build(
     run_id = create_feature_build_run(conn, feature_id=feature_id, created_by=actor_id)
     from jarvis.ids import new_id
 
+    settings = get_settings()
+    max_attempts = max(1, int(settings.feature_build_retry_max_attempts))
     trace_id = new_id("trc")
-    # Update run with trace_id immediately so it can be tracked.
-    conn.execute(
-        "UPDATE feature_request_build_runs SET trace_id=?, updated_at=datetime('now') WHERE id=?",
-        (trace_id, run_id),
+    update_feature_build_run(
+        conn,
+        run_id,
+        trace_id=trace_id,
+        max_attempts=max_attempts,
+        attempt_count=1,
+        retry_state="none",
+        next_retry_at="",
+        last_failure_reason="",
     )
 
     from jarvis.tasks.runner import TaskRunner

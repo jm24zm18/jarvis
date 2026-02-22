@@ -268,6 +268,11 @@ export interface FeatureBuildRun {
   thread_id: string;
   status: "queued" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
   summary: string;
+  attempt_count: number;
+  max_attempts: number;
+  retry_state: "none" | "scheduled" | "running" | "exhausted";
+  next_retry_at: string;
+  last_failure_reason: string;
   created_by: string;
   created_at: string;
   updated_at: string;
