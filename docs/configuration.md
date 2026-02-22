@@ -47,8 +47,8 @@ Source of truth: `src/jarvis/config.py`.
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `SELFUPDATE_AUTO_APPLY_DEV` | int | `1` | Auto-apply in dev. |
-| `SELFUPDATE_AUTO_APPLY_PROD` | int | `0` | Auto-apply in prod. |
+| `SELFUPDATE_AUTO_APPLY_DEV` | int | `1` | When `1` (default), self-update patches apply without manual approval in dev/staging. Set to `0` to require admin approval in dev too. |
+| `SELFUPDATE_AUTO_APPLY_PROD` | int | `0` | When `0` (default), prod requires explicit admin approval via `POST /api/v1/selfupdate/patches/{trace_id}/approve` before applying. Set to `1` to skip approval in prod (not recommended). |
 | `SELFUPDATE_PATCH_DIR` | str | `/var/lib/agent/patches` | Patch state directory. |
 | `SELFUPDATE_SMOKE_PROFILE` | str | `dev` | Smoke profile (`dev`/`prod`). |
 | `SELFUPDATE_READYZ_URL` | str | `` | Readiness URL for apply watchdog. |
@@ -62,6 +62,9 @@ Source of truth: `src/jarvis/config.py`.
 | Variable | Type | Default | Description |
 |---|---|---|---|
 | `SCHEDULER_MAX_CATCHUP` | int | `10` | Global catch-up cap per schedule tick. |
+| `FOLLOWUP_HEARTBEAT_INTERVAL_SECONDS` | int | `300` | Interval for proactive follow-up heartbeat evaluation (`0` disables). |
+| `FOLLOWUP_MAX_THREADS_PER_TICK` | int | `20` | Max enabled threads evaluated each follow-up heartbeat tick. |
+| `FOLLOWUP_MIN_IDLE_SECONDS` | int | `300` | Minimum idle age for a thread before follow-up evaluation. |
 | `STALL_DETECT_ENABLED` | int | `1` | Enable periodic runtime stall watchdog and auto-recovery triggers. |
 | `STALL_DETECT_THRESHOLD_SECONDS` | int | `90` | Age threshold for inbound-without-progress before declaring a stall. |
 | `STALL_RECOVERY_COOLDOWN_SECONDS` | int | `600` | Minimum delay between consecutive stall-triggered recovery attempts. |
@@ -137,7 +140,9 @@ Source of truth: `src/jarvis/config.py`.
 | `STATE_EXTRACTION_MAX_MESSAGES` | int | `20` | Message window used for state extraction candidates. |
 | `STATE_EXTRACTION_MERGE_THRESHOLD` | float | `0.92` | Similarity threshold for state merge decisions. |
 | `STATE_EXTRACTION_CONFLICT_THRESHOLD` | float | `0.85` | Similarity threshold for conflict queue insertion. |
-| `STATE_EXTRACTION_TIMEOUT_SECONDS` | int | `15` | Timeout for state extraction model operations. |
+| `STATE_EXTRACTION_TIMEOUT_SECONDS` | int | `30` | Timeout for state extraction model operations. |
+| `STATE_EXTRACTION_BACKOFF_BASE_SECONDS` | int | `30` | Base retry delay for per-thread extraction backoff after failures. |
+| `STATE_EXTRACTION_BACKOFF_MAX_SECONDS` | int | `600` | Max retry delay for per-thread extraction backoff. |
 | `STATE_MAX_ACTIVE_ITEMS` | int | `40` | Max active state items maintained per scope before archival pressure. |
 | `MEMORY_SECRET_SCAN_ENABLED` | int | `1` | Enable secret-pattern scanning before persistence. |
 | `MEMORY_PII_REDACT_MODE` | str | `mask` | PII handling mode for memory text persistence. |

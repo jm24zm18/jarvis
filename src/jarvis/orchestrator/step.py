@@ -10,6 +10,7 @@ import sqlite3
 import unicodedata
 from collections.abc import Callable
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,6 @@ from jarvis.ids import new_id
 from jarvis.memory.knowledge import KnowledgeBaseService
 from jarvis.memory.service import MemoryService
 from jarvis.memory.skills import SkillsService
-from jarvis.memory.state_extractor import extract_state_items
 from jarvis.memory.state_renderer import render_state_section
 from jarvis.memory.state_store import StateStore
 from jarvis.orchestrator.prompt_builder import build_prompt_with_report, estimate_tokens
@@ -99,6 +99,16 @@ def _normalize_tool_calls(tool_calls_raw: object) -> list[dict[str, Any]]:
     return calls
 
 
+def _normalize_single_tool_call(raw: object) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    name_obj = raw.get("name")
+    if not isinstance(name_obj, str) or not name_obj.strip():
+        return None
+    args_obj = raw.get("arguments", {})
+    return {"name": name_obj.strip(), "arguments": args_obj if isinstance(args_obj, dict) else {}}
+
+
 def _extract_embedded_tool_payload(text: str) -> tuple[str, list[dict[str, Any]]]:
     """Extract JSON tool payload leaked into plain text responses.
 
@@ -114,7 +124,11 @@ def _extract_embedded_tool_payload(text: str) -> tuple[str, list[dict[str, Any]]
         except json.JSONDecodeError:
             idx += 1
             continue
-        if isinstance(obj, dict) and "tool_calls" in obj:
+        if isinstance(obj, dict) and (
+            "tool_calls" in obj
+            or ("tool" in obj and "tool_input" in obj)
+            or ("tool_name" in obj and "arguments" in obj)
+        ):
             try:
                 normalized = dict(obj)
             except Exception:
@@ -127,6 +141,22 @@ def _extract_embedded_tool_payload(text: str) -> tuple[str, list[dict[str, Any]]
     start, end, payload = best
     parsed_calls = _normalize_tool_calls(payload.get("tool_calls"))
     if not parsed_calls:
+        single_raw: dict[str, Any] | None = None
+        if isinstance(payload.get("tool"), str):
+            single_raw = {
+                "name": payload.get("tool"),
+                "arguments": payload.get("tool_input", {}),
+            }
+        elif isinstance(payload.get("tool_name"), str):
+            single_raw = {
+                "name": payload.get("tool_name"),
+                "arguments": payload.get("arguments", {}),
+            }
+        if single_raw is not None:
+            single = _normalize_single_tool_call(single_raw)
+            if single is not None:
+                parsed_calls = [single]
+    if not parsed_calls:
         return text, []
 
     response_text = payload.get("text")
@@ -137,6 +167,70 @@ def _extract_embedded_tool_payload(text: str) -> tuple[str, list[dict[str, Any]]
     else:
         cleaned_text = (text[:start] + text[end:]).strip()
     return cleaned_text, parsed_calls
+
+
+_LEAK_PATTERNS = (
+    re.compile(r"(?is)\bwe need to (?:issue|run|send)\b"),
+    re.compile(r"(?is)\bnow sending\b"),
+    re.compile(r"(?is)\"tool_calls?\"\s*:"),
+    re.compile(r"(?is)\"tool_input\"\s*:"),
+    re.compile(r"(?is)\{\s*\"tool\"\s*:"),
+)
+
+
+def _detect_output_leak_reason(text: str) -> str | None:
+    clean = text.strip()
+    if not clean:
+        return None
+    for pattern in _LEAK_PATTERNS:
+        if pattern.search(clean):
+            return pattern.pattern
+    return None
+
+
+def _normalize_exec_host_cwd(arguments: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    if not isinstance(arguments.get("cwd"), str):
+        return arguments, None
+    cwd_raw = str(arguments["cwd"]).strip()
+    if not cwd_raw:
+        return arguments, None
+    candidate = Path(cwd_raw).expanduser()
+    if candidate.exists() and candidate.is_dir():
+        return arguments, None
+    fallback = Path.cwd()
+    if fallback.parent != candidate.parent:
+        return arguments, None
+    similarity = SequenceMatcher(None, candidate.name.lower(), fallback.name.lower()).ratio()
+    if similarity < 0.75:
+        return arguments, None
+    patched = dict(arguments)
+    patched["cwd"] = str(fallback)
+    return patched, "autocorrected_invalid_cwd"
+
+
+def _tool_failure_fingerprint(
+    tool_name: str,
+    arguments: dict[str, Any],
+    payload: dict[str, Any],
+) -> str:
+    err_text = str(payload.get("error", "")).strip()[:200]
+    return sha256(
+        json.dumps(
+            {"tool": tool_name, "arguments": arguments, "error": err_text},
+            sort_keys=True,
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _tool_call_signature(tool_name: str, arguments: dict[str, Any]) -> str:
+    return sha256(
+        json.dumps(
+            {"tool": tool_name, "arguments": arguments},
+            sort_keys=True,
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _extract_primary_failure_fields(primary_error: str) -> dict[str, object]:
@@ -521,79 +615,6 @@ async def run_agent_step(
     memory = MemoryService()
     summaries = memory.thread_summary(conn, thread_id)
     state_store = StateStore()
-    if progress_fn is not None:
-        progress_fn("phase", {"phase": "state.extract"})
-    if int(settings.state_extraction_enabled) == 1:
-        try:
-            extraction_result = await extract_state_items(
-                conn=conn,
-                thread_id=thread_id,
-                router=router,
-                memory=memory,
-                actor_id=actor_id,
-            )
-            extraction_payload = {
-                "thread_id": thread_id,
-                "actor_id": actor_id,
-                "items_extracted": extraction_result.items_extracted,
-                "items_merged": extraction_result.items_merged,
-                "items_conflicted": extraction_result.items_conflicted,
-                "items_dropped": extraction_result.items_dropped,
-                "duration_ms": extraction_result.duration_ms,
-                "skipped_reason": extraction_result.skipped_reason,
-            }
-            logger.info(
-                "State extraction result: %s",
-                json.dumps(extraction_payload, sort_keys=True),
-            )
-            if notify_fn is not None:
-                notify_fn("state.extraction.complete", extraction_payload)
-            emit_event(
-                conn,
-                EventInput(
-                    trace_id=trace_id,
-                    span_id=new_id("spn"),
-                    parent_span_id=None,
-                    thread_id=thread_id,
-                    event_type="state.extraction.complete",
-                    component="memory",
-                    actor_type="agent",
-                    actor_id=actor_id,
-                    payload_json=json.dumps(extraction_payload),
-                    payload_redacted_json=json.dumps(redact_payload(extraction_payload)),
-                ),
-            )
-        except Exception as exc:
-            extraction_failure_payload: dict[str, object] = {
-                "thread_id": thread_id,
-                "actor_id": actor_id,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-            extraction_failure_payload.update(
-                _extract_primary_failure_fields(str(extraction_failure_payload["error"]))
-            )
-            logger.warning(
-                "Structured state extraction failed thread=%s error=%s",
-                thread_id,
-                extraction_failure_payload["error"],
-            )
-            if notify_fn is not None:
-                notify_fn("state.extraction.failed", extraction_failure_payload)
-            emit_event(
-                conn,
-                EventInput(
-                    trace_id=trace_id,
-                    span_id=new_id("spn"),
-                    parent_span_id=None,
-                    thread_id=thread_id,
-                    event_type="state.extraction.failed",
-                    component="memory",
-                    actor_type="agent",
-                    actor_id=actor_id,
-                    payload_json=json.dumps(extraction_failure_payload),
-                    payload_redacted_json=json.dumps(redact_payload(extraction_failure_payload)),
-                ),
-            )
     active_state_items = state_store.get_active_items(
         conn, thread_id, limit=max(1, int(settings.state_max_active_items))
     )
@@ -744,6 +765,8 @@ async def run_agent_step(
     final_text = ""
     tool_iteration_exhausted = False
     degraded_reason: str | None = None
+    failed_tool_fingerprints: set[str] = set()
+    failed_tool_signatures: set[str] = set()
     for step_idx in range(MAX_TOOL_ITERATIONS + 1):
         if progress_fn is not None:
             progress_fn("phase", {"phase": "model.run", "iteration": step_idx})
@@ -802,6 +825,8 @@ async def run_agent_step(
         if primary_error:
             run_end_payload["primary_error"] = primary_error[:500]
             run_end_payload.update(_extract_primary_failure_fields(primary_error))
+            if "skipping primary until" in primary_error.lower():
+                run_end_payload["primary_skipped_due_to_cooldown"] = True
         if notify_fn is not None:
             notify_fn("model.run.end", run_end_payload)
         emit_event(
@@ -958,6 +983,44 @@ async def run_agent_step(
             tool_name = str(tool_call.get("name", ""))
             raw_args = tool_call.get("arguments", {})
             arguments = raw_args if isinstance(raw_args, dict) else {}
+            if tool_name == "exec_host":
+                arguments, cwd_note = _normalize_exec_host_cwd(arguments)
+            else:
+                cwd_note = None
+            signature = _tool_call_signature(tool_name, arguments)
+            if signature in failed_tool_signatures:
+                suppressed_payload: dict[str, object] = {
+                    "tool": tool_name,
+                    "iteration": step_idx,
+                    "reason": "duplicate_failing_call_suppressed",
+                    "signature": signature,
+                }
+                if notify_fn is not None:
+                    notify_fn("tool.call.suppressed", suppressed_payload)
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id,
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="tool.call.suppressed",
+                        component="tools.runtime",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(suppressed_payload),
+                        payload_redacted_json=json.dumps(redact_payload(suppressed_payload)),
+                    ),
+                )
+                payload = json.dumps(
+                    {
+                        "tool": tool_name,
+                        "error": "suppressed duplicate failing call",
+                        "suppressed_duplicate_failure": True,
+                    }
+                )
+                convo.append({"role": "user", "content": f"[tool_result] {payload}"})
+                continue
             if progress_fn is not None:
                 progress_fn(
                     "phase",
@@ -970,6 +1033,7 @@ async def run_agent_step(
                         "tool": tool_name,
                         "arguments": arguments,
                         "iteration": step_idx,
+                        "cwd_note": cwd_note,
                     },
                 )
             try:
@@ -991,6 +1055,16 @@ async def run_agent_step(
                             "iteration": step_idx,
                         },
                     )
+                if isinstance(result, dict):
+                    code = result.get("exit_code")
+                    if isinstance(code, int) and code != 0:
+                        fingerprint = _tool_failure_fingerprint(
+                            tool_name,
+                            arguments,
+                            {"error": result.get("stderr", "")},
+                        )
+                        failed_tool_fingerprints.add(fingerprint)
+                        failed_tool_signatures.add(signature)
                 payload = json.dumps({"tool": tool_name, "result": result})
                 tool_memory_text = _memory_text(
                     {
@@ -1018,14 +1092,51 @@ async def run_agent_step(
                 )
             except Exception as exc:
                 logger.exception("Tool execution failed for '%s'", tool_name)
+                error_payload = {
+                    "tool": tool_name,
+                    "error": str(exc),
+                    "iteration": step_idx,
+                }
+                fingerprint = _tool_failure_fingerprint(tool_name, arguments, error_payload)
+                if fingerprint in failed_tool_fingerprints:
+                    suppressed_payload = {
+                        "tool": tool_name,
+                        "iteration": step_idx,
+                        "reason": "duplicate_failure_suppressed",
+                        "fingerprint": fingerprint,
+                    }
+                    if notify_fn is not None:
+                        notify_fn("tool.call.suppressed", suppressed_payload)
+                    emit_event(
+                        conn,
+                        EventInput(
+                            trace_id=trace_id,
+                            span_id=new_id("spn"),
+                            parent_span_id=None,
+                            thread_id=thread_id,
+                            event_type="tool.call.suppressed",
+                            component="tools.runtime",
+                            actor_type="agent",
+                            actor_id=actor_id,
+                            payload_json=json.dumps(suppressed_payload),
+                            payload_redacted_json=json.dumps(redact_payload(suppressed_payload)),
+                        ),
+                    )
+                    payload = json.dumps(
+                        {
+                            "tool": tool_name,
+                            "error": "suppressed duplicate failure",
+                            "suppressed_duplicate_failure": True,
+                        }
+                    )
+                    convo.append({"role": "user", "content": f"[tool_result] {payload}"})
+                    continue
+                failed_tool_fingerprints.add(fingerprint)
+                failed_tool_signatures.add(signature)
                 if notify_fn is not None:
                     notify_fn(
                         "tool.call.end",
-                        {
-                            "tool": tool_name,
-                            "error": str(exc),
-                            "iteration": step_idx,
-                        },
+                        error_payload,
                     )
                 payload = json.dumps({"tool": tool_name, "error": str(exc)})
                 tool_error_memory_text = _memory_text(
@@ -1127,6 +1238,8 @@ async def run_agent_step(
             if retry_primary_error:
                 run_end_payload["primary_error"] = retry_primary_error[:500]
                 run_end_payload.update(_extract_primary_failure_fields(retry_primary_error))
+                if "skipping primary until" in retry_primary_error.lower():
+                    run_end_payload["primary_skipped_due_to_cooldown"] = True
             if notify_fn is not None:
                 notify_fn("model.run.end", run_end_payload)
             emit_event(
@@ -1287,6 +1400,32 @@ async def run_agent_step(
             ),
         )
 
+    leak_reason = _detect_output_leak_reason(final_text)
+    if leak_reason is not None:
+        blocked_payload: dict[str, object] = {
+            "actor_id": actor_id,
+            "reason": "final_output_leak_guard",
+            "pattern": leak_reason,
+        }
+        if notify_fn is not None:
+            notify_fn("agent.response.leak_blocked", blocked_payload)
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="agent.response.leak_blocked",
+                component="orchestrator",
+                actor_type="agent",
+                actor_id=actor_id,
+                payload_json=json.dumps(blocked_payload),
+                payload_redacted_json=json.dumps(redact_payload(blocked_payload)),
+            ),
+        )
+        final_text = _degraded_response_msg(trace_id)
+
     message_role = "assistant" if actor_id == "main" else "agent"
     if progress_fn is not None:
         progress_fn("phase", {"phase": "finalize"})
@@ -1304,6 +1443,67 @@ async def run_agent_step(
         },
     )
     _update_heartbeat(actor_id, f"Produced assistant reply for thread {thread_id}")
+
+    if int(settings.state_extraction_enabled) == 1:
+        from jarvis.tasks import get_task_runner
+
+        if progress_fn is not None:
+            progress_fn("phase", {"phase": "state.extract"})
+        queued_payload: dict[str, object] = {
+            "thread_id": thread_id,
+            "actor_id": actor_id,
+            "trace_id": trace_id,
+            "queue": "agent_default",
+        }
+        ok = get_task_runner().send_task(
+            "jarvis.tasks.memory.extract_thread_state",
+            kwargs={"thread_id": thread_id, "actor_id": actor_id, "trace_id": trace_id},
+            queue="agent_default",
+        )
+        if ok:
+            if notify_fn is not None:
+                notify_fn("state.extraction.queued", queued_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="state.extraction.queued",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(queued_payload),
+                    payload_redacted_json=json.dumps(redact_payload(queued_payload)),
+                ),
+            )
+        else:
+            extraction_failure_payload: dict[str, object] = {
+                "thread_id": thread_id,
+                "actor_id": actor_id,
+                "error": "RuntimeError: failed to enqueue state extraction task",
+            }
+            extraction_failure_payload.update(
+                _extract_primary_failure_fields(str(extraction_failure_payload["error"]))
+            )
+            if notify_fn is not None:
+                notify_fn("state.extraction.failed", extraction_failure_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="state.extraction.failed",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(extraction_failure_payload),
+                    payload_redacted_json=json.dumps(redact_payload(extraction_failure_payload)),
+                ),
+            )
 
     # Check if thread needs compaction based on N-message threshold
     _maybe_trigger_compaction(conn, thread_id, settings)

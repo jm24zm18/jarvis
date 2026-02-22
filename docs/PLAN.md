@@ -49,7 +49,36 @@ Tier flow: `working -> episodic -> semantic/procedural`, with low-importance sta
 | WhatsApp Channel + Admin UX | 7 | 0 | 0 |
 | Documentation + Ops Hardening | 2 | 1 | 1 |
 
-_Last updated: 2026-02-22 (WhatsApp Pairing 401 Auto-Recovery + Diagnostics)_
+_Last updated: 2026-02-22 (Productize Self-Build + Web-Based Approval Workflow)_
+
+## Execution Update (2026-02-22, Self-Build + Web Approval Workflow)
+
+- Completed: Feature request approval model, unified approvals center, feature build-run
+  orchestration, and SELFUPDATE_AUTO_APPLY_* wiring.
+
+- Implemented task scope:
+  - DB migrations 066 (feature approval columns on bug_reports) and 067 (feature_request_build_runs table).
+  - DB query helpers: `set_feature_request_approval`, `create_feature_build_run`,
+    `update_feature_build_run`, `list_feature_build_runs`, `list_approvals`, `revoke_approval`.
+  - Service layer: `src/jarvis/services/feature_requests.py` (approval transitions + build enqueue),
+    `src/jarvis/services/approvals.py` (generic approval lifecycle).
+  - New task `jarvis.tasks.feature_build.run_feature_build` registered in task runner.
+  - Bugs API extended: `PATCH /feature-requests/{id}/approval`, `POST /feature-requests/{id}/build`,
+    `GET /feature-requests/{id}/build-runs`, `approval_status` filter on list endpoint.
+  - New approvals router at `src/jarvis/routes/api/approvals.py`:
+    `GET /approvals`, `POST /approvals`, `POST /approvals/{id}/revoke`.
+  - `SELFUPDATE_AUTO_APPLY_DEV/PROD` configs now gate approval requirement in `self_update_apply`.
+  - Web lint blockers fixed (roadmap/repo pages).
+  - Roadmap page rebuilt with create modal, approve/reject controls, build run panel, trace links, filters.
+  - New `/admin/approvals` center page with list/create/revoke and nav item.
+  - API client and types extended: `FeatureRequest`, `FeatureBuildRun`, `ApprovalRecord` types.
+  - Full test coverage: 17 new unit tests + 12 integration tests + 2 frontend contract test files.
+  - Typecheck + lint + test-gates all passing.
+
+- Remaining tasks:
+  - Docs-check regeneration: `make docs-generate && make docs-check`.
+  - Release promotion: dev → master requires human approval.
+  - Consider adding auto-apply behavior to release notes / operational runbook.
 
 ## Execution Update (2026-02-22, WhatsApp Pairing 401 Auto-Recovery + Diagnostics)
 
@@ -822,6 +851,65 @@ Comprehensive audit across memory, events, scheduler, governance, self-update, t
    - BK-019: adaptive forgetting calibration harness.
    - Concurrent scheduler deduplication (single-process deployment; low priority).
 
+### Packet 10 (completed, 2026-02-22): State extraction timeout hardening (async path)
+
+1. Scope completed:
+   - Move state extraction out of synchronous `run_agent_step` path.
+   - Add background task `jarvis.tasks.memory.extract_thread_state`.
+   - Emit `state.extraction.queued` + trace notification lifecycle.
+   - Raise `STATE_EXTRACTION_TIMEOUT_SECONDS` default from 15s to 30s.
+   - Add quota-cooldown skip classification (`provider_quota_cooldown`).
+2. Code updates:
+   - `src/jarvis/orchestrator/step.py`: queue extraction task and emit queued/failure events.
+   - `src/jarvis/tasks/memory.py`: new extraction task, event emission, trace notification writes.
+   - `src/jarvis/tasks/__init__.py`: task registration.
+   - `src/jarvis/memory/state_extractor.py`: skip extraction when provider is in quota cooldown.
+   - `src/jarvis/config.py`: timeout default bump.
+3. Test updates:
+   - `tests/unit/test_orchestrator_step.py`: queued task/event assertion.
+   - `tests/unit/test_memory_tasks.py`: task success/failure trace/event assertions.
+   - `tests/unit/test_state_extractor.py`: provider quota cooldown skip case.
+4. Documentation updates:
+   - `docs/configuration.md`, `docs/architecture.md`, `docs/runbook.md`, `docs/change-safety.md`.
+5. Validation evidence:
+   - Targeted unit suite for orchestrator/state extractor/memory tasks (see handoff notes).
+6. Remaining tasks discovered during implementation:
+   - Add dashboard metric for queued/complete/failed extraction ratio by failure kind.
+7. Deferred explicitly to next packet:
+   - Optional backoff policy per-thread for repeated extraction failures.
+
+### Packet 11 (completed, 2026-02-22): Follow-up heartbeat loop + proactive no-reply policy
+
+1. Scope completed:
+   - Added opt-in per-thread proactive follow-up state and APIs.
+   - Implemented periodic `followup_heartbeat_tick` task with strict `reply|no_reply` evaluator output handling.
+   - Added `no_reply` behavior: update status + events with no outbound user message.
+   - Added stale periodic job visibility in maintenance/system status surfaces.
+2. Code updates:
+   - `src/jarvis/db/migrations/065_thread_followups.sql`
+   - `src/jarvis/tasks/followups.py`
+   - `src/jarvis/tasks/periodic.py`
+   - `src/jarvis/tasks/__init__.py`
+   - `src/jarvis/routes/api/followups.py`
+   - `src/jarvis/routes/api/__init__.py`
+   - `src/jarvis/routes/api/system.py`
+   - `src/jarvis/cli/main.py`
+   - `src/jarvis/config.py`
+   - `.env.example`
+3. Test updates:
+   - `tests/unit/test_followup_tasks.py`
+   - `tests/integration/test_authorization.py` (follow-up ownership/boundary checks)
+4. Documentation updates:
+   - `docs/api-reference.md`
+   - `docs/api-usage-guide.md`
+   - `docs/configuration.md`
+   - `docs/architecture.md`
+   - `docs/runbook.md`
+   - `docs/change-safety.md`
+5. Remaining tasks discovered during implementation:
+   - Add admin web UI controls to toggle follow-up heartbeat per thread.
+   - Add per-thread cooldown/jitter to smooth large cohorts of enabled threads.
+
 ## Testing and Acceptance Gates
 
 Global gates before marking backlog item `done`:
@@ -893,3 +981,30 @@ Rollback policy:
 ### Deferred/Excluded items
 - No source items were discarded. Items were merged/deduplicated into normalized backlog IDs.
 - Optional API additions (`GET/POST /api/v1/governance/evolution/items*`) from `evo.md` were retained as lower-priority backlog coverage under BK-033 unless promoted by milestone pressure.
+
+### Packet 12 (completed, 2026-02-22): Orchestrator reliability hardening for quota/leak/suppression failures
+
+1. Scope completed:
+   - Added final-response leak guard to block internal planning/tool payload leakage.
+   - Extended embedded tool payload parsing (`tool_calls`, `tool+tool_input`, `tool_name+arguments`).
+   - Added provider-router cooldown short-circuit when primary reports active quota cooldown.
+   - Added per-thread state-extraction backoff with `state.extraction.skipped` events.
+   - Added duplicate failing tool-call suppression and suppression telemetry (`tool.call.suppressed`).
+2. Code updates:
+   - `src/jarvis/orchestrator/step.py`
+   - `src/jarvis/providers/router.py`
+   - `src/jarvis/tasks/memory.py`
+   - `src/jarvis/config.py`
+   - `.env.example`
+3. Test updates:
+   - `tests/unit/test_orchestrator_step.py`
+   - `tests/unit/test_router.py`
+   - `tests/unit/test_memory_tasks.py`
+4. Documentation updates:
+   - `docs/architecture.md`
+   - `docs/change-safety.md`
+   - `docs/configuration.md`
+   - `docs/testing.md`
+5. Remaining tasks discovered during implementation:
+   - Persist extraction backoff state in DB (currently process-local) if multi-worker durability is required.
+   - Add admin/system dashboard counters for `agent.response.leak_blocked` and `tool.call.suppressed`.

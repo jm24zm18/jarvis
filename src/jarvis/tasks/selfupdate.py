@@ -1418,7 +1418,15 @@ def self_update_apply(trace_id: str) -> dict[str, str]:
                 "status": "rejected",
                 "reason": f"required story pack not passing: {pack}",
             }
+    # Determine whether manual approval is required based on app_env and config flags.
+    # SELFUPDATE_AUTO_APPLY_PROD=1 skips approval in prod (not recommended).
+    # SELFUPDATE_AUTO_APPLY_DEV=0 requires approval even in dev/staging.
     if settings.app_env == "prod":
+        requires_approval = int(settings.selfupdate_auto_apply_prod) != 1
+    else:
+        requires_approval = int(settings.selfupdate_auto_apply_dev) != 1
+
+    if requires_approval:
         if phase in {"tested", "pr_opened"}:
             with get_conn() as conn:
                 approved = consume_approval(
@@ -1460,12 +1468,29 @@ def self_update_apply(trace_id: str) -> dict[str, str]:
                 "status": "rejected",
                 "reason": f"invalid state transition: {state['state']} -> applied",
             }
-    elif phase not in {"tested", "approved", "pr_opened"}:
-        return {
-            "trace_id": trace_id,
-            "status": "rejected",
-            "reason": f"invalid state transition: {state['state']} -> applied",
-        }
+    else:
+        # Auto-apply: emit an informational event and allow without manual approval.
+        auto_apply_reason = (
+            f"auto-apply enabled (env={settings.app_env}, "
+            f"SELFUPDATE_AUTO_APPLY_{'PROD' if settings.app_env == 'prod' else 'DEV'}=1)"
+        )
+        _emit(
+            trace_id,
+            "self_update.auto_apply",
+            {"status": "auto_approved", "reason": auto_apply_reason},
+        )
+        _record_check(
+            trace_id,
+            check_type="apply.approval",
+            status="passed",
+            detail=auto_apply_reason,
+        )
+        if phase not in {"tested", "approved", "pr_opened"}:
+            return {
+                "trace_id": trace_id,
+                "status": "rejected",
+                "reason": f"invalid state transition: {state['state']} -> applied",
+            }
 
     artifact = read_artifact(trace_id, patch_base)
     patch_text = read_patch(trace_id, patch_base)

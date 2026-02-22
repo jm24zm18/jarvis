@@ -1,5 +1,6 @@
 import json
 
+import jarvis.tasks.memory as memory_tasks
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
     create_thread,
@@ -10,6 +11,7 @@ from jarvis.db.queries import (
 )
 from jarvis.tasks.memory import (
     evaluate_consistency,
+    extract_thread_state,
     index_event,
     run_memory_maintenance,
     sync_failure_capsules,
@@ -267,6 +269,123 @@ def test_run_memory_maintenance_idempotent_summary_fields() -> None:
         "scanned",
         "skipped_invalid",
     }
+
+
+def test_extract_thread_state_emits_complete_event_and_trace_notification(monkeypatch) -> None:
+    class _Result:
+        items_extracted = 1
+        items_merged = 0
+        items_conflicted = 0
+        items_dropped = 0
+        duration_ms = 42
+        skipped_reason = None
+
+    async def _fake_extract_state_items(*_args, **_kwargs):
+        return _Result()
+
+    monkeypatch.setattr("jarvis.tasks.memory.extract_state_items", _fake_extract_state_items)
+
+    with get_conn() as conn:
+        user_id = ensure_user(conn, "15550010005")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = create_thread(conn, user_id, channel_id)
+
+    payload = extract_thread_state(
+        thread_id=thread_id,
+        actor_id="main",
+        trace_id="trc_mem_extract_1",
+    )
+    assert int(payload["items_extracted"]) == 1
+
+    with get_conn() as conn:
+        event_row = conn.execute(
+            "SELECT payload_json FROM events "
+            "WHERE trace_id=? AND event_type='state.extraction.complete' "
+            "ORDER BY created_at DESC LIMIT 1",
+            ("trc_mem_extract_1",),
+        ).fetchone()
+        notif_row = conn.execute(
+            "SELECT payload_json FROM web_notifications WHERE thread_id=? "
+            "AND event_type='trace.state.extraction.complete' ORDER BY created_at DESC LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+    assert event_row is not None
+    assert notif_row is not None
+
+
+def test_extract_thread_state_quota_cooldown_sets_skipped_reason(monkeypatch) -> None:
+    async def _fake_extract_state_items(*_args, **_kwargs):
+        raise RuntimeError(
+            "gemini quota exceeded; skipping primary until 2026-02-22T14:38:35.570594+00:00 UTC"
+        )
+
+    monkeypatch.setattr("jarvis.tasks.memory.extract_state_items", _fake_extract_state_items)
+
+    with get_conn() as conn:
+        user_id = ensure_user(conn, "15550010006")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = create_thread(conn, user_id, channel_id)
+
+    payload = extract_thread_state(
+        thread_id=thread_id,
+        actor_id="main",
+        trace_id="trc_mem_extract_2",
+    )
+    assert payload["primary_failure_kind"] == "quota_retryable"
+    assert payload["skipped_reason"] == "provider_quota_cooldown"
+
+    with get_conn() as conn:
+        event_row = conn.execute(
+            "SELECT payload_json FROM events "
+            "WHERE trace_id=? AND event_type='state.extraction.failed' "
+            "ORDER BY created_at DESC LIMIT 1",
+            ("trc_mem_extract_2",),
+        ).fetchone()
+        notif_row = conn.execute(
+            "SELECT payload_json FROM web_notifications WHERE thread_id=? "
+            "AND event_type='trace.state.extraction.failed' ORDER BY created_at DESC LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+    assert event_row is not None
+    assert notif_row is not None
+
+
+def test_extract_thread_state_backoff_skips_repeated_failures(monkeypatch) -> None:
+    memory_tasks._STATE_EXTRACTION_BACKOFF.clear()
+
+    async def _timeout_extract_state_items(*_args, **_kwargs):
+        raise TimeoutError("state extractor timed out")
+
+    monkeypatch.setattr("jarvis.tasks.memory.extract_state_items", _timeout_extract_state_items)
+
+    with get_conn() as conn:
+        user_id = ensure_user(conn, "15550010016")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = create_thread(conn, user_id, channel_id)
+
+    first = extract_thread_state(
+        thread_id=thread_id,
+        actor_id="main",
+        trace_id="trc_mem_backoff_1",
+    )
+    second = extract_thread_state(
+        thread_id=thread_id,
+        actor_id="main",
+        trace_id="trc_mem_backoff_2",
+    )
+    assert first["primary_failure_kind"] == "timeout"
+    assert int(first["retry_in_seconds"]) >= 1
+    assert second["skipped_reason"] == "backoff_active"
+    assert int(second["retry_in_seconds"]) >= 1
+
+    with get_conn() as conn:
+        skipped_row = conn.execute(
+            "SELECT payload_json FROM events "
+            "WHERE trace_id=? AND event_type='state.extraction.skipped' "
+            "ORDER BY created_at DESC LIMIT 1",
+            ("trc_mem_backoff_2",),
+        ).fetchone()
+    assert skipped_row is not None
 
 
 def test_evaluate_consistency_persists_details_payload() -> None:

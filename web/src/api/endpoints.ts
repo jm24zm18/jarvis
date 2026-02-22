@@ -2,9 +2,11 @@ import { apiFetch } from "./client";
 import type {
   AgentDetail,
   AgentSummary,
+  ApprovalRecord,
   BugReport,
   DispatchItem,
   EventItem,
+  FeatureBuildRun,
   MemoryItem,
   MemoryConsistencyReportItem,
   MemoryFailureItem,
@@ -255,8 +257,22 @@ export const listBugs = (params: {
   return apiFetch<{ items: BugReport[]; total: number }>(`/api/v1/bugs${suffix}`);
 };
 
-export const listFeatureRequests = () =>
-  apiFetch<{ items: FeatureRequest[]; total: number }>("/api/v1/feature-requests");
+export const listFeatureRequests = (params?: {
+  status?: string;
+  priority?: string;
+  approval_status?: string;
+  search?: string;
+  limit?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.priority) qs.set("priority", params.priority);
+  if (params?.approval_status) qs.set("approval_status", params.approval_status);
+  if (params?.search) qs.set("search", params.search);
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return apiFetch<{ items: FeatureRequest[]; total: number }>(`/api/v1/feature-requests${suffix}`);
+};
 
 export const createBug = (payload: {
   title: string;
@@ -469,6 +485,59 @@ export const repoDiff = (mode: "working" | "staged", path?: string) => {
   if (path) qs.set("path", path);
   return apiFetch<string>(`/api/v1/repo/diff?${qs.toString()}`);
 };
+
+export const setFeatureApproval = (
+  featureId: string,
+  payload: { decision: "approved" | "rejected"; note?: string },
+) =>
+  apiFetch<{ id: string; approval_status: string }>(`/api/v1/feature-requests/${featureId}/approval`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+
+export const triggerFeatureBuild = (featureId: string) =>
+  apiFetch<{ run_id: string; trace_id: string; feature_id: string; status: string }>(
+    `/api/v1/feature-requests/${featureId}/build`,
+    { method: "POST", body: "{}" },
+  );
+
+export const listFeatureBuildRuns = (featureId: string, limit = 10) =>
+  apiFetch<{ items: FeatureBuildRun[]; feature_id: string }>(
+    `/api/v1/feature-requests/${featureId}/build-runs?limit=${limit}`,
+  );
+
+export const listApprovals = (params?: {
+  action?: string;
+  status?: string;
+  target_ref?: string;
+  limit?: number;
+  offset?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.action) qs.set("action", params.action);
+  if (params?.status) qs.set("status", params.status);
+  if (params?.target_ref) qs.set("target_ref", params.target_ref);
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  if (typeof params?.offset === "number") qs.set("offset", String(params.offset));
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return apiFetch<{ items: ApprovalRecord[]; allowed_actions: string[] }>(`/api/v1/approvals${suffix}`);
+};
+
+export const createApproval = (payload: {
+  action: string;
+  target_ref?: string;
+  ttl_minutes?: number;
+}) =>
+  apiFetch<{ approval_id: string; action: string; target_ref: string; ttl_minutes: number }>(
+    "/api/v1/approvals",
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+
+export const revokeApproval = (approvalId: string) =>
+  apiFetch<{ approval_id: string; status: string }>(`/api/v1/approvals/${approvalId}/revoke`, {
+    method: "POST",
+    body: "{}",
+  });
 
 export const repoCheckout = (payload: { branch?: string; create_branch?: string }) =>
   apiFetch<{ status: string }>("/api/v1/repo/checkout", {

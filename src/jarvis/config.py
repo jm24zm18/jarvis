@@ -62,6 +62,12 @@ class Settings(BaseSettings):
         alias="SELFUPDATE_MAX_ROLLBACK_FREQ", default=3
     )
     scheduler_max_catchup: int = Field(alias="SCHEDULER_MAX_CATCHUP", default=10)
+    followup_heartbeat_interval_seconds: int = Field(
+        alias="FOLLOWUP_HEARTBEAT_INTERVAL_SECONDS",
+        default=300,
+    )
+    followup_max_threads_per_tick: int = Field(alias="FOLLOWUP_MAX_THREADS_PER_TICK", default=20)
+    followup_min_idle_seconds: int = Field(alias="FOLLOWUP_MIN_IDLE_SECONDS", default=300)
     task_runner_max_concurrent: int = Field(alias="TASK_RUNNER_MAX_CONCURRENT", default=20)
     task_runner_shutdown_timeout_seconds: int = Field(
         alias="TASK_RUNNER_SHUTDOWN_TIMEOUT_SECONDS",
@@ -201,7 +207,15 @@ class Settings(BaseSettings):
     )
     state_max_active_items: int = Field(alias="STATE_MAX_ACTIVE_ITEMS", default=40)
     state_extraction_timeout_seconds: int = Field(
-        alias="STATE_EXTRACTION_TIMEOUT_SECONDS", default=15
+        alias="STATE_EXTRACTION_TIMEOUT_SECONDS", default=30
+    )
+    state_extraction_backoff_base_seconds: int = Field(
+        alias="STATE_EXTRACTION_BACKOFF_BASE_SECONDS",
+        default=30,
+    )
+    state_extraction_backoff_max_seconds: int = Field(
+        alias="STATE_EXTRACTION_BACKOFF_MAX_SECONDS",
+        default=600,
     )
     governance_enforce: int = Field(alias="GOVERNANCE_ENFORCE", default=1)
     approval_ttl_minutes: int = Field(alias="APPROVAL_TTL_MINUTES", default=30)

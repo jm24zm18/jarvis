@@ -18,7 +18,9 @@
 5. Orchestrator builds prompt from agent bundle + thread context + memory.
 6. Provider router executes primary/fallback model call.
 7. Tool calls run through policy-gated runtime (`deny-by-default`).
-8. Assistant response is persisted and outbound channel task is scheduled in-process.
+8. Assistant response is persisted; state extraction is queued as a background task (`jarvis.tasks.memory.extract_thread_state`) and outbound channel task is scheduled in-process.
+9. Final assistant output is guarded before persistence to block leaked internal planning/tool payload text; blocked output emits `agent.response.leak_blocked`.
+10. Repeated failing tool calls are suppressed within a step (`tool.call.suppressed`) to reduce failure loops.
 
 ## Scheduler Flow
 
@@ -26,6 +28,22 @@
 2. Catch-up uses global `SCHEDULER_MAX_CATCHUP` with per-schedule override.
 3. Idempotency is enforced by `schedule_dispatches(schedule_id, due_at)` uniqueness.
 4. `schedule.trigger` and catch-up telemetry events are emitted.
+
+## Follow-Up Heartbeat Flow
+
+1. Opt-in state is stored per thread in `thread_followups`.
+2. Periodic task `jarvis.tasks.followups.followup_heartbeat_tick` scans enabled/open threads.
+3. Threads with active attempts or recent activity are skipped (`followup.skipped`).
+4. A compact evaluator produces strict JSON action (`reply` or `no_reply`).
+5. `no_reply` updates state and emits `followup.no_reply` without outbound message.
+6. `reply` persists an assistant message, enqueues channel send (non-web), and emits `followup.sent`.
+
+## Orchestrator Reliability Hardening
+
+1. Embedded tool payload parsing supports `tool_calls`, `tool+tool_input`, and `tool_name+arguments` JSON shapes in assistant text.
+2. Provider router short-circuits to fallback when primary provider reports active quota cooldown.
+3. Per-thread memory extraction uses task-level backoff after timeout/quota failures and emits `state.extraction.skipped` during active backoff windows.
+4. Model run events annotate primary cooldown bypass with `primary_skipped_due_to_cooldown=true`.
 
 ## Agent Run Reliability Flow
 

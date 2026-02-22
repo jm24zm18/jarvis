@@ -5,7 +5,7 @@ from datetime import UTC
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from jarvis.auth.dependencies import UserContext, require_auth
+from jarvis.auth.dependencies import UserContext, require_admin, require_auth
 from jarvis.db.connection import get_conn
 from jarvis.ids import new_id
 from jarvis.tasks import get_task_runner
@@ -147,24 +147,51 @@ def create_bug(
     }
 
 
+VALID_APPROVAL_STATUSES = {"pending", "approved", "rejected"}
+
+
 @router.get("/feature-requests")
 def list_feature_requests(
     ctx: UserContext = Depends(require_auth),  # noqa: B008
     status: str | None = None,
     priority: str | None = None,
+    approval_status: str | None = None,
     search: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, object]:
-    return list_bugs(
-        ctx=ctx,
-        status=status,
-        priority=priority,
-        kind="feature",
-        search=search,
-        limit=limit,
-        offset=offset,
-    )
+    if approval_status and approval_status not in VALID_APPROVAL_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid approval_status: {approval_status}")
+    filters: list[str] = ["kind='feature'"]
+    params: list[object] = []
+    if not ctx.is_admin:
+        filters.append("reporter_id=?")
+        params.append(ctx.user_id)
+    if status:
+        filters.append("status=?")
+        params.append(status)
+    if priority:
+        filters.append("priority=?")
+        params.append(priority)
+    if approval_status:
+        filters.append("approval_status=?")
+        params.append(approval_status)
+    if search:
+        filters.append("(title LIKE ? OR description LIKE ?)")
+        params.append(f"%{search}%")
+        params.append(f"%{search}%")
+    where = f" WHERE {' AND '.join(filters)}"
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM bug_reports{where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
+        total_row = conn.execute(
+            f"SELECT COUNT(*) as cnt FROM bug_reports{where}",
+            tuple(params),
+        ).fetchone()
+        total = int(total_row["cnt"]) if total_row else 0
+    return {"items": [dict(r) for r in rows], "total": total}
 
 
 @router.post("/feature-requests")
@@ -248,3 +275,61 @@ def delete_bug(
             raise HTTPException(status_code=403, detail="forbidden")
         conn.execute("DELETE FROM bug_reports WHERE id=?", (bug_id,))
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Feature request approval endpoints (admin only)
+# ---------------------------------------------------------------------------
+
+class ApprovalDecisionBody(BaseModel):
+    decision: str  # "approved" | "rejected"
+    note: str = ""
+
+
+@router.patch("/feature-requests/{feature_id}/approval")
+def set_feature_approval(
+    feature_id: str,
+    body: ApprovalDecisionBody,
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    from jarvis.services.feature_requests import approve_feature_request
+
+    with get_conn() as conn:
+        result = approve_feature_request(
+            conn,
+            feature_id,
+            decision=body.decision,
+            actor_id=ctx.user_id,
+            note=body.note,
+        )
+    return result
+
+
+@router.post("/feature-requests/{feature_id}/build")
+def trigger_feature_build(
+    feature_id: str,
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    from jarvis.services.feature_requests import enqueue_feature_build
+
+    with get_conn() as conn:
+        result = enqueue_feature_build(
+            conn,
+            feature_id,
+            actor_id=ctx.user_id,
+            task_runner=get_task_runner(),
+        )
+    return result
+
+
+@router.get("/feature-requests/{feature_id}/build-runs")
+def list_feature_build_runs_endpoint(
+    feature_id: str,
+    limit: int = Query(default=20, ge=1, le=100),
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    from jarvis.services.feature_requests import get_feature_build_runs
+
+    with get_conn() as conn:
+        items = get_feature_build_runs(conn, feature_id, limit=limit)
+    return {"items": items, "feature_id": feature_id}

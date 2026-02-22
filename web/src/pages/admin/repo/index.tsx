@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { GitBranch, Activity, GitCommit, CheckSquare, Square, RefreshCcw } from "lucide-react";
+import { GitBranch, Activity, GitCommit, RefreshCcw } from "lucide-react";
 import Header from "../../../components/layout/Header";
 import Card from "../../../components/ui/Card";
 import Button from "../../../components/ui/Button";
@@ -11,11 +11,9 @@ import {
     repoLog,
     repoBranches,
     repoDiff,
-    repoCheckout,
     repoStage,
     repoUnstage,
     repoCommit,
-    repoPush,
 } from "../../../api/endpoints";
 
 export default function AdminRepoPage() {

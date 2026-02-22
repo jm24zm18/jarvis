@@ -22,6 +22,10 @@
 - Self-update sandbox mode must not execute smoke commands directly on host when `SELFUPDATE_SANDBOX_ENABLED=1`.
 - `channel.typing.clear` events must be unequivocally guaranteed (e.g., via `finally` blocks) to prevent stuck client indicators.
 - The system must maintain a periodic stall watchdog covering edge cases where thread processing is live but outbound loops hang, guaranteeing `runtime.stall.detected` emission and fallback recovery.
+- State extraction must not block assistant reply persistence; extraction runs asynchronously and emits `state.extraction.queued -> complete|skipped|failed` lifecycle events.
+- Assistant final output must pass leak-guard sanitization before message persistence; internal planning/tool payload artifacts must never be user-visible.
+- Repeated failing tool calls within a single agent step must be suppressible to avoid deterministic failure loops.
+- Follow-up heartbeat checks must remain opt-in per thread with ownership enforcement on management APIs; `no_reply` outcomes must not emit user-visible outbound messages.
 
 ## High-Risk Files
 

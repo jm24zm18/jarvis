@@ -276,6 +276,21 @@ ENV_GROUPS: list[EnvGroup] = [
                 default="300",
             ),
             EnvVarDef(
+                "FOLLOWUP_HEARTBEAT_INTERVAL_SECONDS",
+                "Thread follow-up heartbeat interval in seconds (0 disables)",
+                default="300",
+            ),
+            EnvVarDef(
+                "FOLLOWUP_MAX_THREADS_PER_TICK",
+                "Max enabled follow-up threads evaluated per heartbeat tick",
+                default="20",
+            ),
+            EnvVarDef(
+                "FOLLOWUP_MIN_IDLE_SECONDS",
+                "Minimum idle seconds since last thread message before evaluation",
+                default="300",
+            ),
+            EnvVarDef(
                 "MAINTENANCE_INTERVAL_SECONDS",
                 "Maintenance schedule interval in seconds (0 disables schedule)",
                 default="0",

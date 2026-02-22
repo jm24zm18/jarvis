@@ -18,7 +18,7 @@ from jarvis.providers.factory import (
 from jarvis.providers.router import ProviderRouter
 from jarvis.repo_index import read_repo_index, write_repo_index
 from jarvis.scheduler.service import estimate_schedule_backlog
-from jarvis.tasks import get_task_runner
+from jarvis.tasks import get_task_runner, stale_periodic_jobs
 
 router = APIRouter(prefix="/system", tags=["api-system"])
 
@@ -42,6 +42,7 @@ _RESET_DATA_TABLES = (
     "knowledge_docs",
     "skills",
     "onboarding_states",
+    "thread_followups",
     "web_notifications",
     "web_sessions",
     "thread_summaries",
@@ -117,6 +118,7 @@ async def system_status(ctx: UserContext = Depends(require_auth)) -> dict[str, o
         "provider_errors": {"last_primary_failure": last_provider_error},
         "queue_depths": queue_depths,
         "scheduler": backlog,
+        "stale_periodic_jobs": stale_periodic_jobs(),
     }
 
 

@@ -21,6 +21,23 @@
    - `uv run jarvis maintenance run`
    - `uv run jarvis maintenance enqueue`
 
+Periodic health visibility:
+- `uv run jarvis maintenance status --json` now includes `stale_periodic_jobs` when scheduled tasks stop dispatching on time.
+
+## Proactive Follow-Up Loop
+
+1. Configure cadence in `.env`:
+   - `FOLLOWUP_HEARTBEAT_INTERVAL_SECONDS` (set `0` to disable)
+   - `FOLLOWUP_MAX_THREADS_PER_TICK`
+   - `FOLLOWUP_MIN_IDLE_SECONDS`
+2. Enable follow-ups per thread via API:
+   - `POST /api/v1/followups/threads/{thread_id}/enable`
+3. Verify tick events in `events`:
+   - `followup.tick.start`, `followup.tick.end`
+   - `followup.sent`, `followup.no_reply`, `followup.skipped`, `followup.error`
+4. Inspect thread status:
+   - `GET /api/v1/followups/threads/{thread_id}`
+
 ## GitHub Integration Ops
 
 1. PR automation:
@@ -100,6 +117,17 @@
    - `last_event_write_age_seconds`
    - `last_message_write_age_seconds`
    - `whatsapp_typing_active_threads_set/clear`
+
+### State Extraction Ops
+
+1. State extraction is queued asynchronously after assistant message persistence.
+2. Trace lifecycle to expect:
+   - `trace.state.extraction.queued`
+   - `trace.state.extraction.complete` or `trace.state.extraction.failed`
+3. If failures spike, inspect recent events:
+   - `state.extraction.failed` payload `primary_failure_kind`
+   - `state.extraction.complete` payload `skipped_reason`
+4. Quota cooldown is reported as `skipped_reason=provider_quota_cooldown`.
 
 ### Memory Conflict Resolution Operator Flow
 

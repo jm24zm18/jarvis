@@ -1511,3 +1511,183 @@ def get_stale_typing_states(
         }
         for row in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Feature request approval helpers
+# ---------------------------------------------------------------------------
+
+VALID_APPROVAL_STATUSES = {"pending", "approved", "rejected"}
+
+
+def set_feature_request_approval(
+    conn: sqlite3.Connection,
+    feature_id: str,
+    *,
+    decision: str,
+    actor_id: str,
+    note: str = "",
+) -> None:
+    """Update approval_status for a feature request (kind='feature')."""
+    if decision not in ("approved", "rejected"):
+        raise ValueError(f"Invalid decision: {decision}")
+    row = conn.execute(
+        "SELECT id, kind FROM bug_reports WHERE id=? LIMIT 1",
+        (feature_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Feature request not found")
+    if str(row["kind"]) != "feature":
+        raise HTTPException(status_code=400, detail="Record is not a feature request")
+    ts = now_iso()
+    if decision == "approved":
+        conn.execute(
+            (
+                "UPDATE bug_reports SET approval_status=?, approval_note=?, "
+                "approved_by=?, approved_at=?, rejected_by=NULL, rejected_at=NULL, "
+                "updated_at=? WHERE id=?"
+            ),
+            (decision, note, actor_id, ts, ts, feature_id),
+        )
+    else:
+        conn.execute(
+            (
+                "UPDATE bug_reports SET approval_status=?, approval_note=?, "
+                "rejected_by=?, rejected_at=?, approved_by=NULL, approved_at=NULL, "
+                "updated_at=? WHERE id=?"
+            ),
+            (decision, note, actor_id, ts, ts, feature_id),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Feature request build run helpers
+# ---------------------------------------------------------------------------
+
+BUILD_RUN_STATUSES = {"queued", "running", "succeeded", "failed", "timed_out", "cancelled"}
+
+
+def create_feature_build_run(
+    conn: sqlite3.Connection,
+    *,
+    feature_id: str,
+    created_by: str,
+    trace_id: str = "",
+    thread_id: str = "",
+) -> str:
+    """Insert a new build run row in 'queued' state and return its id."""
+    run_id = new_id("fbr")
+    ts = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO feature_request_build_runs"
+            "(id, feature_id, trace_id, thread_id, status, summary,"
+            " created_by, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)"
+        ),
+        (run_id, feature_id, trace_id, thread_id, "queued", "", created_by, ts, ts),
+    )
+    return run_id
+
+
+def update_feature_build_run(
+    conn: sqlite3.Connection,
+    run_id: str,
+    *,
+    status: str | None = None,
+    trace_id: str | None = None,
+    thread_id: str | None = None,
+    summary: str | None = None,
+) -> None:
+    """Partial update for a feature build run row."""
+    updates: list[str] = []
+    params: list[object] = []
+    if status is not None:
+        if status not in BUILD_RUN_STATUSES:
+            raise ValueError(f"Invalid status: {status}")
+        updates.append("status=?")
+        params.append(status)
+    if trace_id is not None:
+        updates.append("trace_id=?")
+        params.append(trace_id)
+    if thread_id is not None:
+        updates.append("thread_id=?")
+        params.append(thread_id)
+    if summary is not None:
+        updates.append("summary=?")
+        params.append(summary)
+    if not updates:
+        return
+    updates.append("updated_at=?")
+    params.append(now_iso())
+    params.append(run_id)
+    conn.execute(
+        f"UPDATE feature_request_build_runs SET {', '.join(updates)} WHERE id=?",
+        tuple(params),
+    )
+
+
+def list_feature_build_runs(
+    conn: sqlite3.Connection,
+    feature_id: str,
+    limit: int = 20,
+) -> list[dict[str, object]]:
+    rows = conn.execute(
+        (
+            "SELECT id, feature_id, trace_id, thread_id, status, summary, "
+            "created_by, created_at, updated_at "
+            "FROM feature_request_build_runs WHERE feature_id=? "
+            "ORDER BY created_at DESC LIMIT ?"
+        ),
+        (feature_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Approval list / revoke helpers
+# ---------------------------------------------------------------------------
+
+def list_approvals(
+    conn: sqlite3.Connection,
+    *,
+    action: str | None = None,
+    status: str | None = None,
+    target_ref: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, object]]:
+    filters: list[str] = []
+    params: list[object] = []
+    if action:
+        filters.append("action=?")
+        params.append(action)
+    if status:
+        filters.append("status=?")
+        params.append(status)
+    if target_ref is not None:
+        filters.append("target_ref=?")
+        params.append(target_ref)
+    where = f" WHERE {' AND '.join(filters)}" if filters else ""
+    rows = conn.execute(
+        f"SELECT * FROM approvals{where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (*params, limit, offset),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def revoke_approval(conn: sqlite3.Connection, approval_id: str, *, actor_id: str) -> bool:
+    """Mark an active approval as revoked. Returns True if updated."""
+    row = conn.execute(
+        "SELECT id, status FROM approvals WHERE id=? LIMIT 1",
+        (approval_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    if str(row["status"]) != "approved":
+        return False
+    conn.execute(
+        "UPDATE approvals SET status='revoked', consumed_by_trace_id=? WHERE id=?",
+        (f"revoked_by:{actor_id}", approval_id),
+    )
+    return True

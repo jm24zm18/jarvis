@@ -18,6 +18,8 @@ def _register_tasks(runner: TaskRunner) -> None:
         channel,
         dependency_steward,
         events,
+        feature_build,
+        followups,
         github,
         maintenance,
         memory,
@@ -56,8 +58,13 @@ def _register_tasks(runner: TaskRunner) -> None:
         "jarvis.tasks.maintenance.compute_system_fitness",
         maintenance.compute_system_fitness,
     )
+    runner.register(
+        "jarvis.tasks.followups.followup_heartbeat_tick",
+        followups.followup_heartbeat_tick,
+    )
     runner.register("jarvis.tasks.memory.index_event", memory.index_event)
     runner.register("jarvis.tasks.memory.compact_thread", memory.compact_thread)
+    runner.register("jarvis.tasks.memory.extract_thread_state", memory.extract_thread_state)
     runner.register("jarvis.tasks.memory.periodic_compaction", memory.periodic_compaction)
     runner.register("jarvis.tasks.memory.migrate_tiers", memory.migrate_tiers)
     runner.register("jarvis.tasks.memory.prune_adaptive", memory.prune_adaptive)
@@ -71,6 +78,10 @@ def _register_tasks(runner: TaskRunner) -> None:
     runner.register(
         "jarvis.tasks.release_candidate.build_release_candidate",
         release_candidate.build_release_candidate,
+    )
+    runner.register(
+        "jarvis.tasks.feature_build.run_feature_build",
+        feature_build.run_feature_build,
     )
     runner.register("jarvis.tasks.scheduler.scheduler_tick", scheduler.scheduler_tick)
     runner.register("jarvis.tasks.selfupdate.self_update_propose", selfupdate.self_update_propose)
@@ -136,6 +147,11 @@ def get_periodic_scheduler() -> PeriodicScheduler:
                 "jarvis.tasks.maintenance.maintenance_heartbeat",
                 float(settings.maintenance_heartbeat_interval_seconds),
             )
+        if settings.followup_heartbeat_interval_seconds > 0:
+            scheduler.add(
+                "jarvis.tasks.followups.followup_heartbeat_tick",
+                float(settings.followup_heartbeat_interval_seconds),
+            )
         # Run fitness compute every 30 minutes so SLO gate is always current.
         scheduler.add("jarvis.tasks.maintenance.compute_system_fitness", 1800)
         if int(settings.dependency_steward_enabled) == 1:
@@ -148,3 +164,38 @@ def get_periodic_scheduler() -> PeriodicScheduler:
 
 def is_periodic_scheduler_configured() -> bool:
     return _periodic_scheduler is not None
+
+
+def stale_periodic_jobs(stale_multiplier: float = 2.5) -> list[dict[str, object]]:
+    scheduler = _periodic_scheduler
+    if scheduler is None:
+        return []
+    stale: list[dict[str, object]] = []
+    for row in scheduler.status_snapshot():
+        interval = float(row.get("interval_seconds") or 0.0)
+        if interval <= 0:
+            continue
+        age = row.get("last_run_age_seconds")
+        next_in = float(row.get("next_run_in_seconds") or 0.0)
+        if age is None:
+            if next_in < (-interval * stale_multiplier):
+                stale.append(
+                    {
+                        "name": str(row.get("name", "")),
+                        "reason": "never_ran",
+                        "next_run_in_seconds": next_in,
+                        "interval_seconds": interval,
+                    }
+                )
+            continue
+        age_f = float(age)
+        if age_f > (interval * stale_multiplier):
+            stale.append(
+                {
+                    "name": str(row.get("name", "")),
+                    "reason": "late",
+                    "last_run_age_seconds": age_f,
+                    "interval_seconds": interval,
+                }
+            )
+    return stale

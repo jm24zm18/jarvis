@@ -35,6 +35,15 @@ class ExtractResult:
     skipped_reason: str | None = None
 
 
+def _is_provider_quota_cooldown_error(message: str) -> bool:
+    lower = message.lower()
+    return (
+        "quota exceeded" in lower
+        and "skipping primary until" in lower
+        and "runtimeerror" in lower
+    )
+
+
 def _extract_json_array(text: str) -> list[dict[str, Any]]:
     payload = text.strip()
     if payload.startswith("```"):
@@ -198,9 +207,17 @@ async def _extract_state_items_impl(
             "content": f"{_existing_state_block(existing)}\n\n{_messages_block(new_messages)}",
         },
     ]
-    response, _lane, _primary_error = await router.generate(
-        convo, tools=None, temperature=0.0, max_tokens=2048
-    )
+    try:
+        response, _lane, _primary_error = await router.generate(
+            convo, tools=None, temperature=0.0, max_tokens=2048
+        )
+    except Exception as exc:
+        if _is_provider_quota_cooldown_error(f"{type(exc).__name__}: {exc}"):
+            return ExtractResult(
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                skipped_reason="provider_quota_cooldown",
+            )
+        raise
     parsed = _extract_json_array(response.text)
     candidate_items: list[StateItem] = []
     dropped = 0

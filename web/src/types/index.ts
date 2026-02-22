@@ -252,7 +252,37 @@ export interface BugReport {
   updated_at: string;
 }
 
-export type FeatureRequest = BugReport;
+export interface FeatureRequest extends BugReport {
+  approval_status: "pending" | "approved" | "rejected";
+  approval_note?: string;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  rejected_by?: string | null;
+  rejected_at?: string | null;
+}
+
+export interface FeatureBuildRun {
+  id: string;
+  feature_id: string;
+  trace_id: string;
+  thread_id: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
+  summary: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApprovalRecord {
+  id: string;
+  action: string;
+  actor_id: string;
+  status: "approved" | "consumed" | "revoked";
+  target_ref: string;
+  expires_at: string | null;
+  consumed_by_trace_id: string;
+  created_at: string;
+}
 
 export interface RepoStatus {
   branch: string;

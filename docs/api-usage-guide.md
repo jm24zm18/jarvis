@@ -46,6 +46,14 @@ Scope enforcement:
 - Update: `PATCH /api/v1/schedules/{schedule_id}`
 - Dispatch history: `GET /api/v1/schedules/{schedule_id}/dispatches`
 
+## Follow-Up Heartbeats
+
+- Enable thread follow-ups: `POST /api/v1/followups/threads/{thread_id}/enable`
+- Disable thread follow-ups: `POST /api/v1/followups/threads/{thread_id}/disable`
+- Read thread follow-up status: `GET /api/v1/followups/threads/{thread_id}`
+
+Ownership boundaries apply for non-admin users; only thread owners can manage follow-ups.
+
 ## Self-Update Governance
 
 Admin-only operations:
@@ -103,6 +111,36 @@ GitHub webhook replay behavior:
 - Required headers include `X-Hub-Signature-256`, `X-GitHub-Event`, and `X-GitHub-Delivery`.
 - Missing `X-GitHub-Delivery` returns `400`.
 - Replayed delivery IDs inside the replay window return `409`.
+
+## Feature Request Approval and Build Runs
+
+Feature requests require explicit approval before triggering a build:
+
+```
+PATCH /api/v1/feature-requests/{id}/approval   # admin only
+  Body: { "decision": "approved"|"rejected", "note": "..." }
+
+POST  /api/v1/feature-requests/{id}/build      # admin only, requires approval_status=approved
+  Returns: { run_id, trace_id, feature_id, status }
+
+GET   /api/v1/feature-requests/{id}/build-runs  # admin only
+  Returns: { items: [...], feature_id }
+
+GET   /api/v1/feature-requests?approval_status=pending|approved|rejected  # filter by approval
+```
+
+## Approvals Center
+
+```
+GET  /api/v1/approvals              # admin only, filterable by action/status/target_ref
+POST /api/v1/approvals              # admin only
+  Body: { "action": "selfupdate.apply", "target_ref": "trc_...", "ttl_minutes": 30 }
+  Allowed actions: selfupdate.apply, host.exec.shell, host.exec.script
+
+POST /api/v1/approvals/{id}/revoke  # admin only
+```
+
+Active approval tokens consumed by `self_update_apply` are surfaced in the approvals center.
 
 ## Related Docs
 

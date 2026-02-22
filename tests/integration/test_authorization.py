@@ -477,3 +477,42 @@ def test_user_cannot_create_schedule_on_other_users_thread() -> None:
         json={"cron_expr": "0 * * * *", "thread_id": bob_thread},
     )
     assert response.status_code == 403
+
+
+def test_user_cannot_enable_followups_on_other_users_thread() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, bob = _bootstrap_users(client)
+    bob_thread = _create_thread(client, bob["token"])
+
+    response = client.post(
+        f"/api/v1/followups/threads/{bob_thread}/enable",
+        headers=_headers(alice["token"]),
+    )
+    assert response.status_code == 403
+
+
+def test_followup_enable_disable_and_status_scoped() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    alice, _bob = _bootstrap_users(client)
+    thread_id = _create_thread(client, alice["token"])
+    headers = _headers(alice["token"])
+
+    enable = client.post(f"/api/v1/followups/threads/{thread_id}/enable", headers=headers)
+    assert enable.status_code == 200
+    assert enable.json()["enabled"] is True
+
+    status_enabled = client.get(f"/api/v1/followups/threads/{thread_id}", headers=headers)
+    assert status_enabled.status_code == 200
+    assert status_enabled.json()["enabled"] is True
+
+    disable = client.post(f"/api/v1/followups/threads/{thread_id}/disable", headers=headers)
+    assert disable.status_code == 200
+    assert disable.json()["enabled"] is False
+
+    status_disabled = client.get(f"/api/v1/followups/threads/{thread_id}", headers=headers)
+    assert status_disabled.status_code == 200
+    assert status_disabled.json()["enabled"] is False

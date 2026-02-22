@@ -1,6 +1,7 @@
 """Memory/indexing Celery tasks."""
 # ruff: noqa: E501
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -8,8 +9,15 @@ from hashlib import sha256
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import now_iso
+from jarvis.events.models import EventInput
+from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
 from jarvis.memory.service import MemoryService
+from jarvis.memory.state_extractor import extract_state_items
+from jarvis.providers.factory import build_fallback_provider, build_primary_provider
+from jarvis.providers.router import ProviderRouter
+
+_STATE_EXTRACTION_BACKOFF: dict[str, dict[str, object]] = {}
 
 
 def index_event(
@@ -32,6 +40,225 @@ def compact_thread(thread_id: str) -> dict[str, str]:
     service = MemoryService()
     with get_conn() as conn:
         return service.compact_thread(conn, thread_id)
+
+
+def _extract_primary_failure_fields(message: str) -> dict[str, object]:
+    lower = message.lower()
+    if "quota exhausted (terminal)" in lower:
+        return {"primary_failure_kind": "quota_terminal"}
+    if (
+        "quota exceeded" in lower
+        or "rate limit" in lower
+        or "resource_exhausted" in lower
+        or "429" in lower
+    ):
+        return {"primary_failure_kind": "quota_retryable"}
+    if "timed out" in lower or "timeout" in lower:
+        return {"primary_failure_kind": "timeout"}
+    if (
+        "temporary failure in name resolution" in lower
+        or "name or service not known" in lower
+        or "getaddrinfo failed" in lower
+    ):
+        return {"primary_failure_kind": "dns_resolution"}
+    return {"primary_failure_kind": "generic"}
+
+
+def _notify_trace_event(
+    conn,
+    *,
+    thread_id: str,
+    trace_id: str,
+    event_type: str,
+    payload: dict[str, object],
+) -> None:
+    created_at = now_iso()
+    enriched = dict(payload)
+    enriched["trace_id"] = trace_id
+    enriched["created_at"] = created_at
+    conn.execute(
+        "INSERT INTO web_notifications(thread_id, event_type, payload_json, created_at) "
+        "VALUES(?,?,?,?)",
+        (thread_id, f"trace.{event_type}", json.dumps(enriched), created_at),
+    )
+
+
+def _state_backoff_active_seconds(thread_id: str, now: datetime) -> int:
+    state = _STATE_EXTRACTION_BACKOFF.get(thread_id)
+    if not isinstance(state, dict):
+        return 0
+    until_raw = state.get("until")
+    if not isinstance(until_raw, datetime):
+        return 0
+    remaining = int((until_raw - now).total_seconds())
+    return max(0, remaining)
+
+
+def _set_state_backoff(thread_id: str, *, failure_kind: str, settings) -> int:
+    current = _STATE_EXTRACTION_BACKOFF.get(thread_id, {})
+    failures = int(current.get("failures", 0)) + 1
+    base = max(5, int(settings.state_extraction_backoff_base_seconds))
+    cap = max(base, int(settings.state_extraction_backoff_max_seconds))
+    if failure_kind == "quota_retryable":
+        seconds = max(base, int(settings.gemini_quota_cooldown_default_seconds))
+    else:
+        seconds = min(cap, base * (2 ** max(0, failures - 1)))
+    until = datetime.now(UTC) + timedelta(seconds=seconds)
+    _STATE_EXTRACTION_BACKOFF[thread_id] = {
+        "failures": failures,
+        "until": until,
+        "failure_kind": failure_kind,
+    }
+    return seconds
+
+
+def _clear_state_backoff(thread_id: str) -> None:
+    _STATE_EXTRACTION_BACKOFF.pop(thread_id, None)
+
+
+def extract_thread_state(
+    thread_id: str,
+    actor_id: str = "main",
+    trace_id: str | None = None,
+) -> dict[str, object]:
+    settings = get_settings()
+    payload: dict[str, object] = {
+        "thread_id": thread_id,
+        "actor_id": actor_id,
+    }
+    if trace_id:
+        payload["trace_id"] = trace_id
+    if int(settings.state_extraction_enabled) != 1:
+        payload["skipped_reason"] = "disabled"
+        return payload
+
+    with get_conn() as conn:
+        now = datetime.now(UTC)
+        remaining = _state_backoff_active_seconds(thread_id, now)
+        if remaining > 0:
+            payload["skipped_reason"] = "backoff_active"
+            payload["retry_in_seconds"] = remaining
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id or new_id("trc"),
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="state.extraction.skipped",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(payload),
+                    payload_redacted_json=json.dumps(redact_payload(payload)),
+                ),
+            )
+            if trace_id:
+                _notify_trace_event(
+                    conn,
+                    thread_id=thread_id,
+                    trace_id=trace_id,
+                    event_type="state.extraction.skipped",
+                    payload=payload,
+                )
+            return payload
+
+        router = ProviderRouter(
+            build_primary_provider(settings),
+            build_fallback_provider(settings),
+        )
+        memory = MemoryService()
+        try:
+            result = asyncio.run(
+                extract_state_items(
+                    conn=conn,
+                    thread_id=thread_id,
+                    router=router,
+                    memory=memory,
+                    actor_id=actor_id,
+                )
+            )
+            payload.update(
+                {
+                    "items_extracted": result.items_extracted,
+                    "items_merged": result.items_merged,
+                    "items_conflicted": result.items_conflicted,
+                    "items_dropped": result.items_dropped,
+                    "duration_ms": result.duration_ms,
+                    "skipped_reason": result.skipped_reason,
+                }
+            )
+            if payload.get("skipped_reason") in {"provider_quota_cooldown"}:
+                failure_kind = "quota_retryable"
+                payload["retry_in_seconds"] = _set_state_backoff(
+                    thread_id, failure_kind=failure_kind, settings=settings
+                )
+                event_type = "state.extraction.skipped"
+            else:
+                _clear_state_backoff(thread_id)
+                event_type = "state.extraction.complete"
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id or new_id("trc"),
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type=event_type,
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(payload),
+                    payload_redacted_json=json.dumps(redact_payload(payload)),
+                ),
+            )
+            if trace_id:
+                _notify_trace_event(
+                    conn,
+                    thread_id=thread_id,
+                    trace_id=trace_id,
+                    event_type=event_type,
+                    payload=payload,
+                )
+            return payload
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            payload["error"] = error
+            payload.update(_extract_primary_failure_fields(error))
+            if (
+                payload.get("primary_failure_kind") in {"quota_retryable", "quota_terminal"}
+                and "skipping primary until" in error.lower()
+            ):
+                payload["skipped_reason"] = "provider_quota_cooldown"
+            payload["retry_in_seconds"] = _set_state_backoff(
+                thread_id,
+                failure_kind=str(payload.get("primary_failure_kind", "generic")),
+                settings=settings,
+            )
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id or new_id("trc"),
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="state.extraction.failed",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(payload),
+                    payload_redacted_json=json.dumps(redact_payload(payload)),
+                ),
+            )
+            if trace_id:
+                _notify_trace_event(
+                    conn,
+                    thread_id=thread_id,
+                    trace_id=trace_id,
+                    event_type="state.extraction.failed",
+                    payload=payload,
+                )
+            return payload
 
 
 def periodic_compaction() -> dict[str, int]:

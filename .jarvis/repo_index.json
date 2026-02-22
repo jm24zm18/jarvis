@@ -112,10 +112,12 @@
   "api_routes": [
     "src/jarvis/routes/api/__init__.py",
     "src/jarvis/routes/api/agents.py",
+    "src/jarvis/routes/api/approvals.py",
     "src/jarvis/routes/api/auth.py",
     "src/jarvis/routes/api/bugs.py",
     "src/jarvis/routes/api/channels.py",
     "src/jarvis/routes/api/events.py",
+    "src/jarvis/routes/api/followups.py",
     "src/jarvis/routes/api/governance.py",
     "src/jarvis/routes/api/media.py",
     "src/jarvis/routes/api/memory.py",
@@ -299,7 +301,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-22T14:21:39.752162+00:00",
+  "generated_at": "2026-02-22T16:29:40.183396+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -543,6 +545,22 @@
     {
       "file": "src/jarvis/db/migrations/063_channel_typing_state.sql",
       "number": 63
+    },
+    {
+      "file": "src/jarvis/db/migrations/064_user_memory.sql",
+      "number": 64
+    },
+    {
+      "file": "src/jarvis/db/migrations/065_thread_followups.sql",
+      "number": 65
+    },
+    {
+      "file": "src/jarvis/db/migrations/066_feature_request_approval.sql",
+      "number": 66
+    },
+    {
+      "file": "src/jarvis/db/migrations/067_feature_request_build_runs.sql",
+      "number": 67
     }
   ],
   "protected_modules": [

@@ -416,7 +416,7 @@ def maintenance_group() -> None:
 
 
 def _maintenance_status_payload() -> dict[str, object]:
-    from jarvis.tasks import is_periodic_scheduler_configured
+    from jarvis.tasks import is_periodic_scheduler_configured, stale_periodic_jobs
     from jarvis.tasks.maintenance import _commands_from_settings
 
     settings = get_settings()
@@ -478,6 +478,7 @@ def _maintenance_status_payload() -> dict[str, object]:
         "workdir": settings.maintenance_workdir or str(Path.cwd()),
         "commands": commands,
         "periodic_scheduler_active": is_periodic_scheduler_configured(),
+        "stale_periodic_jobs": stale_periodic_jobs(),
         "last_heartbeat": last_heartbeat,
         "agent_run_reaper_interval_seconds": int(settings.agent_run_reaper_interval_seconds),
         "agent_run_stats": {
@@ -518,6 +519,12 @@ def maintenance_status(json_output: bool) -> None:
     for command in commands:
         click.echo(f"  - {command}")
     click.echo(f"periodic_scheduler_active: {payload['periodic_scheduler_active']}")
+    stale_jobs = payload.get("stale_periodic_jobs")
+    if isinstance(stale_jobs, list) and stale_jobs:
+        click.echo(f"stale_periodic_jobs: {len(stale_jobs)}")
+        for item in stale_jobs[:5]:
+            if isinstance(item, dict):
+                click.echo(f"  - {item.get('name')} reason={item.get('reason')}")
     click.echo(f"agent_run_reaper_interval_seconds: {payload['agent_run_reaper_interval_seconds']}")
     agent_run_stats = payload.get("agent_run_stats")
     if isinstance(agent_run_stats, dict):

@@ -13,6 +13,9 @@ Auth levels:
 | --- | --- | --- | --- | --- | --- |
 | `GET` | `/api/v1/agents` | `auth` | `list_agents_api_v1_agents_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/agents/{agent_id}` | `auth` | `get_agent_api_v1_agents__agent_id__get` | `-` | `200, 422` |
+| `GET` | `/api/v1/approvals` | `admin` | `list_approvals_endpoint_api_v1_approvals_get` | `-` | `200, 422` |
+| `POST` | `/api/v1/approvals` | `admin` | `create_approval_endpoint_api_v1_approvals_post` | `application/json` | `200, 422` |
+| `POST` | `/api/v1/approvals/{approval_id}/revoke` | `admin` | `revoke_approval_endpoint_api_v1_approvals__approval_id__revoke_post` | `-` | `200, 422` |
 | `GET` | `/api/v1/auth/google/callback` | `public` | `google_callback_api_v1_auth_google_callback_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/auth/google/config` | `auth` | `google_config_api_v1_auth_google_config_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/auth/google/start` | `auth` | `google_start_api_v1_auth_google_start_post` | `application/json` | `200, 422` |
@@ -40,6 +43,12 @@ Auth levels:
 | `GET` | `/api/v1/events/{event_id}` | `auth` | `get_event_api_v1_events__event_id__get` | `-` | `200, 422` |
 | `GET` | `/api/v1/feature-requests` | `auth` | `list_feature_requests_api_v1_feature_requests_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/feature-requests` | `auth` | `create_feature_request_api_v1_feature_requests_post` | `application/json` | `200, 422` |
+| `PATCH` | `/api/v1/feature-requests/{feature_id}/approval` | `admin` | `set_feature_approval_api_v1_feature_requests__feature_id__approval_patch` | `application/json` | `200, 422` |
+| `POST` | `/api/v1/feature-requests/{feature_id}/build` | `admin` | `trigger_feature_build_api_v1_feature_requests__feature_id__build_post` | `-` | `200, 422` |
+| `GET` | `/api/v1/feature-requests/{feature_id}/build-runs` | `admin` | `list_feature_build_runs_endpoint_api_v1_feature_requests__feature_id__build_runs_get` | `-` | `200, 422` |
+| `GET` | `/api/v1/followups/threads/{thread_id}` | `auth` | `get_followup_status_api_v1_followups_threads__thread_id__get` | `-` | `200, 422` |
+| `POST` | `/api/v1/followups/threads/{thread_id}/disable` | `auth` | `disable_followups_api_v1_followups_threads__thread_id__disable_post` | `-` | `200, 422` |
+| `POST` | `/api/v1/followups/threads/{thread_id}/enable` | `auth` | `enable_followups_api_v1_followups_threads__thread_id__enable_post` | `-` | `200, 422` |
 | `GET` | `/api/v1/governance/agents` | `admin` | `list_agent_governance_api_v1_governance_agents_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/governance/audit` | `admin` | `memory_governance_audit_api_v1_governance_audit_get` | `-` | `200, 422` |
 | `GET` | `/api/v1/governance/decision-timeline` | `admin` | `decision_timeline_api_v1_governance_decision_timeline_get` | `-` | `200, 422` |
@@ -134,12 +143,12 @@ Auth levels:
 
 - `title`: `Jarvis Agent Framework`
 - `version`: `0.1.0`
-- `path_count`: `101`
+- `path_count`: `109`
 
 ```json
 {
   "title": "Jarvis Agent Framework",
   "version": "0.1.0",
-  "path_count": 101
+  "path_count": 109
 }
 ```

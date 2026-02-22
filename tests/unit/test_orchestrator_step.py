@@ -173,6 +173,56 @@ class _ToolLoopThenSynthesisPlaceholderRouter:
         )
 
 
+def test_run_agent_step_queues_state_extraction_task(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    queued_calls: list[tuple[str, dict[str, object], str | None]] = []
+
+    class _Runner:
+        def send_task(
+            self,
+            name: str,
+            kwargs: dict[str, object] | None = None,
+            queue: str | None = None,
+        ) -> bool:
+            queued_calls.append((name, kwargs or {}, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+    router = _SequenceRouter([(ModelResponse(text="final answer", tool_calls=[]), "primary")])
+    runtime = _FakeRuntime()
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550170")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "hello")
+        _ = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_queue")
+        )
+        row = conn.execute(
+            "SELECT payload_json FROM events "
+            "WHERE trace_id=? AND event_type='state.extraction.queued' "
+            "ORDER BY created_at DESC LIMIT 1",
+            ("trc_step_queue",),
+        ).fetchone()
+
+    assert queued_calls
+    extraction_call = next(
+        call for call in queued_calls if call[0] == "jarvis.tasks.memory.extract_thread_state"
+    )
+    task_name, task_kwargs, task_queue = extraction_call
+    assert task_name == "jarvis.tasks.memory.extract_thread_state"
+    assert task_kwargs["thread_id"] == thread_id
+    assert task_kwargs["actor_id"] == "main"
+    assert task_kwargs["trace_id"] == "trc_step_queue"
+    assert task_queue == "agent_default"
+    assert row is not None
+    payload = json.loads(str(row["payload_json"]))
+    assert payload["thread_id"] == thread_id
+    assert payload["queue"] == "agent_default"
+
+
 def test_run_agent_step_model_path_with_tool_loop(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
     router = _SequenceRouter(
@@ -498,6 +548,13 @@ def test_extract_embedded_tool_payload_strips_tool_json_suffix() -> None:
     assert tool_calls == [{"name": "echo", "arguments": {"x": 1}}]
 
 
+def test_extract_embedded_tool_payload_parses_tool_input_shape() -> None:
+    text = '{"tool":"exec_host","tool_input":{"command":"ls","cwd":"/tmp"}}'
+    cleaned, tool_calls = _extract_embedded_tool_payload(text)
+    assert cleaned == ""
+    assert tool_calls == [{"name": "exec_host", "arguments": {"command": "ls", "cwd": "/tmp"}}]
+
+
 def test_run_agent_step_parses_embedded_tool_calls_from_text(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
     router = _SequenceRouter(
@@ -525,6 +582,45 @@ def test_run_agent_step_parses_embedded_tool_calls_from_text(monkeypatch) -> Non
         row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
     assert row is not None and row["content"] == "done"
     assert runtime.execute_calls == 1
+
+
+def test_run_agent_step_blocks_internal_leak_output(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text=(
+                        "We need to issue exec_host commands. "
+                        '{"tool":"exec_host","tool_input":{"command":"ls"}}'
+                    ),
+                    tool_calls=[],
+                ),
+                "fallback",
+            )
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550166")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "continue")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_leak")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        leak_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.leak_blocked' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_step_leak",),
+        ).fetchone()
+    assert row is not None
+    assert DEGRADED_RESPONSE in str(row["content"])
+    assert leak_evt is not None
 
 
 def test_run_agent_step_rewrites_placeholder_to_degraded_response(monkeypatch) -> None:
@@ -794,6 +890,22 @@ class _FailingRuntime(_FakeRuntime):
         raise RuntimeError("tool failed")
 
 
+class _NonZeroExitRuntime(_FakeRuntime):
+    async def execute(
+        self,
+        conn: sqlite3.Connection,
+        tool_name: str,
+        arguments: dict[str, Any],
+        caller_id: str,
+        trace_id: str,
+        thread_id: str | None = None,
+        token_scopes: frozenset[str] | None = None,
+    ) -> dict[str, object]:
+        del conn, tool_name, arguments, caller_id, trace_id, thread_id, token_scopes
+        self.execute_calls += 1
+        return {"exit_code": 2, "stderr": "cwd is not a directory"}
+
+
 def test_run_agent_step_emits_tool_error_notification(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
     router = _SequenceRouter(
@@ -831,6 +943,66 @@ def test_run_agent_step_emits_tool_error_notification(monkeypatch) -> None:
             )
         )
     assert any(evt == "tool.call.end" and "error" in payload for evt, payload in notifications)
+
+
+def test_run_agent_step_suppresses_duplicate_failing_tool_calls(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="call 1",
+                    tool_calls=[
+                        {
+                            "name": "exec_host",
+                            "arguments": {"command": "ls", "cwd": "/tmpx"},
+                        }
+                    ],
+                ),
+                "fallback",
+            ),
+            (
+                ModelResponse(
+                    text="call 2",
+                    tool_calls=[
+                        {
+                            "name": "exec_host",
+                            "arguments": {"command": "ls", "cwd": "/tmpx"},
+                        }
+                    ],
+                ),
+                "fallback",
+            ),
+            (ModelResponse(text="done", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _NonZeroExitRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550887")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "run check")
+        message_id = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_suppress",
+            )
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        suppressed_evt = conn.execute(
+            (
+                "SELECT COUNT(*) AS c FROM events WHERE trace_id=? "
+                "AND event_type='tool.call.suppressed'"
+            ),
+            ("trc_step_suppress",),
+        ).fetchone()
+    assert row is not None and row["content"] == "done"
+    assert runtime.execute_calls == 1
+    assert suppressed_evt is not None and int(suppressed_evt["c"]) >= 1
 
 
 def test_run_agent_step_enqueues_full_tool_memory_payload(monkeypatch) -> None:

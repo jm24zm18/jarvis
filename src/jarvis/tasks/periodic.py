@@ -18,6 +18,8 @@ class _Entry:
     interval_seconds: float
     kwargs: dict[str, object]
     next_run: float
+    last_run: float | None = None
+    last_attempt: float | None = None
 
 
 class PeriodicScheduler:
@@ -48,9 +50,12 @@ class PeriodicScheduler:
             for entry in self._entries:
                 if now < entry.next_run:
                     continue
+                entry.last_attempt = now
                 ok = self._runner.send_task(entry.name, kwargs=entry.kwargs)
                 if not ok:
                     logger.warning("Failed to dispatch periodic task: %s", entry.name)
+                else:
+                    entry.last_run = now
                 entry.next_run = now + entry.interval_seconds
             try:
                 await asyncio.wait_for(self._shutdown.wait(), timeout=1.0)
@@ -59,3 +64,22 @@ class PeriodicScheduler:
 
     async def shutdown(self) -> None:
         self._shutdown.set()
+
+    def status_snapshot(self) -> list[dict[str, float | str | None]]:
+        now = time.monotonic()
+        out: list[dict[str, float | str | None]] = []
+        for entry in self._entries:
+            out.append(
+                {
+                    "name": entry.name,
+                    "interval_seconds": float(entry.interval_seconds),
+                    "next_run_in_seconds": float(entry.next_run - now),
+                    "last_run_age_seconds": (
+                        float(now - entry.last_run) if entry.last_run is not None else None
+                    ),
+                    "last_attempt_age_seconds": (
+                        float(now - entry.last_attempt) if entry.last_attempt is not None else None
+                    ),
+                }
+            )
+        return out

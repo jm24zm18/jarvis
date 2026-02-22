@@ -33,6 +33,9 @@ uv run pytest tests/unit/test_whatsapp_media_security.py -v
 uv run pytest tests/unit/test_whatsapp_transcription.py -v
 uv run pytest tests/integration/test_admin_api.py -v
 uv run pytest tests/unit/test_agent_recovery.py -v
+uv run pytest tests/unit/test_orchestrator_step.py -v
+uv run pytest tests/unit/test_router.py -v
+uv run pytest tests/unit/test_memory_tasks.py -v
 ```
 
 ## CI Test Pipeline
