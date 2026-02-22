@@ -7,7 +7,7 @@ from typing import Any
 
 SAFE_DURING_LOCKDOWN = {"session_list", "session_history"}
 SESSION_TOOLS = {"session_list", "session_history", "session_send"}
-HIGH_RISK_TOOLS = {"exec_host", "session_send"}
+HIGH_RISK_TOOLS = {"exec_host", "session_send", "request_human_escalation"}
 PATH_HINT_KEYS = {
     "path",
     "paths",
@@ -174,6 +174,8 @@ def decision(
         return False, "R1: lockdown"
     if tool_name in SESSION_TOOLS and principal_id != "main":
         return False, "R5: main-agent-only session tool"
+    if tool_name == "request_human_escalation" and principal_id != "main":
+        return False, "R5: main-agent-only escalation tool"
     if not is_allowed(conn, principal_id, tool_name):
         return False, "R4: permission denied"
     gov_allowed, gov_reason = _governance_decision(

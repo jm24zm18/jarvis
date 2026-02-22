@@ -21,9 +21,11 @@ def _register_tasks(runner: TaskRunner) -> None:
         feature_build,
         followups,
         github,
+        human_escalation,
         maintenance,
         memory,
         onboarding,
+        ralph,
         release_candidate,
         scheduler,
         selfupdate,
@@ -108,6 +110,14 @@ def _register_tasks(runner: TaskRunner) -> None:
     runner.register("jarvis.tasks.system.db_vacuum", system.db_vacuum)
     runner.register("jarvis.tasks.system.watchdog_stall_check", system.watchdog_stall_check)
     runner.register("jarvis.tasks.system.update_liveness_probe", system.update_liveness_probe)
+    runner.register(
+        "jarvis.tasks.human_escalation.dispatch_pending_human_escalations",
+        human_escalation.dispatch_pending_human_escalations,
+    )
+    runner.register(
+        "jarvis.tasks.ralph.run_ralph_iteration",
+        ralph.run_ralph_iteration,
+    )
 
 
 def get_task_runner() -> TaskRunner:
@@ -164,6 +174,11 @@ def get_periodic_scheduler() -> PeriodicScheduler:
             scheduler.add(
                 "jarvis.tasks.followups.followup_heartbeat_tick",
                 float(settings.followup_heartbeat_interval_seconds),
+            )
+        if settings.human_escalation_dispatch_interval_seconds > 0:
+            scheduler.add(
+                "jarvis.tasks.human_escalation.dispatch_pending_human_escalations",
+                float(max(5, int(settings.human_escalation_dispatch_interval_seconds))),
             )
         # Run fitness compute every 30 minutes so SLO gate is always current.
         scheduler.add("jarvis.tasks.maintenance.compute_system_fitness", 1800)

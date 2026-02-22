@@ -42,6 +42,7 @@ from jarvis.tasks.agent_attempts import (  # noqa: E402
     start_attempt,
     touch_attempt,
 )
+from jarvis.tasks.human_escalation import request_human_escalation  # noqa: E402
 from jarvis.tools.host import execute_host_command  # noqa: E402
 from jarvis.tools.persona import update_persona  # noqa: E402
 from jarvis.tools.registry import ToolRegistry  # noqa: E402
@@ -53,6 +54,52 @@ _DEFAULT_EXEC_HOST_TIMEOUT_S = 120
 _BUILD_TEST_GATES_TIMEOUT_S = 600
 _BUILD_TEST_GATES_COMMAND = "uv run jarvis test-gates --fail-fast"
 _DEGRADED_RESPONSE_PREFIX = "I hit an internal response issue while processing that request."
+
+
+def _terminal_outcome_reason(
+    conn: sqlite3.Connection,
+    *,
+    trace_id: str,
+    message_id: str | None,
+) -> str | None:
+    # Check explicit events first — they carry the most specific reason.
+    row = conn.execute(
+        (
+            "SELECT event_type, payload_json FROM events "
+            "WHERE trace_id=? AND event_type IN ("
+            "'agent.response.leak_blocked', 'agent.response.degraded', 'agent.response.incomplete'"
+            ") "
+            "ORDER BY created_at DESC LIMIT 1"
+        ),
+        (trace_id,),
+    ).fetchone()
+    if row is not None:
+        event_type = str(row["event_type"])
+        if event_type == "agent.response.leak_blocked":
+            return "final_output_leak_guard"
+        if event_type == "agent.response.incomplete":
+            return "incomplete_terminal_response"
+        if event_type == "agent.response.degraded":
+            reason = "unknown"
+            try:
+                payload = json.loads(str(row["payload_json"]))
+                reason = str(payload.get("reason") or "unknown")
+            except Exception:
+                reason = "unknown"
+            return reason
+
+    # Fall back to message-prefix detection when no explicit event was emitted.
+    if message_id:
+        msg_row = conn.execute(
+            "SELECT content FROM messages WHERE id=? LIMIT 1",
+            (message_id,),
+        ).fetchone()
+        if msg_row is not None:
+            message_text = str(msg_row["content"] or "").strip()
+            if message_text.startswith(_DEGRADED_RESPONSE_PREFIX):
+                return "degraded_message_prefix"
+
+    return None
 
 
 def _is_build_test_gates_command(command: str) -> bool:
@@ -196,29 +243,6 @@ def _finalize_feature_build_run_from_trace_result(
         finalize_feature_build_run_by_trace(conn, trace_id, status="failed", summary=summary)
         return
 
-    message_text = ""
-    if message_id:
-        row = conn.execute(
-            "SELECT content FROM messages WHERE id=? LIMIT 1",
-            (message_id,),
-        ).fetchone()
-        if row is not None:
-            message_text = str(row["content"] or "").strip()
-
-    leak_blocked = conn.execute(
-        (
-            "SELECT 1 FROM events WHERE trace_id=? AND event_type='agent.response.leak_blocked' "
-            "LIMIT 1"
-        ),
-        (trace_id,),
-    ).fetchone()
-    degraded_row = conn.execute(
-        (
-            "SELECT payload_json FROM events WHERE trace_id=? "
-            "AND event_type='agent.response.degraded' ORDER BY created_at DESC LIMIT 1"
-        ),
-        (trace_id,),
-    ).fetchone()
     quota_row = conn.execute(
         (
             "SELECT 1 FROM events WHERE trace_id=? AND event_type='model.fallback' "
@@ -226,45 +250,44 @@ def _finalize_feature_build_run_from_trace_result(
         ),
         (trace_id,),
     ).fetchone()
-
-    degraded = bool(leak_blocked) or message_text.startswith(_DEGRADED_RESPONSE_PREFIX)
-    if degraded_row is not None:
-        degraded = True
-
-    if degraded:
-        retryable_reason: str | None = None
+    terminal_reason = _terminal_outcome_reason(conn, trace_id=trace_id, message_id=message_id)
+    if terminal_reason is not None:
+        retryable_reasons = {
+            "placeholder_response_after_tool_loop",
+            "provider_error_terminal_synthesis",
+            "placeholder_response_after_terminal_synthesis",
+            "final_output_leak_guard",
+            "incomplete_terminal_response",
+            "degraded_message_prefix",
+            "quota_retryable",
+        }
+        retryable_reason: str | None = (
+            terminal_reason if terminal_reason in retryable_reasons else None
+        )
         if quota_row is not None:
-            summary = (
-                "Build failed: provider quota exhausted during synthesis; "
-                "final response degraded."
-            )
             retryable_reason = "quota_retryable"
-        elif leak_blocked is not None:
-            summary = "Build failed: final response blocked by leak guard."
-            retryable_reason = "final_output_leak_guard"
-        else:
-            reason = "unknown"
-            try:
-                payload = (
-                    json.loads(str(degraded_row["payload_json"]))
-                    if degraded_row is not None
-                    else {}
-                )
-                reason = str(payload.get("reason") or "unknown")
-            except Exception:
-                reason = "unknown"
-            summary = f"Build failed: degraded response ({reason})."
-            if reason in {
-                "placeholder_response_after_tool_loop",
-                "provider_error_terminal_synthesis",
-                "placeholder_response_after_terminal_synthesis",
-            }:
-                retryable_reason = reason
-
+        summary = f"Build failed: terminal response ({terminal_reason})."
         if int(settings.feature_build_retry_on_degraded) == 1 and retryable_reason is not None:
             _schedule_retry(retryable_reason, summary)
-        else:
-            finalize_feature_build_run_by_trace(conn, trace_id, status="failed", summary=summary)
+            return
+
+        finalize_feature_build_run_by_trace(conn, trace_id, status="failed", summary=summary)
+        if int(settings.feature_build_escalate_on_exhausted) == 1:
+            thread_id = str(run.get("thread_id") or "").strip()
+            if thread_id:
+                request_human_escalation(
+                    thread_id=thread_id,
+                    trace_id=trace_id,
+                    requested_by_actor_id="system",
+                    source_agent_id="main",
+                    reason=f"feature_build_{terminal_reason}",
+                    message=(
+                        "Feature build exhausted retries and needs human intervention.\n"
+                        f"Run: {run_id}\nFeature: {run.get('feature_id')}\nTrace: {trace_id}\n"
+                        f"Summary: {summary}"
+                    ),
+                    priority="high",
+                )
         return
 
     finalize_feature_build_run_by_trace(
@@ -1002,6 +1025,33 @@ def _build_registry(
         )
         return {"skill": item}
 
+    async def tool_request_human_escalation(args: dict[str, object]) -> dict[str, Any]:
+        reason = str(args.get("reason", "")).strip()
+        message = str(args.get("message", "")).strip()
+        if not reason:
+            return {"ok": False, "error": "reason is required"}
+        if not message:
+            return {"ok": False, "error": "message is required"}
+        priority = (
+            str(args.get("priority", "normal")).strip().lower()
+            if isinstance(args.get("priority"), str)
+            else "normal"
+        )
+        target_thread_id = (
+            str(args.get("thread_id")).strip()
+            if isinstance(args.get("thread_id"), str)
+            else thread_id
+        )
+        return request_human_escalation(
+            thread_id=target_thread_id,
+            trace_id=trace_id,
+            requested_by_actor_id=actor_id,
+            source_agent_id=actor_id,
+            reason=reason,
+            message=message,
+            priority=priority,
+        )
+
     registry.register(
         "echo",
         "Echo arguments back for testing",
@@ -1135,6 +1185,28 @@ def _build_registry(
                 "pinned": {"type": "boolean", "description": "Pin skill into prompt context"},
             },
             "required": ["slug", "title", "content"],
+        },
+    )
+    registry.register(
+        "request_human_escalation",
+        "Request that Jarvis notify a configured human contact channel",
+        tool_request_human_escalation,
+        parameters={
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "Short escalation reason"},
+                "message": {"type": "string", "description": "Detailed human-facing message"},
+                "priority": {
+                    "type": "string",
+                    "enum": ["low", "normal", "high"],
+                    "description": "Escalation priority",
+                },
+                "thread_id": {
+                    "type": "string",
+                    "description": "Optional source thread ID (defaults to current thread)",
+                },
+            },
+            "required": ["reason", "message"],
         },
     )
     if actor_id == "main":

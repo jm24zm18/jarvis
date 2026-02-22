@@ -134,7 +134,12 @@ def run_feature_build(
                 f"Build feature request {feature_id!r}: {title!r}\n\n"
                 "Review the feature description, implement the required changes following "
                 "established patterns, run tests and linting, and open a pull request to dev. "
-                "Record evidence for each step."
+                "Record evidence for each step.\n\n"
+                "Final response requirements:\n"
+                "1) summarize completed code changes with file references,\n"
+                "2) report test/lint/typecheck commands and outcomes,\n"
+                "3) include PR details if opened,\n"
+                "4) if blocked and human help is needed, explicitly call request_human_escalation."
             )
             conn.execute(
                 (

@@ -204,6 +204,50 @@ def _detect_output_leak_reason(text: str) -> str | None:
     return None
 
 
+def _is_build_request_prompt(text: str) -> bool:
+    clean = text.strip().lower()
+    if not clean:
+        return False
+    return clean.startswith("build feature request")
+
+
+def _is_incomplete_build_response(text: str) -> str | None:
+    clean = text.strip()
+    if not clean:
+        return "empty"
+    lower = clean.lower()
+    progress_markers = (
+        "i'm currently",
+        "i am currently",
+        "i'm focused",
+        "i am focused",
+        "i'm going to",
+        "next, i",
+        "i'm checking",
+        "i'm reviewing",
+        "i've begun",
+        "confirming the scope",
+    )
+    completion_markers = (
+        "implemented",
+        "updated",
+        "changed",
+        "added",
+        "tests",
+        "lint",
+        "typecheck",
+        "pull request",
+        "pr ",
+        "files changed",
+        "diff",
+    )
+    has_progress = any(marker in lower for marker in progress_markers)
+    has_completion = any(marker in lower for marker in completion_markers)
+    if has_progress and not has_completion:
+        return "build_progress_without_completion_evidence"
+    return None
+
+
 def _normalize_exec_host_cwd(arguments: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     if not isinstance(arguments.get("cwd"), str):
         return arguments, None
@@ -584,6 +628,7 @@ async def run_agent_step(
         if last_user is not None and isinstance(last_user["content"], str)
         else ""
     ).strip()
+    build_request_mode = _is_build_request_prompt(query_text)
     if actor_id == "main" and last_user is not None:
         command_result = await maybe_execute_command(
             conn=conn,
@@ -1422,16 +1467,41 @@ async def run_agent_step(
             ),
         )
 
+    if build_request_mode:
+        incomplete_reason = _is_incomplete_build_response(final_text)
+        if incomplete_reason is not None:
+            incomplete_payload: dict[str, object] = {
+                "actor_id": actor_id,
+                "reason": incomplete_reason,
+            }
+            if notify_fn is not None:
+                notify_fn("agent.response.incomplete", incomplete_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="agent.response.incomplete",
+                    component="orchestrator",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(incomplete_payload),
+                    payload_redacted_json=json.dumps(redact_payload(incomplete_payload)),
+                ),
+            )
+
     leak_reason = _detect_output_leak_reason(final_text)
     if leak_reason is not None:
-        blocked_payload: dict[str, object] = {
+        leak_blocked_payload: dict[str, object] = {
             "actor_id": actor_id,
             "reason": "final_output_leak_guard",
             "pattern": leak_reason,
             "retry_attempted": True,
         }
         if notify_fn is not None:
-            notify_fn("agent.response.leak_blocked", blocked_payload)
+            notify_fn("agent.response.leak_blocked", leak_blocked_payload)
         emit_event(
             conn,
             EventInput(
@@ -1443,8 +1513,8 @@ async def run_agent_step(
                 component="orchestrator",
                 actor_type="agent",
                 actor_id=actor_id,
-                payload_json=json.dumps(blocked_payload),
-                payload_redacted_json=json.dumps(redact_payload(blocked_payload)),
+                payload_json=json.dumps(leak_blocked_payload),
+                payload_redacted_json=json.dumps(redact_payload(leak_blocked_payload)),
             ),
         )
         leak_retry_iteration = MAX_TOOL_ITERATIONS + FALLBACK_ONLY_RETRIES + 1
@@ -1513,18 +1583,18 @@ async def run_agent_step(
                 ),
             )
             if leak_retry_lane == "fallback":
-                fallback_retry_payload: dict[str, object] = {
+                leak_fallback_retry_payload: dict[str, object] = {
                     "iteration": leak_retry_iteration,
                     "terminal_synthesis": True,
                     "reason": "leak_guard_retry",
                 }
                 if leak_retry_primary_error:
-                    fallback_retry_payload["primary_error"] = leak_retry_primary_error[:500]
-                    fallback_retry_payload.update(
+                    leak_fallback_retry_payload["primary_error"] = leak_retry_primary_error[:500]
+                    leak_fallback_retry_payload.update(
                         _extract_primary_failure_fields(leak_retry_primary_error)
                     )
                 if notify_fn is not None:
-                    notify_fn("model.fallback", fallback_retry_payload)
+                    notify_fn("model.fallback", leak_fallback_retry_payload)
                 emit_event(
                     conn,
                     EventInput(
@@ -1536,8 +1606,8 @@ async def run_agent_step(
                         component="orchestrator",
                         actor_type="agent",
                         actor_id=actor_id,
-                        payload_json=json.dumps(fallback_retry_payload),
-                        payload_redacted_json=json.dumps(redact_payload(fallback_retry_payload)),
+                        payload_json=json.dumps(leak_fallback_retry_payload),
+                        payload_redacted_json=json.dumps(redact_payload(leak_fallback_retry_payload)),
                     ),
                 )
             leak_retry_text = _strip_control_tokens(
@@ -1548,15 +1618,15 @@ async def run_agent_step(
                 primary_error = leak_retry_primary_error
         except ProviderError as exc:
             retry_failed = True
-            retry_error_payload: dict[str, object] = {
+            leak_retry_error_payload: dict[str, object] = {
                 "iteration": leak_retry_iteration,
                 "terminal_synthesis": True,
                 "reason": "leak_guard_retry",
                 "error": str(exc),
             }
-            retry_error_payload.update(_extract_primary_failure_fields(str(exc)))
+            leak_retry_error_payload.update(_extract_primary_failure_fields(str(exc)))
             if notify_fn is not None:
-                notify_fn("model.run.error", retry_error_payload)
+                notify_fn("model.run.error", leak_retry_error_payload)
             emit_event(
                 conn,
                 EventInput(
@@ -1568,8 +1638,8 @@ async def run_agent_step(
                     component="orchestrator",
                     actor_type="agent",
                     actor_id=actor_id,
-                    payload_json=json.dumps(retry_error_payload),
-                    payload_redacted_json=json.dumps(redact_payload(retry_error_payload)),
+                    payload_json=json.dumps(leak_retry_error_payload),
+                    payload_redacted_json=json.dumps(redact_payload(leak_retry_error_payload)),
                 ),
             )
 
@@ -1585,13 +1655,13 @@ async def run_agent_step(
             final_text = _degraded_response_msg(trace_id)
 
     if _has_unverified_roadmap_success_claim(final_text) and not verified_roadmap_item_ids:
-        blocked_payload: dict[str, object] = {
+        claim_blocked_payload: dict[str, object] = {
             "actor_id": actor_id,
             "reason": "unverified_roadmap_write_claim",
             "trace_id": trace_id,
         }
         if notify_fn is not None:
-            notify_fn("agent.response.claim_blocked", blocked_payload)
+            notify_fn("agent.response.claim_blocked", claim_blocked_payload)
         emit_event(
             conn,
             EventInput(
@@ -1603,8 +1673,8 @@ async def run_agent_step(
                 component="orchestrator",
                 actor_type="agent",
                 actor_id=actor_id,
-                payload_json=json.dumps(blocked_payload),
-                payload_redacted_json=json.dumps(redact_payload(blocked_payload)),
+                payload_json=json.dumps(claim_blocked_payload),
+                payload_redacted_json=json.dumps(redact_payload(claim_blocked_payload)),
             ),
         )
         final_text = (

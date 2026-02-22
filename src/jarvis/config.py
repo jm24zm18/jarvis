@@ -76,14 +76,40 @@ class Settings(BaseSettings):
     agent_step_max_attempts: int = Field(alias="AGENT_STEP_MAX_ATTEMPTS", default=3)
     agent_step_retry_base_seconds: int = Field(alias="AGENT_STEP_RETRY_BASE_SECONDS", default=2)
     agent_step_retry_max_seconds: int = Field(alias="AGENT_STEP_RETRY_MAX_SECONDS", default=20)
-    feature_build_retry_on_degraded: int = Field(alias="FEATURE_BUILD_RETRY_ON_DEGRADED", default=1)
-    feature_build_retry_max_attempts: int = Field(alias="FEATURE_BUILD_RETRY_MAX_ATTEMPTS", default=5)
+    feature_build_retry_on_degraded: int = Field(
+        alias="FEATURE_BUILD_RETRY_ON_DEGRADED",
+        default=1,
+    )
+    feature_build_retry_max_attempts: int = Field(
+        alias="FEATURE_BUILD_RETRY_MAX_ATTEMPTS",
+        default=5,
+    )
     feature_build_retry_backoff_seconds: str = Field(
         alias="FEATURE_BUILD_RETRY_BACKOFF_SECONDS",
         default="30,120,300,600",
     )
     feature_build_retry_dispatch_interval_seconds: int = Field(
         alias="FEATURE_BUILD_RETRY_DISPATCH_INTERVAL_SECONDS",
+        default=15,
+    )
+    feature_build_escalate_on_exhausted: int = Field(
+        alias="FEATURE_BUILD_ESCALATE_ON_EXHAUSTED",
+        default=1,
+    )
+    human_escalation_channel_type: str = Field(
+        alias="HUMAN_ESCALATION_CHANNEL_TYPE",
+        default="whatsapp",
+    )
+    human_escalation_targets: str = Field(
+        alias="HUMAN_ESCALATION_TARGETS",
+        default="",
+    )
+    human_escalation_default_priority: str = Field(
+        alias="HUMAN_ESCALATION_DEFAULT_PRIORITY",
+        default="normal",
+    )
+    human_escalation_dispatch_interval_seconds: int = Field(
+        alias="HUMAN_ESCALATION_DISPATCH_INTERVAL_SECONDS",
         default=15,
     )
     agent_run_reaper_interval_seconds: int = Field(
@@ -353,6 +379,21 @@ class Settings(BaseSettings):
     )
     selfupdate_sandbox_timeout_seconds: int = Field(
         alias="SELFUPDATE_SANDBOX_TIMEOUT_SECONDS", default=300
+    )
+
+    # Ralph autonomous improvement loop
+    ralph_max_iterations: int = Field(alias="RALPH_MAX_ITERATIONS", default=50)
+    ralph_max_failures: int = Field(alias="RALPH_MAX_FAILURES", default=5)
+    ralph_max_runtime_seconds: int = Field(alias="RALPH_MAX_RUNTIME_SECONDS", default=3600)
+    ralph_never_edit_paths: str = Field(
+        alias="RALPH_NEVER_EDIT_PATHS",
+        default=(
+            "src/jarvis/selfupdate/pipeline.py,"
+            "src/jarvis/selfupdate/ralph_plan.py,"
+            "agents/feature_builder/identity.md,"
+            "src/jarvis/policy/,"
+            "src/jarvis/auth/"
+        ),
     )
 
     # Media storage

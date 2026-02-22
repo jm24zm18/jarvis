@@ -650,6 +650,113 @@ def insert_message(
     return message_id
 
 
+def create_human_escalation(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    trace_id: str,
+    requested_by_actor_id: str,
+    source_agent_id: str,
+    reason: str,
+    message: str,
+    channel_type: str,
+    target_external_id: str,
+    priority: str = "normal",
+) -> str:
+    escalation_id = new_id("mda")
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO human_escalations("
+            "id, thread_id, trace_id, requested_by_actor_id, source_agent_id, "
+            "reason, message, status, channel_type, target_external_id, priority, "
+            "dispatched_message_id, error, created_at, updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ),
+        (
+            escalation_id,
+            thread_id,
+            trace_id,
+            requested_by_actor_id,
+            source_agent_id,
+            reason[:500],
+            message[:4000],
+            "queued",
+            channel_type[:40],
+            target_external_id[:200],
+            priority[:20],
+            "",
+            "",
+            now,
+            now,
+        ),
+    )
+    return escalation_id
+
+
+def list_due_human_escalations(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    rows = conn.execute(
+        (
+            "SELECT id, thread_id, trace_id, requested_by_actor_id, source_agent_id, "
+            "reason, message, status, channel_type, target_external_id, priority, "
+            "dispatched_message_id, error, created_at, updated_at "
+            "FROM human_escalations "
+            "WHERE status='queued' "
+            "ORDER BY created_at ASC LIMIT ?"
+        ),
+        (max(1, min(500, int(limit))),),
+    ).fetchall()
+    items: list[dict[str, object]] = []
+    for row in rows:
+        items.append(
+            {
+                "id": str(row["id"]),
+                "thread_id": str(row["thread_id"]),
+                "trace_id": str(row["trace_id"]),
+                "requested_by_actor_id": str(row["requested_by_actor_id"]),
+                "source_agent_id": str(row["source_agent_id"]),
+                "reason": str(row["reason"]),
+                "message": str(row["message"]),
+                "status": str(row["status"]),
+                "channel_type": str(row["channel_type"]),
+                "target_external_id": str(row["target_external_id"]),
+                "priority": str(row["priority"]),
+                "dispatched_message_id": str(row["dispatched_message_id"]),
+                "error": str(row["error"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+            }
+        )
+    return items
+
+
+def update_human_escalation(
+    conn: sqlite3.Connection,
+    escalation_id: str,
+    *,
+    status: str,
+    dispatched_message_id: str | None = None,
+    error: str | None = None,
+) -> None:
+    updates = ["status=?", "updated_at=?"]
+    params: list[object] = [status, now_iso()]
+    if dispatched_message_id is not None:
+        updates.append("dispatched_message_id=?")
+        params.append(dispatched_message_id)
+    if error is not None:
+        updates.append("error=?")
+        params.append(error[:1000])
+    params.append(escalation_id)
+    conn.execute(
+        f"UPDATE human_escalations SET {', '.join(updates)} WHERE id=?",
+        tuple(params),
+    )
+
+
 def record_external_message(
     conn: sqlite3.Connection,
     channel_type: str,

@@ -75,6 +75,11 @@ Source of truth: `src/jarvis/config.py`.
 | `FEATURE_BUILD_RETRY_MAX_ATTEMPTS` | int | `5` | Max total attempts per feature build run (initial attempt included). |
 | `FEATURE_BUILD_RETRY_BACKOFF_SECONDS` | str | `30,120,300,600` | Comma-delimited retry delays (seconds) for scheduled feature-build retries. |
 | `FEATURE_BUILD_RETRY_DISPATCH_INTERVAL_SECONDS` | int | `15` | Periodic interval for scanning and dispatching due scheduled feature-build retries. |
+| `FEATURE_BUILD_ESCALATE_ON_EXHAUSTED` | int | `1` | When `1`, exhausted feature-build terminal failures trigger configured human escalation dispatch. |
+| `HUMAN_ESCALATION_CHANNEL_TYPE` | str | `whatsapp` | Outbound channel used for escalation dispatch (`whatsapp`, `telegram`, etc. as configured). |
+| `HUMAN_ESCALATION_TARGETS` | str | `` | Comma-separated external channel IDs to notify when escalation is requested. |
+| `HUMAN_ESCALATION_DEFAULT_PRIORITY` | str | `normal` | Default escalation priority when caller does not provide one. |
+| `HUMAN_ESCALATION_DISPATCH_INTERVAL_SECONDS` | int | `15` | Periodic interval for dispatching queued human escalations (`0` disables periodic sweep). |
 | `AGENT_RUN_REAPER_INTERVAL_SECONDS` | int | `30` | Periodic stale-attempt recovery scan interval. |
 | `AGENT_RUN_MODEL_STALE_MIN_SECONDS` | int | `780` | Minimum stale cutoff while phase=`model.run`. |
 | `AGENT_RUN_TOOL_STALE_MIN_SECONDS` | int | `240` | Minimum stale cutoff while phase=`tool.exec`. |

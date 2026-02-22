@@ -291,6 +291,51 @@ ENV_GROUPS: list[EnvGroup] = [
                 default="300",
             ),
             EnvVarDef(
+                "FEATURE_BUILD_RETRY_ON_DEGRADED",
+                "Feature-build degraded terminal retry switch (0/1)",
+                default="1",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_RETRY_MAX_ATTEMPTS",
+                "Maximum total feature-build attempts (initial + retries)",
+                default="5",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_RETRY_BACKOFF_SECONDS",
+                "Comma-separated backoff delays in seconds for feature-build retries",
+                default="30,120,300,600",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_RETRY_DISPATCH_INTERVAL_SECONDS",
+                "Interval in seconds for dispatching due feature-build retries",
+                default="15",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_ESCALATE_ON_EXHAUSTED",
+                "Escalate to configured humans when feature-build retries exhaust (0/1)",
+                default="1",
+            ),
+            EnvVarDef(
+                "HUMAN_ESCALATION_CHANNEL_TYPE",
+                "Channel used for escalation delivery",
+                default="whatsapp",
+            ),
+            EnvVarDef(
+                "HUMAN_ESCALATION_TARGETS",
+                "CSV external IDs/chat IDs for human escalation targets",
+                default="",
+            ),
+            EnvVarDef(
+                "HUMAN_ESCALATION_DEFAULT_PRIORITY",
+                "Default priority when escalation request omits one",
+                default="normal",
+            ),
+            EnvVarDef(
+                "HUMAN_ESCALATION_DISPATCH_INTERVAL_SECONDS",
+                "Queued escalation dispatch interval in seconds (0 disables periodic dispatch)",
+                default="15",
+            ),
+            EnvVarDef(
                 "MAINTENANCE_INTERVAL_SECONDS",
                 "Maintenance schedule interval in seconds (0 disables schedule)",
                 default="0",

@@ -43,6 +43,7 @@ Auth levels:
 | `GET` | `/api/v1/events/{event_id}` | `auth` | `get_event_api_v1_events__event_id__get` | `-` | `200, 422` |
 | `GET` | `/api/v1/feature-requests` | `auth` | `list_feature_requests_api_v1_feature_requests_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/feature-requests` | `auth` | `create_feature_request_api_v1_feature_requests_post` | `application/json` | `200, 422` |
+| `POST` | `/api/v1/feature-requests/build-runs/reconcile` | `admin` | `reconcile_feature_build_runs_endpoint_api_v1_feature_requests_build_runs_reconcile_post` | `-` | `200, 422` |
 | `PATCH` | `/api/v1/feature-requests/{feature_id}/approval` | `admin` | `set_feature_approval_api_v1_feature_requests__feature_id__approval_patch` | `application/json` | `200, 422` |
 | `POST` | `/api/v1/feature-requests/{feature_id}/build` | `admin` | `trigger_feature_build_api_v1_feature_requests__feature_id__build_post` | `-` | `200, 422` |
 | `GET` | `/api/v1/feature-requests/{feature_id}/build-runs` | `admin` | `list_feature_build_runs_endpoint_api_v1_feature_requests__feature_id__build_runs_get` | `-` | `200, 422` |
@@ -143,12 +144,12 @@ Auth levels:
 
 - `title`: `Jarvis Agent Framework`
 - `version`: `0.1.0`
-- `path_count`: `109`
+- `path_count`: `110`
 
 ```json
 {
   "title": "Jarvis Agent Framework",
   "version": "0.1.0",
-  "path_count": 109
+  "path_count": 110
 }
 ```
