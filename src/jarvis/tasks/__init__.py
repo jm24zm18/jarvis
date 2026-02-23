@@ -61,6 +61,10 @@ def _register_tasks(runner: TaskRunner) -> None:
         maintenance.compute_system_fitness,
     )
     runner.register(
+        "jarvis.tasks.maintenance.prune_exec_host_logs",
+        maintenance.prune_exec_host_logs,
+    )
+    runner.register(
         "jarvis.tasks.followups.followup_heartbeat_tick",
         followups.followup_heartbeat_tick,
     )
@@ -70,6 +74,7 @@ def _register_tasks(runner: TaskRunner) -> None:
     runner.register("jarvis.tasks.memory.periodic_compaction", memory.periodic_compaction)
     runner.register("jarvis.tasks.memory.migrate_tiers", memory.migrate_tiers)
     runner.register("jarvis.tasks.memory.prune_adaptive", memory.prune_adaptive)
+    runner.register("jarvis.tasks.memory.proactive_reflection", memory.proactive_reflection)
     runner.register("jarvis.tasks.memory.sync_failure_capsules", memory.sync_failure_capsules)
     runner.register("jarvis.tasks.memory.evaluate_consistency", memory.evaluate_consistency)
     runner.register("jarvis.tasks.onboarding.onboarding_step", onboarding.onboarding_step)
@@ -170,6 +175,7 @@ def get_periodic_scheduler() -> PeriodicScheduler:
                 "jarvis.tasks.maintenance.maintenance_heartbeat",
                 float(settings.maintenance_heartbeat_interval_seconds),
             )
+        scheduler.add("jarvis.tasks.maintenance.prune_exec_host_logs", 3600)
         if settings.followup_heartbeat_interval_seconds > 0:
             scheduler.add(
                 "jarvis.tasks.followups.followup_heartbeat_tick",
@@ -186,6 +192,11 @@ def get_periodic_scheduler() -> PeriodicScheduler:
             scheduler.add("jarvis.tasks.dependency_steward.run_dependency_steward", 604800)
         if int(settings.release_candidate_agent_enabled) == 1:
             scheduler.add("jarvis.tasks.release_candidate.build_release_candidate", 86400)
+        if int(settings.memory_reflection_enabled) == 1:
+            scheduler.add(
+                "jarvis.tasks.memory.proactive_reflection",
+                float(max(1, int(settings.memory_reflection_interval_seconds))),
+            )
         _periodic_scheduler = scheduler
     return _periodic_scheduler
 

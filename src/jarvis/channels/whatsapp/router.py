@@ -37,6 +37,7 @@ from jarvis.db.queries import (
     get_thread_by_whatsapp_remote,
     get_whatsapp_sender_review_latest_decision,
     get_whatsapp_sender_review_open,
+    has_pending_human_escalation,
     insert_message,
     insert_whatsapp_media,
     prune_whatsapp_thread_map_orphans,
@@ -49,6 +50,7 @@ from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
 from jarvis.tasks import get_task_runner
+from jarvis.tasks.human_escalation import request_human_escalation
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
 
@@ -413,6 +415,23 @@ async def inbound(
                         ),
                     ),
                 )
+                if not has_pending_human_escalation(
+                    conn,
+                    thread_id=thread_id,
+                    reason="whatsapp_review_required",
+                ):
+                    request_human_escalation(
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        requested_by_actor_id="whatsapp",
+                        source_agent_id="main",
+                        reason="whatsapp_review_required",
+                        message=(
+                            "WhatsApp review queue requires a human decision."
+                            f" Queue ID: {review_id}, sender: {sender_jid}"
+                        ),
+                        priority="high",
+                    )
                 continue
             if review_state == "deny":
                 blocked_sender = True

@@ -341,6 +341,8 @@ class StateStore:
                 "WHEN 'risk' THEN 3 "
                 "WHEN 'failure' THEN 4 "
                 "WHEN 'question' THEN 5 "
+                "WHEN 'insight' THEN 6 "
+                "WHEN 'worldview' THEN 7 "
                 "ELSE 6 END ASC, "
                 "CASE confidence "
                 "WHEN 'high' THEN 2 "

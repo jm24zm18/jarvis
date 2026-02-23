@@ -30,6 +30,7 @@ from jarvis.db.migrations.runner import run_migrations
 from jarvis.db.queries import (
     ensure_root_user,
     ensure_system_state,
+    clear_stale_restarting_flag,
     prune_whatsapp_thread_map_orphans,
     upsert_whatsapp_instance,
 )
@@ -102,6 +103,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if pruned > 0:
             logger.info("Pruned %d stale whatsapp_thread_map rows", pruned)
         ensure_system_state(conn)
+        if clear_stale_restarting_flag(conn):
+            logger.warning("Cleared stale system_state.restarting flag on startup")
         root_user_id = ensure_root_user(conn)
         logger.info("Root user ready: %s", root_user_id)
         sync_stats = sync_seed_skills(conn)

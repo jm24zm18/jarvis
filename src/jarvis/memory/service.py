@@ -3,7 +3,7 @@
 import json
 import logging
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from math import sqrt
 from random import Random
@@ -15,6 +15,7 @@ from jarvis.config import get_settings
 from jarvis.ids import new_id
 from jarvis.memory.policy import apply_memory_policy, record_memory_governance_decision
 from jarvis.memory.scope import can_agent_access_thread_memory, is_known_agent, normalize_agent_id
+from jarvis.memory.state_items import StateItem, StateItemType, validate_item
 from jarvis.memory.state_store import StateStore
 
 logger = logging.getLogger(__name__)
@@ -916,6 +917,229 @@ class MemoryService:
             thread_id=thread_id,
         )
         return filtered
+
+    def get_reflection_candidates(
+        self, conn: sqlite3.Connection, limit: int
+    ) -> list[dict[str, str]]:
+        candidates = conn.execute(
+            (
+                "SELECT t.id AS thread_id, "
+                "MAX(m.created_at) AS last_message, "
+                "w.last_reflected_at "
+                "FROM threads t "
+                "JOIN messages m ON m.thread_id=t.id "
+                "LEFT JOIN memory_reflection_watermarks w ON w.thread_id=t.id "
+                "WHERE t.status='open' "
+                "GROUP BY t.id "
+                "HAVING w.last_reflected_at IS NULL OR MAX(m.created_at)>w.last_reflected_at "
+                "ORDER BY last_message DESC "
+                "LIMIT ?"
+            ),
+            (max(1, int(limit)),),
+        ).fetchall()
+        return [
+            {
+                "thread_id": str(row["thread_id"]),
+                "last_message": str(row["last_message"]) if row["last_message"] is not None else "",
+                "last_reflected_at": str(row["last_reflected_at"]) if row["last_reflected_at"] else "",
+            }
+            for row in candidates
+        ]
+
+    def record_reflection(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        *,
+        insight_count: int,
+        pruned_count: int,
+        reflected_at: str,
+    ) -> None:
+        conn.execute(
+            (
+                "INSERT INTO memory_reflection_watermarks("
+                "thread_id, last_reflected_at, last_insight_count, last_pruned_count, "
+                "created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(thread_id) DO UPDATE SET "
+                "last_reflected_at=excluded.last_reflected_at, "
+                "last_insight_count=excluded.last_insight_count, "
+                "last_pruned_count=excluded.last_pruned_count, "
+                "updated_at=excluded.updated_at"
+            ),
+            (
+                thread_id,
+                reflected_at,
+                insight_count,
+                pruned_count,
+                reflected_at,
+                reflected_at,
+            ),
+        )
+
+    def _upsert_reflection_item(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        store: StateStore,
+        *,
+        type_tag: str,
+        text: str,
+        refs: list[str],
+        topic_tags: list[str],
+        agent_id: str = "main",
+    ) -> StateItem:
+        temp_item = StateItem(
+            uid="",
+            text=text,
+            status="active",
+            type_tag=type_tag,
+            topic_tags=topic_tags,
+            refs=refs,
+            confidence="high",
+        )
+        validate_item(temp_item)
+        return store.upsert_item(conn, thread_id, temp_item, agent_id=agent_id)
+
+    def upsert_worldview_item(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        *,
+        text: str,
+        refs: list[str],
+        topic_tags: list[str],
+        agent_id: str = "main",
+    ) -> StateItem:
+        store = StateStore()
+        existing = conn.execute(
+            (
+                "SELECT uid FROM state_items "
+                "WHERE thread_id=? AND type_tag=? AND status!='superseded' "
+                "ORDER BY updated_at DESC LIMIT 1"
+            ),
+            (thread_id, StateItemType.WORLDVIEW.value),
+        ).fetchone()
+        worldview_item = self._upsert_reflection_item(
+            conn,
+            thread_id,
+            store,
+            type_tag=StateItemType.WORLDVIEW.value,
+            text=text,
+            refs=refs,
+            topic_tags=topic_tags,
+            agent_id=agent_id,
+        )
+        if existing and str(existing["uid"]) != worldview_item.uid:
+            store.mark_superseded(
+                conn,
+                str(existing["uid"]),
+                thread_id,
+                replaced_by=worldview_item.uid,
+                evidence={"reason": "reflection"},
+            )
+        return worldview_item
+
+    def upsert_insight_item(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        *,
+        text: str,
+        refs: list[str],
+        topic_tags: list[str],
+        agent_id: str = "main",
+    ) -> StateItem:
+        store = StateStore()
+        return self._upsert_reflection_item(
+            conn,
+            thread_id,
+            store,
+            type_tag=StateItemType.INSIGHT.value,
+            text=text,
+            refs=refs,
+            topic_tags=topic_tags,
+            agent_id=agent_id,
+        )
+
+    def prune_low_importance(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        threshold: float,
+        age_days: int,
+    ) -> int:
+        cutoff = (
+            datetime.now(UTC) - timedelta(days=max(0, int(age_days)))
+        ).isoformat()
+        has_archive = (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state_items_archive'"
+            ).fetchone()
+            is not None
+        )
+        rows = conn.execute(
+            (
+                "SELECT uid, thread_id, text, status, type_tag, topic_tags_json, refs_json, "
+                "confidence, replaced_by, supersession_evidence, conflict, pinned, source, "
+                "created_at, last_seen_at, updated_at, tier, importance_score, access_count, "
+                "conflict_count, agent_id, last_accessed_at "
+                "FROM state_items "
+                "WHERE pinned=0 AND status!='superseded' "
+                "AND type_tag NOT IN ('worldview','insight') "
+                "AND importance_score<? "
+                "AND COALESCE(last_seen_at, created_at)<?"
+            ),
+            (float(threshold), cutoff),
+        ).fetchall()
+        archived = 0
+        if not rows:
+            return archived
+        archived_at = datetime.now(UTC).isoformat()
+        for row in rows:
+            if has_archive:
+                conn.execute(
+                (
+                    "INSERT INTO state_items_archive("
+                    "uid, thread_id, text, status, type_tag, topic_tags_json, refs_json, "
+                    "confidence, replaced_by, supersession_evidence, conflict, pinned, source, "
+                    "created_at, last_seen_at, updated_at, tier, importance_score, access_count, "
+                    "conflict_count, agent_id, last_accessed_at, archived_at, archive_reason"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                ),
+                    (
+                        str(row["uid"]),
+                        str(row["thread_id"]),
+                        str(row["text"]),
+                        str(row["status"]),
+                        str(row["type_tag"]),
+                        str(row["topic_tags_json"]),
+                        str(row["refs_json"]),
+                        str(row["confidence"]),
+                        str(row["replaced_by"]) if row["replaced_by"] is not None else None,
+                        str(row["supersession_evidence"]) if row["supersession_evidence"] is not None else None,
+                        int(row["conflict"]),
+                        int(row["pinned"]),
+                        str(row["source"]),
+                        str(row["created_at"]),
+                        str(row["last_seen_at"]),
+                        str(row["updated_at"]),
+                        str(row["tier"]),
+                        float(row["importance_score"]),
+                        int(row["access_count"]),
+                        int(row["conflict_count"]),
+                        str(row["agent_id"]),
+                        str(row["last_accessed_at"]) if row["last_accessed_at"] is not None else None,
+                        archived_at,
+                        "reflection_low_importance",
+                    ),
+                )
+            conn.execute(
+                "DELETE FROM state_items WHERE uid=? AND thread_id=?",
+                (str(row["uid"]), str(row["thread_id"])),
+            )
+            archived += 1
+        return archived
 
     def get_failures(
         self,

@@ -13,6 +13,7 @@ from jarvis.db.queries import insert_system_fitness_snapshot, now_iso
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
+from jarvis.tools.host import FALLBACK_LOG_DIR
 
 _MAX_CAPTURE_CHARS = 4000
 
@@ -178,6 +179,89 @@ def maintenance_heartbeat() -> dict[str, object]:
             ),
         )
     return {"ok": True, "trace_id": trace_id, "timestamp": now_iso()}
+
+
+def prune_exec_host_logs() -> dict[str, object]:
+    settings = get_settings()
+    max_days = max(0, int(settings.exec_host_log_retention_days))
+    max_files = max(0, int(settings.exec_host_log_retention_max_files))
+    max_bytes = max(0, int(settings.exec_host_log_retention_max_bytes))
+    now = datetime.now(UTC)
+    roots = {Path(settings.exec_host_log_dir).expanduser(), FALLBACK_LOG_DIR}
+
+    removed = 0
+    removed_bytes = 0
+    scanned = 0
+    errors: list[str] = []
+    for root in roots:
+        try:
+            if not root.exists() or not root.is_dir():
+                continue
+        except OSError as exc:
+            errors.append(f"{root}: {exc}")
+            continue
+        files: list[Path] = []
+        for item in root.glob("*.log"):
+            try:
+                if not item.is_file():
+                    continue
+            except OSError:
+                continue
+            files.append(item)
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        scanned += len(files)
+        kept_bytes = 0
+        kept = 0
+        for path in files:
+            try:
+                stat = path.stat()
+                age_days = (now - datetime.fromtimestamp(stat.st_mtime, tz=UTC)).days
+                size = int(stat.st_size)
+            except OSError:
+                continue
+            should_remove = False
+            if max_days > 0 and age_days > max_days:
+                should_remove = True
+            if max_files > 0 and kept >= max_files:
+                should_remove = True
+            if max_bytes > 0 and (kept_bytes + size) > max_bytes:
+                should_remove = True
+            if should_remove:
+                try:
+                    path.unlink()
+                    removed += 1
+                    removed_bytes += size
+                except OSError as exc:
+                    errors.append(f"{path}: {exc}")
+                continue
+            kept += 1
+            kept_bytes += size
+
+    result = {
+        "ok": len(errors) == 0,
+        "scanned": scanned,
+        "removed": removed,
+        "removed_bytes": removed_bytes,
+        "errors": errors[:10],
+    }
+    trace_id = new_id("trc")
+    with get_conn() as conn:
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=None,
+                event_type="maintenance.exec_host_logs.pruned",
+                component="maintenance",
+                actor_type="system",
+                actor_id="maintenance",
+                payload_json=json.dumps(result),
+                payload_redacted_json=json.dumps(redact_payload(result)),
+            ),
+        )
+    return result
 
 
 def _safe_ratio(numerator: int, denominator: int) -> float:

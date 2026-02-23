@@ -310,7 +310,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-22T22:27:16.748337+00:00",
+  "generated_at": "2026-02-23T02:16:26.473425+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -590,6 +590,18 @@
     {
       "file": "src/jarvis/db/migrations/072_feature_build_run_diagnostics.sql",
       "number": 72
+    },
+    {
+      "file": "src/jarvis/db/migrations/073_feature_requests_compat_view.sql",
+      "number": 73
+    },
+    {
+      "file": "src/jarvis/db/migrations/074_agent_run_attempts_dirty_files.sql",
+      "number": 74
+    },
+    {
+      "file": "src/jarvis/db/migrations/075_memory_reflection_watermarks.sql",
+      "number": 75
     }
   ],
   "protected_modules": [

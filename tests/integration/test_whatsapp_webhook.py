@@ -148,6 +148,80 @@ def test_inbound_strict_mode_queues_unknown_sender_without_message_insert() -> N
         get_settings.cache_clear()
 
 
+def test_inbound_strict_mode_triggers_human_escalation(monkeypatch) -> None:
+    old_review_mode = os.environ.get("WHATSAPP_REVIEW_MODE")
+    old_allowed_senders = os.environ.get("WHATSAPP_ALLOWED_SENDERS")
+    old_admin_ids = os.environ.get("ADMIN_WHATSAPP_IDS")
+    old_escalation_targets = os.environ.get("HUMAN_ESCALATION_TARGETS")
+    old_escalation_channel = os.environ.get("HUMAN_ESCALATION_CHANNEL_TYPE")
+    called: list[dict[str, object]] = []
+    try:
+        os.environ["WHATSAPP_REVIEW_MODE"] = "strict"
+        os.environ["WHATSAPP_ALLOWED_SENDERS"] = ""
+        os.environ["ADMIN_WHATSAPP_IDS"] = ""
+        os.environ["HUMAN_ESCALATION_TARGETS"] = "usr_admin"
+        os.environ["HUMAN_ESCALATION_CHANNEL_TYPE"] = "web"
+        get_settings.cache_clear()
+
+        def fake_request(**kwargs: object) -> dict[str, object]:
+            called.append(kwargs)
+            return {"ok": True, "count": 1}
+
+        monkeypatch.setattr(
+            whatsapp_router,
+            "request_human_escalation",
+            fake_request,
+        )
+        client = TestClient(app)
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "messages": [
+                                    {
+                                        "id": "wamid.TEST.REVIEW.ESCALATE",
+                                        "from": "15555559002",
+                                        "text": {"body": "please help"},
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        response = client.post("/webhooks/whatsapp", json=payload)
+        assert response.status_code == 200
+        assert response.json()["queued_for_review"] is True
+        assert len(called) == 1
+        assert called[0]["reason"] == "whatsapp_review_required"
+        assert "Queue ID" in str(called[0]["message"])
+    finally:
+        if old_review_mode is None:
+            os.environ.pop("WHATSAPP_REVIEW_MODE", None)
+        else:
+            os.environ["WHATSAPP_REVIEW_MODE"] = old_review_mode
+        if old_allowed_senders is None:
+            os.environ.pop("WHATSAPP_ALLOWED_SENDERS", None)
+        else:
+            os.environ["WHATSAPP_ALLOWED_SENDERS"] = old_allowed_senders
+        if old_admin_ids is None:
+            os.environ.pop("ADMIN_WHATSAPP_IDS", None)
+        else:
+            os.environ["ADMIN_WHATSAPP_IDS"] = old_admin_ids
+        if old_escalation_targets is None:
+            os.environ.pop("HUMAN_ESCALATION_TARGETS", None)
+        else:
+            os.environ["HUMAN_ESCALATION_TARGETS"] = old_escalation_targets
+        if old_escalation_channel is None:
+            os.environ.pop("HUMAN_ESCALATION_CHANNEL_TYPE", None)
+        else:
+            os.environ["HUMAN_ESCALATION_CHANNEL_TYPE"] = old_escalation_channel
+        get_settings.cache_clear()
+
+
 def test_inbound_strict_mode_blocks_sender_after_denied_review() -> None:
     old_review_mode = os.environ.get("WHATSAPP_REVIEW_MODE")
     old_allowed_senders = os.environ.get("WHATSAPP_ALLOWED_SENDERS")

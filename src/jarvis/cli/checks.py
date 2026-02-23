@@ -169,6 +169,61 @@ def check_database(db_path: str) -> CheckResult:
         )
 
 
+def _schema_migration_count(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    try:
+        conn = sqlite3.connect(str(path))
+        row = conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()
+        conn.close()
+    except Exception:
+        return 0
+    if row is None:
+        return 0
+    return int(row[0] or 0)
+
+
+def check_db_path_consistency(db_path: str, project_root: Path) -> CheckResult:
+    configured = Path(db_path).expanduser().resolve()
+    app_db = (project_root / "app.db").resolve()
+    jarvis_db = (project_root / "jarvis.db").resolve()
+
+    configured_count = _schema_migration_count(configured)
+    app_count = _schema_migration_count(app_db)
+    jarvis_count = _schema_migration_count(jarvis_db)
+    if configured_count > 0:
+        return CheckResult(
+            name="DB path consistency",
+            passed=True,
+            message=f"configured={configured} schema_migrations={configured_count}",
+        )
+
+    candidates = [
+        (app_db, app_count),
+        (jarvis_db, jarvis_count),
+    ]
+    best_path, best_count = max(candidates, key=lambda item: item[1])
+    if best_count > 0 and configured != best_path:
+        return CheckResult(
+            name="DB path consistency",
+            passed=False,
+            message=(
+                f"configured DB ({configured}) appears empty/unmigrated; "
+                f"candidate with migrations: {best_path} ({best_count})"
+            ),
+            fix_hint=(
+                f"Point APP_DB to {best_path} (or run migrations for {configured}) "
+                "to avoid split-brain DB usage."
+            ),
+        )
+
+    return CheckResult(
+        name="DB path consistency",
+        passed=True,
+        message=f"configured={configured} schema_migrations={configured_count}",
+    )
+
+
 def check_migrations_applied(db_path: str) -> CheckResult:
     from jarvis.db.migrations.runner import MIGRATIONS_DIR
 

@@ -30,6 +30,7 @@ Periodic health visibility:
    - `FOLLOWUP_HEARTBEAT_INTERVAL_SECONDS` (set `0` to disable)
    - `FOLLOWUP_MAX_THREADS_PER_TICK`
    - `FOLLOWUP_MIN_IDLE_SECONDS`
+   - `FOLLOWUP_EMIT_IDLE_TICKS` (`0` suppresses no-op idle tick events)
 2. Enable follow-ups per thread via API:
    - `POST /api/v1/followups/threads/{thread_id}/enable`
 3. Verify tick events in `events`:
@@ -37,6 +38,17 @@ Periodic health visibility:
    - `followup.sent`, `followup.no_reply`, `followup.skipped`, `followup.error`
 4. Inspect thread status:
    - `GET /api/v1/followups/threads/{thread_id}`
+
+## Exec Host Log Hygiene
+
+1. Bound full per-command log size:
+   - `EXEC_HOST_FULL_LOG_MAX_BYTES`
+2. Enable retention pruning limits:
+   - `EXEC_HOST_LOG_RETENTION_DAYS`
+   - `EXEC_HOST_LOG_RETENTION_MAX_FILES`
+   - `EXEC_HOST_LOG_RETENTION_MAX_BYTES`
+3. Verify periodic pruning event:
+   - `maintenance.exec_host_logs.pruned`
 
 ## GitHub Integration Ops
 
@@ -76,6 +88,7 @@ Periodic health visibility:
 3. System drains in-flight in-process tasks until timeout.
 4. Restart command is executed.
 5. Restart flag is cleared and `/readyz` is validated.
+6. If a prior restart was interrupted and `system_state.restarting` remained `1`, the API auto-clears that flag during startup so blocked tools (exec_host, session tools, etc.) can run once the server is fully ready.
 
 ## Lockdown
 
@@ -112,6 +125,10 @@ Periodic health visibility:
    - `memory_avg_tokens_saved`
    - `memory_reconciliation_rate`
    - `memory_hallucination_incidents`
+4. Validate memory reflection loop:
+   - Query `memory_reflection_watermarks` to confirm `last_reflected_at` advances for active threads.
+   - Check `memory.reflection.run` events to verify insight/prune counts before/after each reflection execution.
+   - Ensure `jarvis.tasks.memory.proactive_reflection` remains scheduled in the periodic scheduler snapshot.
 4. Monitor `/metrics` runtime liveness and WhatsApp KPI fields for stall-detection:
    - `task_runner_in_flight`
    - `last_event_write_age_seconds`
@@ -359,6 +376,22 @@ FROM human_escalations
 WHERE trace_id = '<trace_id>'
 ORDER BY created_at ASC;
 ```
+
+When investigating feature builds or WhatsApp reviews, filter `human_escalations`
+rows for `reason='whatsapp_review_required'` to see who needs to act and which
+thread is waiting on a decision.
+
+## Thread Log Summaries
+
+1. Use the `thread_logs` tool whenever a stakeholder requests “check the logs”
+   or when a feature build hits `insufficient_deliverable_evidence`.
+2. The tool returns:
+   - `message_count` and trimmed `recent_messages`
+   - `recent_events` + `payload_summary`
+   - `feature_build` hints (last event/reason)
+   - `human_escalations` + `human_escalation_counts`
+3. It surfaces the same data operators would otherwise glean from manual SQL runs,
+   so prefer it before digging directly through `messages`/`events`.
 
 Expected behavior for feature builds:
 - Degraded/leak-blocked/incomplete terminal responses are treated as failed terminal outcomes.

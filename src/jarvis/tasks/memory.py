@@ -16,6 +16,7 @@ from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
 from jarvis.memory.service import MemoryService
 from jarvis.memory.state_extractor import extract_state_items
+from jarvis.memory.state_store import StateStore
 from jarvis.providers.factory import build_fallback_provider, build_primary_provider
 from jarvis.providers.router import ProviderRouter
 
@@ -560,6 +561,119 @@ def run_memory_maintenance() -> dict[str, object]:
         "stale_before": stale_before,
         "summary": summary,
     }
+
+
+def proactive_reflection() -> dict[str, object]:
+    settings = get_settings()
+    if int(settings.memory_reflection_enabled) != 1:
+        return {"ok": False, "reason": "disabled"}
+    batch_size = max(1, int(settings.memory_reflection_batch_size))
+    insight_limit = max(1, int(settings.memory_reflection_insight_limit))
+    prune_threshold = float(settings.memory_reflection_prune_threshold)
+    prune_age = max(0, int(settings.memory_reflection_prune_age_days))
+    state_limit = max(1, int(settings.state_max_active_items))
+    service = MemoryService()
+    store = StateStore()
+    summary: dict[str, int] = {"threads": 0, "insights": 0, "pruned": 0}
+    with get_conn() as conn:
+        candidates = service.get_reflection_candidates(conn, batch_size)
+        for candidate in candidates:
+            thread_id = candidate["thread_id"]
+            active_items = store.get_active_items(conn, thread_id, limit=state_limit)
+            if not active_items:
+                continue
+            summary["threads"] += 1
+            refs = [
+                ref.strip()
+                for item in active_items
+                for ref in item.refs
+                if isinstance(ref, str) and ref.strip()
+            ]
+            if not refs:
+                refs = [f"thread:{thread_id}"]
+            refs = list(dict.fromkeys(refs))
+            topic_candidates = [
+                tag.strip().lower()
+                for item in active_items
+                for tag in item.topic_tags
+                if isinstance(tag, str) and tag.strip()
+            ]
+            topic_tags = list(dict.fromkeys(topic_candidates))
+            sorted_items = sorted(
+                active_items, key=lambda item: float(item.importance_score), reverse=True
+            )
+            worldview_lines = [
+                f"{item.type_tag}: {item.text}" for item in sorted_items[:3]
+            ]
+            worldview_text = "Worldview snapshot: " + " | ".join(worldview_lines)
+            worldview_tags = topic_tags or ["worldview"]
+            service.upsert_worldview_item(
+                conn,
+                thread_id,
+                text=worldview_text,
+                refs=refs,
+                topic_tags=worldview_tags,
+            )
+            insight_candidates = sorted_items[:insight_limit]
+            for item in insight_candidates:
+                insight_refs = [
+                    ref.strip() for ref in item.refs if isinstance(ref, str) and ref.strip()
+                ] or refs
+                insight_refs = list(dict.fromkeys(insight_refs))
+                insight_topics = list(
+                    dict.fromkeys(
+                        ["insight", item.type_tag] + [
+                            tag.strip().lower()
+                            for tag in item.topic_tags
+                            if isinstance(tag, str) and tag.strip()
+                        ]
+                    )
+                )
+                insight_text = f"Reflection insight ({item.type_tag}): {item.text}"
+                service.upsert_insight_item(
+                    conn,
+                    thread_id,
+                    text=insight_text,
+                    refs=insight_refs,
+                    topic_tags=insight_topics,
+                )
+            summary["insights"] += len(insight_candidates)
+            pruned = service.prune_low_importance(
+                conn,
+                threshold=prune_threshold,
+                age_days=prune_age,
+            )
+            summary["pruned"] += pruned
+            reflected_at = datetime.now(UTC).isoformat()
+            service.record_reflection(
+                conn,
+                thread_id,
+                insight_count=len(insight_candidates),
+                pruned_count=pruned,
+                reflected_at=reflected_at,
+            )
+            payload = {
+                "thread_id": thread_id,
+                "insight_count": len(insight_candidates),
+                "pruned_count": pruned,
+                "reflected_at": reflected_at,
+            }
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=new_id("trc"),
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="memory.reflection.run",
+                    component="memory",
+                    actor_type="system",
+                    actor_id="memory",
+                    payload_json=json.dumps(payload),
+                    payload_redacted_json=json.dumps(redact_payload(payload)),
+                ),
+            )
+    return {"ok": True, "summary": summary}
 
 
 def migrate_tiers() -> dict[str, int]:

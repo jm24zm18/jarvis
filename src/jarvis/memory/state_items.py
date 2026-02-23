@@ -17,6 +17,8 @@ class StateItemType(str, Enum):
     QUESTION = "question"
     RISK = "risk"
     FAILURE = "failure"
+    INSIGHT = "insight"
+    WORLDVIEW = "worldview"
 
 
 VALID_CONFIDENCE = {"low", "medium", "high"}
@@ -29,6 +31,8 @@ TYPE_UID_PREFIX = {
     StateItemType.QUESTION: "q_",
     StateItemType.RISK: "r_",
     StateItemType.FAILURE: "f_",
+    StateItemType.INSIGHT: "i_",
+    StateItemType.WORLDVIEW: "w_",
 }
 TYPE_PRIORITY = {
     StateItemType.DECISION.value: 0,
@@ -36,6 +40,8 @@ TYPE_PRIORITY = {
     StateItemType.ACTION.value: 2,
     StateItemType.RISK.value: 3,
     StateItemType.FAILURE.value: 4,
+    StateItemType.INSIGHT.value: 6,
+    StateItemType.WORLDVIEW.value: 7,
     StateItemType.QUESTION.value: 5,
 }
 STATUS_PRECEDENCE = {
@@ -45,6 +51,8 @@ STATUS_PRECEDENCE = {
     StateItemType.DECISION.value: ["active", "superseded"],
     StateItemType.CONSTRAINT.value: ["active", "superseded"],
     StateItemType.RISK.value: ["active", "superseded"],
+    StateItemType.INSIGHT.value: ["active", "superseded"],
+    StateItemType.WORLDVIEW.value: ["active", "superseded"],
 }
 DEFAULT_STATUS = {
     StateItemType.ACTION.value: "open",
@@ -53,6 +61,8 @@ DEFAULT_STATUS = {
     StateItemType.DECISION.value: "active",
     StateItemType.CONSTRAINT.value: "active",
     StateItemType.RISK.value: "active",
+    StateItemType.INSIGHT.value: "active",
+    StateItemType.WORLDVIEW.value: "active",
 }
 
 

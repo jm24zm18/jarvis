@@ -12,6 +12,7 @@ from jarvis.cli.checks import (
     CheckResult,
     check_agent_bundles,
     check_database,
+    check_db_path_consistency,
     check_env_file,
     check_http_service,
     check_migrations_applied,
@@ -146,6 +147,23 @@ class TestCheckDatabase:
     def test_not_found(self, tmp_path: Path) -> None:
         result = check_database(str(tmp_path / "missing.db"))
         assert result.passed is False
+
+    def test_db_path_consistency_detects_shadow_db(self, tmp_path: Path) -> None:
+        configured = tmp_path / "jarvis.db"
+        other = tmp_path / "app.db"
+        sqlite3.connect(str(configured)).close()
+        conn = sqlite3.connect(str(other))
+        conn.execute(
+            "CREATE TABLE schema_migrations(name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO schema_migrations VALUES('001_initial.sql', '2026-01-01')"
+        )
+        conn.commit()
+        conn.close()
+        result = check_db_path_consistency(str(configured), tmp_path)
+        assert result.passed is False
+        assert "split-brain" in result.fix_hint
 
 
 class TestCheckMigrationsApplied:
