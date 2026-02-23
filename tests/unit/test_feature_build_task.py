@@ -7,7 +7,14 @@ from jarvis.db.queries import (
     ensure_user,
     update_feature_build_run,
 )
-from jarvis.tasks.feature_build import dispatch_due_feature_build_retries, run_feature_build
+from jarvis.tasks.feature_build import (
+    _build_attempt_capsule,
+    _capsule_stable_hash,
+    dispatch_due_feature_build_retries,
+    get_previous_capsule,
+    run_feature_build,
+    save_capsule,
+)
 
 
 def test_run_feature_build_uses_current_thread_channel_schema(monkeypatch) -> None:
@@ -146,3 +153,56 @@ def test_dispatch_due_feature_build_retries_enqueues_due_run(monkeypatch) -> Non
     assert str(kwargs["feature_id"]) == feature_id
     assert str(kwargs["trace_id"]).startswith("trc_")
     assert queue == "default"
+
+
+def test_capsule_saved_on_gate_failure_and_loaded_on_retry(monkeypatch) -> None:
+    """Capsule is saved after a failed gate and loaded as context on the next attempt."""
+    queued: list = []
+
+    class _Runner:
+        def send_task(self, name: str, kwargs: dict, queue: str) -> bool:
+            queued.append((name, kwargs, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        actor_id = ensure_user(conn, "web_admin_capsule_saved")
+        run_id = create_feature_build_run(
+            conn, feature_id="bug_capsule_saved", created_by=actor_id
+        )
+
+        # Manually save a capsule on the run (simulating a prior gate failure).
+        cap = _build_attempt_capsule(
+            run_id=run_id,
+            trace_id="trc_capsule_saved_1",
+            attempt=1,
+            reason="insufficient_deliverable_evidence",
+            changed_files=[],
+            tools_used=["exec_host"],
+            top_errors=["test failed"],
+            blockers_summary="Missing dep",
+            next_action="retry",
+        )
+        save_capsule(conn, run_id, cap, _capsule_stable_hash(cap))
+
+        # Bump attempt_count to 2 to simulate a retry scenario.
+        update_feature_build_run(conn, run_id, attempt_count=2, max_attempts=5)
+
+    # run_feature_build on attempt 2 should detect the capsule and inject a system message.
+    result = run_feature_build(
+        run_id=run_id,
+        feature_id="bug_capsule_saved",
+        trace_id="trc_capsule_saved_2",
+        title="Capsule Saved Feature",
+        actor_id=actor_id,
+    )
+
+    assert result["status"] == "running"
+
+    # Verify the capsule still survives in the DB.
+    with get_conn() as conn:
+        loaded = get_previous_capsule(conn, run_id)
+    assert loaded is not None
+    assert loaded["reason"] == "insufficient_deliverable_evidence"

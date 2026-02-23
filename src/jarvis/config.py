@@ -109,6 +109,18 @@ class Settings(BaseSettings):
         alias="FEATURE_BUILD_LOOP_CAP_THRESHOLD",
         default=8,
     )
+    feature_build_attempt_capsules_enabled: int = Field(
+        alias="FEATURE_BUILD_ATTEMPT_CAPSULES_ENABLED",
+        default=1,
+    )
+    feature_build_repeat_limit: int = Field(
+        alias="FEATURE_BUILD_REPEAT_LIMIT",
+        default=2,
+    )
+    feature_build_require_test_gates: int = Field(
+        alias="FEATURE_BUILD_REQUIRE_TEST_GATES",
+        default=1,
+    )
     orchestrator_max_tool_iterations: int = Field(
         alias="ORCHESTRATOR_MAX_TOOL_ITERATIONS",
         default=8,

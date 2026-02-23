@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,133 @@ from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Attempt capsule helpers
+# ---------------------------------------------------------------------------
+
+def _capsule_stable_hash(capsule: dict) -> str:
+    """Return a SHA-256 hex digest of the stable fields of an attempt capsule.
+
+    Unstable fields (run_id, trace_id, attempt, schema_version) are excluded
+    so that two consecutive attempts with identical outcomes produce the same
+    hash and trigger the repeat fail-fast.
+    """
+    stable = {
+        "reason": str(capsule.get("reason", "")),
+        "changed_files": sorted(capsule.get("changed_files") or []),
+        "tools_used": sorted(capsule.get("tools_used") or []),
+        "top_errors": sorted(capsule.get("top_errors") or []),
+        "next_action": str(capsule.get("next_action", "")),
+        "blockers_summary": str(capsule.get("blockers_summary", "")),
+    }
+    blob = json.dumps(stable, sort_keys=True).encode()
+    return hashlib.sha256(blob).hexdigest()
+
+
+def _build_attempt_capsule(
+    *,
+    run_id: str,
+    trace_id: str,
+    attempt: int,
+    reason: str,
+    changed_files: list[str],
+    tools_used: list[str],
+    top_errors: list[str],
+    blockers_summary: str,
+    next_action: str,
+) -> dict:
+    """Build a structured attempt capsule dict."""
+    return {
+        "schema_version": 1,
+        "run_id": run_id,
+        "trace_id": trace_id,
+        "attempt": attempt,
+        "reason": reason,
+        "changed_files": sorted(changed_files),
+        "tools_used": sorted(tools_used),
+        "top_errors": top_errors[:5],
+        "blockers_summary": blockers_summary[:500],
+        "next_action": next_action[:200],
+    }
+
+
+def get_previous_capsule(conn, run_id: str) -> dict | None:
+    """Read the last_capsule_json from the feature_request_build_runs row."""
+    row = conn.execute(
+        "SELECT last_capsule_json, last_capsule_hash "
+        "FROM feature_request_build_runs WHERE id=? LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    raw = str(row["last_capsule_json"] or "").strip()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def save_capsule(conn, run_id: str, capsule: dict, capsule_hash: str) -> None:
+    """Persist the capsule and its hash on the run record."""
+    conn.execute(
+        "UPDATE feature_request_build_runs SET last_capsule_json=?, last_capsule_hash=? WHERE id=?",
+        (json.dumps(capsule), capsule_hash, run_id),
+    )
+
+
+def _format_capsule_summary(capsule: dict) -> str:
+    """Format a concise capsule summary for injection as a system message."""
+    attempt = capsule.get("attempt", "?")
+    reason = capsule.get("reason", "unknown")
+    files = capsule.get("changed_files") or []
+    blockers = str(capsule.get("blockers_summary") or "").strip()
+    parts = [f"[Attempt {attempt} context] Previous attempt failed: {reason}."]
+    if files:
+        files_str = ", ".join(files[:5])
+        if len(files) > 5:
+            files_str += f" (+{len(files) - 5} more)"
+        parts.append(f"Changed: {files_str}.")
+    if blockers:
+        parts.append(f"Blockers: {blockers[:150]}.")
+    return " ".join(parts)
+
+
+def _collect_tools_used_from_trace(conn, trace_id: str) -> list[str]:
+    """Return distinct tool names used in span events for this trace."""
+    rows = conn.execute(
+        (
+            "SELECT DISTINCT json_extract(payload_json, '$.tool') AS tool "
+            "FROM events WHERE trace_id=? AND event_type='tool.call.start' "
+            "AND json_extract(payload_json, '$.tool') IS NOT NULL"
+        ),
+        (trace_id,),
+    ).fetchall()
+    return sorted(str(r["tool"]) for r in rows if r["tool"])
+
+
+def _collect_top_errors_from_trace(conn, trace_id: str) -> list[str]:
+    """Return up to 5 distinct error strings from tool events in this trace."""
+    rows = conn.execute(
+        (
+            "SELECT json_extract(payload_json, '$.error') AS err "
+            "FROM events WHERE trace_id=? AND event_type='tool.call.end' "
+            "AND json_extract(payload_json, '$.error') IS NOT NULL "
+            "ORDER BY created_at DESC LIMIT 20"
+        ),
+        (trace_id,),
+    ).fetchall()
+    seen: list[str] = []
+    for r in rows:
+        err = str(r["err"] or "").strip()[:200]
+        if err and err not in seen:
+            seen.append(err)
+        if len(seen) >= 5:
+            break
+    return seen
 
 
 def _emit_build_event(
@@ -82,6 +210,7 @@ def run_feature_build(
     from jarvis.tasks import get_task_runner
 
     try:
+        settings = get_settings()
         with get_conn() as conn:
             run_row = get_feature_build_run(conn, run_id)
             if run_row is None:
@@ -130,6 +259,21 @@ def run_feature_build(
 
             # Update run with thread_id.
             update_feature_build_run(conn, run_id, thread_id=thread_id)
+
+            # On retry attempts, inject previous capsule context as a system message.
+            if attempt_count > 1 and int(settings.feature_build_attempt_capsules_enabled) == 1:
+                prev_capsule = get_previous_capsule(conn, run_id)
+                if prev_capsule is not None:
+                    capsule_summary = _format_capsule_summary(prev_capsule)
+                    ctx_msg_id = new_id("msg")
+                    ctx_now = now_iso()
+                    conn.execute(
+                        (
+                            "INSERT INTO messages(id, thread_id, role, content, created_at) "
+                            "VALUES(?,?,?,?,?)"
+                        ),
+                        (ctx_msg_id, thread_id, "system", capsule_summary, ctx_now),
+                    )
 
             # Insert build instruction message.
             msg_id = new_id("msg")

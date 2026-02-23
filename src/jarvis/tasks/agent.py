@@ -47,6 +47,14 @@ from jarvis.tasks.agent_attempts import (  # noqa: E402
     start_attempt,
     touch_attempt,
 )
+from jarvis.tasks.feature_build import (  # noqa: E402
+    _build_attempt_capsule,
+    _capsule_stable_hash,
+    _collect_tools_used_from_trace,
+    _collect_top_errors_from_trace,
+    get_previous_capsule,
+    save_capsule,
+)
 from jarvis.tasks.human_escalation import request_human_escalation  # noqa: E402
 from jarvis.tools.host import execute_host_command  # noqa: E402
 from jarvis.tools.persona import update_persona  # noqa: E402
@@ -63,6 +71,7 @@ _DEGRADED_RESPONSE_PREFIX = "I hit an internal response issue while processing t
 _TERMINAL_PLACEHOLDER_PREFIX = (
     "I completed tool execution but could not synthesize a final summary."
 )
+_NEEDS_USER_GUIDANCE_PREFIX = "NEEDS_USER_GUIDANCE:"
 _WRITE_COMMAND_MARKERS = (
     ">>",
     " > ",
@@ -261,6 +270,13 @@ def _evaluate_feature_build_deliverable_gate(
     if not message_text or _is_placeholder_terminal_message(message_text):
         return False, "insufficient_deliverable_evidence", checks
 
+    # Agent explicitly requests human guidance — treat as terminal pass so it doesn't loop.
+    checks["message_is_needs_user_guidance"] = message_text.startswith(
+        _NEEDS_USER_GUIDANCE_PREFIX
+    )
+    if bool(checks["message_is_needs_user_guidance"]):
+        return True, "needs_user_guidance", checks
+
     baseline_list = get_attempt_initial_dirty_files(conn, trace_id=trace_id)
     baseline_set = set(baseline_list or [])
     changed_files, diff_error = _git_changed_files(baseline=baseline_set)
@@ -279,6 +295,11 @@ def _evaluate_feature_build_deliverable_gate(
         allowed_changes.append(path)
     checks["allowed_scope_changes"] = allowed_changes
     if allowed_changes:
+        if int(settings.feature_build_require_test_gates) == 1:
+            tg_ran = _test_gates_executed_in_trace(conn, trace_id)
+            checks["test_gates_executed"] = tg_ran
+            if not tg_ran:
+                return False, "test_gates_not_executed", checks
         return True, None, checks
     if bool(checks["explicit_noop_with_blockers"]):
         return True, None, checks
@@ -334,6 +355,139 @@ def _terminal_outcome_reason(
 def _is_build_test_gates_command(command: str) -> bool:
     normalized = " ".join(command.strip().split()).lower()
     return normalized == _BUILD_TEST_GATES_COMMAND
+
+
+def _test_gates_executed_in_trace(conn: sqlite3.Connection, trace_id: str) -> bool:
+    """Return True if test-gates was called via exec_host in this trace."""
+    rows = conn.execute(
+        "SELECT payload_json FROM events "
+        "WHERE trace_id=? AND event_type='tool.call.start' LIMIT 200",
+        (trace_id,),
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(str(row["payload_json"] or "{}"))
+            if payload.get("tool") != "exec_host":
+                continue
+            cmd = str(payload.get("arguments", {}).get("command", "")).strip()
+            if _is_build_test_gates_command(cmd):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _apply_capsule_repeat_fail_fast(
+    *,
+    conn: sqlite3.Connection,
+    run_id: str,
+    trace_id: str,
+    attempt_count: int,
+    gate_checks: dict[str, Any],
+    message_id: str | None,
+    settings: Any,
+    emit_build_event: Any,
+    max_attempts: int,
+) -> bool:
+    """Create an attempt capsule, check for hash repeat, and deny retry if stuck.
+
+    Returns True if the retry should be denied (repeat fail-fast triggered),
+    False if the retry should proceed normally.
+    """
+    try:
+        changed_files: list[str] = list(gate_checks.get("changed_files") or [])
+        tools_used = _collect_tools_used_from_trace(conn, trace_id)
+        top_errors = _collect_top_errors_from_trace(conn, trace_id)
+
+        # Extract blockers summary from message text.
+        blockers_summary = ""
+        if message_id:
+            msg_row = conn.execute(
+                "SELECT content FROM messages WHERE id=? LIMIT 1",
+                (message_id,),
+            ).fetchone()
+            if msg_row is not None:
+                text = str(msg_row["content"] or "").strip()
+                # Use message tail as blockers context (up to 300 chars).
+                blockers_summary = text[-300:] if len(text) > 300 else text
+
+        capsule = _build_attempt_capsule(
+            run_id=run_id,
+            trace_id=trace_id,
+            attempt=attempt_count,
+            reason="insufficient_deliverable_evidence",
+            changed_files=changed_files,
+            tools_used=tools_used,
+            top_errors=top_errors,
+            blockers_summary=blockers_summary,
+            next_action="retry",
+        )
+        current_hash = _capsule_stable_hash(capsule)
+
+        # Check previous capsule for repeat.
+        prev_capsule = get_previous_capsule(conn, run_id)
+        prev_hash = ""
+        if prev_capsule is not None:
+            try:
+                prev_hash = _capsule_stable_hash(prev_capsule)
+            except Exception:
+                prev_hash = ""
+
+        repeat_limit = max(1, int(settings.feature_build_repeat_limit))
+        if prev_hash and prev_hash == current_hash and attempt_count >= repeat_limit:
+            # Identical situation: stop retrying.
+            update_feature_build_run(
+                conn,
+                run_id,
+                status="failed",
+                retry_state="exhausted",
+                next_retry_at="",
+                summary=(
+                    f"Build stopped after {attempt_count} attempts with identical outcome "
+                    f"(repeat fail-fast): insufficient_deliverable_evidence."
+                ),
+                last_failure_reason="insufficient_deliverable_evidence",
+                active_attempt=attempt_count,
+                last_progress_at=now_iso(),
+                last_event_type="feature.build.retry.denied",
+                last_trace_id=trace_id,
+                terminal_reason="FAILED_REPEAT",
+            )
+            emit_build_event(
+                "feature.build.retry.denied",
+                {
+                    "run_id": run_id,
+                    "attempt": attempt_count,
+                    "max_attempts": max_attempts,
+                    "reason": "insufficient_deliverable_evidence",
+                    "policy_action": "repeat_fail_fast",
+                    "capsule_hash": current_hash,
+                },
+            )
+            # Save capsule even on denial so context is preserved.
+            save_capsule(conn, run_id, capsule, current_hash)
+            return True
+
+        # Save capsule for the next attempt.
+        save_capsule(conn, run_id, capsule, current_hash)
+        emit_build_event(
+            "feature.build.evidence.logged",
+            {
+                "run_id": run_id,
+                "attempt": attempt_count,
+                "capsule_hash": current_hash,
+                "changed_files_count": len(changed_files),
+                "tools_used_count": len(tools_used),
+                "top_errors_count": len(top_errors),
+            },
+        )
+    except Exception:
+        logger.exception(
+            "capsule repeat fail-fast check failed; allowing retry: run_id=%s trace_id=%s",
+            run_id,
+            trace_id,
+        )
+    return False
 
 
 def _finalize_feature_build_run_from_trace_result(
@@ -529,6 +683,44 @@ def _finalize_feature_build_run_from_trace_result(
             message_id=message_id,
             settings=settings,
         )
+        if gate_passed and gate_reason == "needs_user_guidance":
+            # Agent explicitly escalated — stop retrying, notify user.
+            _needs_guidance_text = ""
+            if message_id:
+                _ng_row = conn.execute(
+                    "SELECT content FROM messages WHERE id=? LIMIT 1", (message_id,)
+                ).fetchone()
+                if _ng_row is not None:
+                    _needs_guidance_text = str(_ng_row["content"] or "").strip()
+            finalize_feature_build_run_by_trace(
+                conn,
+                trace_id,
+                status="failed",
+                summary=(
+                    "Build stopped: agent requested human guidance.\n"
+                    + _needs_guidance_text[:500]
+                ),
+            )
+            update_feature_build_run(
+                conn,
+                run_id,
+                status="failed",
+                retry_state="exhausted",
+                next_retry_at="",
+                last_progress_at=now_iso(),
+                last_event_type="feature.build.needs_user_guidance",
+                last_trace_id=trace_id,
+                terminal_reason="needs_user_guidance",
+            )
+            _emit_build_event(
+                "feature.build.needs_user_guidance",
+                {
+                    "run_id": run_id,
+                    "attempt": attempt_count,
+                    "message": _needs_guidance_text[:500],
+                },
+            )
+            return
         if not gate_passed and gate_reason is not None:
             terminal_reason = gate_reason
             _emit_build_event(
@@ -551,6 +743,7 @@ def _finalize_feature_build_run_from_trace_result(
             "degraded_message_prefix",
             "quota_retryable",
             "insufficient_deliverable_evidence",
+            "test_gates_not_executed",
         }
         retryable_reason: str | None = (
             terminal_reason if terminal_reason in retryable_reasons else None
@@ -576,6 +769,24 @@ def _finalize_feature_build_run_from_trace_result(
             terminal_reason=terminal_reason,
         )
         if int(settings.feature_build_retry_on_degraded) == 1 and retryable_reason is not None:
+            # --- Capsule-based repeat fail-fast (insufficient_deliverable_evidence) ---
+            if (
+                retryable_reason == "insufficient_deliverable_evidence"
+                and int(settings.feature_build_attempt_capsules_enabled) == 1
+            ):
+                _capsule_deny = _apply_capsule_repeat_fail_fast(
+                    conn=conn,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    attempt_count=attempt_count,
+                    gate_checks=gate_checks,
+                    message_id=message_id,
+                    settings=settings,
+                    emit_build_event=_emit_build_event,
+                    max_attempts=max_attempts,
+                )
+                if _capsule_deny:
+                    return
             _schedule_retry(retryable_reason, summary)
             return
 

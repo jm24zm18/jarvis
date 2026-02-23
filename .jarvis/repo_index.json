@@ -310,7 +310,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-23T02:16:26.473425+00:00",
+  "generated_at": "2026-02-23T09:28:59.232327+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -602,6 +602,10 @@
     {
       "file": "src/jarvis/db/migrations/075_memory_reflection_watermarks.sql",
       "number": 75
+    },
+    {
+      "file": "src/jarvis/db/migrations/076_feature_build_capsule.sql",
+      "number": 76
     }
   ],
   "protected_modules": [
