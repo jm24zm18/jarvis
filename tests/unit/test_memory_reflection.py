@@ -61,7 +61,7 @@ def test_proactive_reflection_generates_worldview_and_auto_prunes():
             refs=[message_id],
             confidence="high",
         )
-        stored = store.upsert_item(conn, thread_id, item)
+        store.upsert_item(conn, thread_id, item)
         # hard-code a stale row that should be pruned by reflection
         stale = StateItem(
             uid="",
@@ -96,7 +96,10 @@ def test_proactive_reflection_generates_worldview_and_auto_prunes():
         ).fetchone()
         assert pruned and pruned["n"] == 0
         watermark = conn.execute(
-            "SELECT last_insight_count, last_pruned_count FROM memory_reflection_watermarks WHERE thread_id=?",
+            (
+                "SELECT last_insight_count, last_pruned_count "
+                "FROM memory_reflection_watermarks WHERE thread_id=?"
+            ),
             (thread_id,),
         ).fetchone()
         assert watermark["last_insight_count"] >= 1

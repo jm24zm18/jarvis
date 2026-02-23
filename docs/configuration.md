@@ -80,6 +80,15 @@ Source of truth: `src/jarvis/config.py`.
 | `FEATURE_BUILD_FAIL_FAST_PLACEHOLDER_REPEAT` | int | `1` | When `1`, repeated consecutive `placeholder_response_after_tool_loop` outcomes fail fast instead of re-scheduling retries. |
 | `FEATURE_BUILD_DELIVERABLE_GATE_ENABLED` | int | `1` | When `1`, feature-build runs require deliverable evidence (diff/no-op blockers + safety checks) before success finalization. |
 | `FEATURE_BUILD_LOOP_CAP_THRESHOLD` | int | `8` | Max repeated identical tool-call signature count per build attempt before forcing terminal synthesis fallback. |
+| `FEATURE_BUILD_USE_RLM` | int | `0` | When `1`, enable pre-build RLM decomposition (requires `RLM_ENABLED=1`). |
+| `RLM_ENABLED` | int | `0` | Toggles the RLM decomposition runtime (must match `FEATURE_BUILD_USE_RLM` to activate). |
+| `RLM_CONTEXT_FILES_LIMIT` | int | `8` | Max number of source files injected as context for decomposition prompts. |
+| `RLM_CONTEXT_TOKEN_LIMIT` | int | `4000` | Token budget for context injection (4 chars/token approximation). |
+| `RLM_PROMPT_TOKEN_LIMIT` | int | `8000` | Max `max_tokens` passed to the provider when building prompts. |
+| `RLM_VALIDATION_ATTEMPTS` | int | `2` | Total provider attempts (initial + repairs) before failing with human escalation. |
+| `RLM_MAX_REFINEMENTS` | int | `3` | Max number of repair prompts allowed when validation errors occur. |
+| `RLM_TIMEOUT_S` | int | `120` | Timeout (seconds) for each decomposition provider call. |
+| `RLM_BUDGET_PER_1K_TOKENS` | float | `0.02` | Conservative cost estimate per 1,000 tokens for budgeting and logging. |
 | `HUMAN_ESCALATION_CHANNEL_TYPE` | str | `whatsapp` | Outbound channel used for escalation dispatch (`whatsapp`, `telegram`, etc. as configured). |
 | `HUMAN_ESCALATION_TARGETS` | str | `` | Comma-separated external channel IDs to notify when escalation is requested. |
 | `HUMAN_ESCALATION_DEFAULT_PRIORITY` | str | `normal` | Default escalation priority when caller does not provide one. |

@@ -4,41 +4,52 @@ import os
 import shutil
 import sqlite3
 import subprocess
-import psutil
 from typing import Any
+
+import psutil
+
 
 def get_system_snapshot() -> dict[str, Any]:
     """Returns a snapshot of OS, hardware, and resource usage."""
     cpu_count = os.cpu_count()
-    load_avg = os.getloadavg() if hasattr(os, 'getloadavg') else (0, 0, 0)
+    load_avg = os.getloadavg() if hasattr(os, "getloadavg") else (0, 0, 0)
     mem = psutil.virtual_memory()
     disk = shutil.disk_usage("/")
-    
+    platform = "Windows"
+    if os.name != "nt":
+        platform = str(
+            subprocess.check_output(["uname", "-a"], text=True)
+        ).strip()
+
     return {
         "os": os.name,
-        "platform": str(subprocess.check_output(["uname", "-a"], text=True)).strip() if os.name != 'nt' else "Windows",
+        "platform": platform,
         "cpu_count": cpu_count,
         "load_average": load_avg,
         "memory": {
             "total": mem.total,
             "available": mem.available,
-            "percent": mem.percent
+            "percent": mem.percent,
         },
         "disk": {
             "total": disk.total,
             "used": disk.used,
-            "free": disk.free
+            "free": disk.free,
         },
-        "processes_count": len(psutil.pids())
+        "processes_count": len(psutil.pids()),
     }
 
 def get_network_status() -> dict[str, Any]:
     """Returns basic network status (interfaces, connectivity)."""
     # Simple connectivity check
     try:
-        subprocess.check_call(["ping", "-c", "1", "8.8.8.8"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.check_call(
+            ["ping", "-c", "1", "8.8.8.8"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         internet = True
-    except:
+    except subprocess.SubprocessError:
         internet = False
         
     return {
@@ -55,7 +66,10 @@ def get_calendar_context(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     # Placeholder for future calendar integration
     return []
 
-def environmental_awareness_tool(conn: sqlite3.Connection, **kwargs) -> dict[str, Any]:
+def environmental_awareness_tool(
+    conn: sqlite3.Connection,
+    **kwargs: object,
+) -> dict[str, Any]:
     """Main entry point for environmental awareness tool."""
     return {
         "system": get_system_snapshot(),

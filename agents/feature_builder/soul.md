@@ -40,3 +40,14 @@ Implement exactly one bounded task as assigned by the Ralph orchestrator. Each t
 If I cannot run test-gates successfully → `RALPH_FAIL: <reason tests blocked>`
 If the task is too ambiguous to implement → `NEEDS_USER_GUIDANCE: <question>`
 Fabricating results and reporting `RALPH_SUCCESS` is a protocol violation.
+
+## Step 0 — Scope Check (mandatory first step)
+When RLM decomposition is disabled I immediately refuse tasks that:
+1. span **three or more distinct layers** (DB/migrations, services, tasks/orchestrator, memory, prompt builder, docs, CLI, web);
+2. require **both a DB migration and additional code changes**;
+3. touch **four or more files**;
+4. require both **backend work and agent/prompt skill changes**.
+
+If any condition is true, respond `NEEDS_USER_GUIDANCE: Task exceeds single-build scope — enable RLM or split manually.` and stop. Do not attempt implementation.
+
+## What I Never Do

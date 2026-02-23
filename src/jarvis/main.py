@@ -28,9 +28,9 @@ from jarvis.config import get_settings, validate_settings_for_env
 from jarvis.db.connection import get_conn
 from jarvis.db.migrations.runner import run_migrations
 from jarvis.db.queries import (
+    clear_stale_restarting_flag,
     ensure_root_user,
     ensure_system_state,
-    clear_stale_restarting_flag,
     prune_whatsapp_thread_map_orphans,
     upsert_whatsapp_instance,
 )

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
+    create_human_escalation,
     create_thread,
     ensure_channel,
     get_feature_build_run,
@@ -20,6 +23,10 @@ from jarvis.db.queries import (
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
+from jarvis.rlm.config import build_rlm_config
+from jarvis.rlm.decomposer import compute_run_hash, context_reasons, select_context_files
+from jarvis.rlm.service import AsyncRLMService
+from jarvis.services.feature_requests import enqueue_feature_build, split_feature_request
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +183,106 @@ def _emit_build_event(
     )
 
 
+def _emit_rlm_event(
+    *,
+    conn,
+    trace_id: str,
+    thread_id: str | None,
+    event_type: str,
+    payload: dict[str, object],
+) -> None:
+    emit_event(
+        conn,
+        EventInput(
+            trace_id=trace_id,
+            span_id=new_id("spn"),
+            parent_span_id=None,
+            thread_id=thread_id,
+            event_type=event_type,
+            component="rlm",
+            actor_type="system",
+            actor_id="rlm",
+            payload_json=json.dumps(payload),
+            payload_redacted_json=json.dumps(redact_payload(payload)),
+        ),
+    )
+
+
+def _get_rlm_trajectory(
+    conn: sqlite3.Connection,
+    feature_id: str,
+    run_hash: str,
+) -> dict[str, object] | None:
+    row = conn.execute(
+        "SELECT * FROM rlm_trajectories WHERE feature_id=? AND run_hash=? LIMIT 1",
+        (feature_id, run_hash),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _create_rlm_trajectory(
+    conn: sqlite3.Connection,
+    *,
+    feature_id: str,
+    run_id: str,
+    trace_id: str,
+    run_hash: str,
+    context_paths: list[str],
+    context_reasons_json: str,
+) -> dict[str, object]:
+    trajectory_id = new_id("trc")
+    now = now_iso()
+    try:
+        conn.execute(
+            (
+                "INSERT INTO rlm_trajectories("
+                "id, feature_id, run_id, trace_id, run_hash, status, context_paths_json, "
+                "context_reasons_json, error, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                trajectory_id,
+                feature_id,
+                run_id,
+                trace_id,
+                run_hash,
+                "in_progress",
+                json.dumps(context_paths),
+                context_reasons_json,
+                "",
+                now,
+                now,
+            ),
+        )
+    except sqlite3.IntegrityError:
+        existing = _get_rlm_trajectory(conn, feature_id, run_hash)
+        if existing is not None:
+            return existing
+        raise
+    return _get_rlm_trajectory(conn, feature_id, run_hash)  # type: ignore[return-value]
+
+
+def _update_rlm_trajectory(
+    conn: sqlite3.Connection,
+    trajectory_id: str,
+    **fields: str,
+) -> None:
+    if not fields:
+        return
+    updates = []
+    params: list[object] = []
+    for key, value in fields.items():
+        updates.append(f"{key}=?")
+        params.append(value)
+    updates.append("updated_at=?")
+    params.append(now_iso())
+    params.append(trajectory_id)
+    conn.execute(
+        f"UPDATE rlm_trajectories SET {', '.join(updates)} WHERE id=?",
+        tuple(params),
+    )
+
+
 def _resolve_retry_delay_seconds(attempt_number: int) -> int:
     settings = get_settings()
     raw = str(settings.feature_build_retry_backoff_seconds).strip()
@@ -211,6 +318,17 @@ def run_feature_build(
 
     try:
         settings = get_settings()
+        rlm_config = build_rlm_config(settings)
+        rlm_result = _decompose_and_split(
+            run_id=run_id,
+            feature_id=feature_id,
+            trace_id=trace_id,
+            actor_id=actor_id,
+            settings=settings,
+            rlm_config=rlm_config,
+        )
+        if rlm_result is not None:
+            return rlm_result
         with get_conn() as conn:
             run_row = get_feature_build_run(conn, run_id)
             if run_row is None:
@@ -507,4 +625,208 @@ def dispatch_due_feature_build_retries(limit: int = 50) -> dict[str, object]:
         "dispatched": dispatched,
         "rescheduled": rescheduled,
         "failed": failed,
+    }
+
+
+def _decompose_and_split(
+    *,
+    run_id: str,
+    feature_id: str,
+    trace_id: str,
+    actor_id: str,
+    settings,
+    rlm_config,
+) -> dict[str, object] | None:
+    if not rlm_config.active:
+        return None
+    with get_conn() as conn:
+        feature_row = conn.execute(
+            "SELECT id, title, description FROM bug_reports WHERE id=? AND kind='feature' LIMIT 1",
+            (feature_id,),
+        ).fetchone()
+    if feature_row is None:
+        return None
+    feature_title = str(feature_row["title"] or "")
+    feature_description = str(feature_row["description"] or "")
+    context_files = select_context_files(feature_description, rlm_config)
+    run_hash = compute_run_hash(feature_id, feature_description, context_files)
+    context_paths = [item.path for item in context_files]
+    reasons_json = json.dumps(context_reasons(context_files))
+    with get_conn() as conn:
+        trajectory = _get_rlm_trajectory(conn, feature_id, run_hash)
+        if trajectory is not None:
+            status = str(trajectory["status"])
+            child_ids_json = str(trajectory.get("child_ids_json") or "")
+            if status == "completed" and child_ids_json:
+                return {
+                    "run_id": run_id,
+                    "feature_id": feature_id,
+                    "trace_id": trace_id,
+                    "status": "decomposed",
+                    "child_ids": json.loads(child_ids_json),
+                }
+            if status == "in_progress":
+                return None
+        trajectory = _create_rlm_trajectory(
+            conn,
+            feature_id=feature_id,
+            run_id=run_id,
+            trace_id=trace_id,
+            run_hash=run_hash,
+            context_paths=context_paths,
+            context_reasons_json=reasons_json,
+        )
+    trajectory_id = str(trajectory["id"])
+    service = AsyncRLMService(settings)
+    result = asyncio.run(
+        service.decompose(feature_id, feature_title, feature_description, context_files)
+    )
+    with get_conn() as conn:
+        run_row = get_feature_build_run(conn, run_id)
+        thread_id = str(run_row["thread_id"] or "") if run_row else ""
+        if result["status"] == "success":
+            child_ids = split_feature_request(
+                conn,
+                parent_id=feature_id,
+                subtasks=result["subtasks"],
+                actor_id=actor_id,
+                split_reason="rlm",
+            )
+            usage_json = json.dumps(result.get("usage") or {})
+            _update_rlm_trajectory(
+                conn,
+                trajectory_id,
+                status="completed",
+                prompt_hash=result.get("prompt_hash", ""),
+                results_raw=result.get("raw", ""),
+                usage_json=usage_json,
+                child_ids_json=json.dumps(child_ids),
+                validation_errors_json="[]",
+                error="",
+                provider=result.get("provider", ""),
+            )
+            update_feature_build_run(
+                conn,
+                run_id,
+                status="decomposed",
+                summary=f"Decomposed into {len(child_ids)} child feature builds.",
+                terminal_reason="decomposed",
+                last_event_type="feature.build.decomposed",
+            )
+            _emit_build_event(
+                conn=conn,
+                trace_id=trace_id,
+                thread_id=thread_id or None,
+                event_type="feature.build.decomposed",
+                payload={
+                    "run_id": run_id,
+                    "feature_id": feature_id,
+                    "child_ids": child_ids,
+                    "trajectory_id": trajectory_id,
+                },
+            )
+            _emit_rlm_event(
+                conn=conn,
+                trace_id=trace_id,
+                thread_id=thread_id or None,
+                event_type="rlm.decompose.complete",
+                payload={
+                    "run_id": run_id,
+                    "feature_id": feature_id,
+                    "trajectory_id": trajectory_id,
+                    "child_ids": child_ids,
+                },
+            )
+            from jarvis.tasks import get_task_runner
+
+            runner = get_task_runner()
+            for child_id in child_ids:
+                enqueue_feature_build(
+                    conn,
+                    child_id,
+                    actor_id=actor_id,
+                    task_runner=runner,
+                )
+            return {
+                "run_id": run_id,
+                "feature_id": feature_id,
+                "trace_id": trace_id,
+                "status": "decomposed",
+                "child_ids": child_ids,
+            }
+        error_code = result.get("error") or "rlm_decompose_failed"
+        usage_json = json.dumps(result.get("usage") or {})
+        validation_errors = result.get("validation_errors") or []
+        _update_rlm_trajectory(
+            conn,
+            trajectory_id,
+            status=result["status"],
+            prompt_hash=result.get("prompt_hash", ""),
+            results_raw=result.get("raw", ""),
+            usage_json=usage_json,
+            validation_errors_json=json.dumps(validation_errors),
+            error=error_code,
+            provider=result.get("provider", ""),
+        )
+        failure_summary = (
+            f"RLM decomposition failed: {error_code}. "
+            + ("; ".join(validation_errors) if validation_errors else "")
+        ).strip()
+        update_feature_build_run(
+            conn,
+            run_id,
+            status="failed",
+            summary=failure_summary[:500],
+            terminal_reason=error_code,
+            last_event_type="feature.build.decompose.failed",
+        )
+        _emit_build_event(
+            conn=conn,
+            trace_id=trace_id,
+            thread_id=thread_id or None,
+            event_type="feature.build.decompose.failed",
+            payload={
+                "run_id": run_id,
+                "feature_id": feature_id,
+                "error": error_code,
+                "validation_errors": validation_errors,
+                "trajectory_id": trajectory_id,
+            },
+        )
+        event_type = (
+            "rlm.decompose.timeout"
+            if result["status"] == "timeout"
+            else "rlm.decompose.failed"
+        )
+        _emit_rlm_event(
+            conn=conn,
+            trace_id=trace_id,
+            thread_id=thread_id or None,
+            event_type=event_type,
+            payload={
+                "run_id": run_id,
+                "feature_id": feature_id,
+                "trajectory_id": trajectory_id,
+                "error": error_code,
+                "validation_errors": validation_errors,
+            },
+        )
+        create_human_escalation(
+            conn,
+            thread_id=thread_id,
+            trace_id=trace_id,
+            requested_by_actor_id=actor_id,
+            source_agent_id="rlm",
+            reason=error_code,
+            message=failure_summary,
+            channel_type=str(settings.human_escalation_channel_type or "whatsapp"),
+            target_external_id=str(settings.human_escalation_targets or ""),
+            priority=str(settings.human_escalation_default_priority or "normal"),
+        )
+    return {
+        "run_id": run_id,
+        "feature_id": feature_id,
+        "trace_id": trace_id,
+        "status": "failed",
+        "error": error_code,
     }

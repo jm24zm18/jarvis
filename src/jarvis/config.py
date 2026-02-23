@@ -117,6 +117,16 @@ class Settings(BaseSettings):
         alias="FEATURE_BUILD_REPEAT_LIMIT",
         default=2,
     )
+    feature_build_use_rlm: int = Field(alias="FEATURE_BUILD_USE_RLM", default=0)
+    rlm_enabled: int = Field(alias="RLM_ENABLED", default=0)
+    rlm_context_files_limit: int = Field(alias="RLM_CONTEXT_FILES_LIMIT", default=8)
+    rlm_context_token_limit: int = Field(alias="RLM_CONTEXT_TOKEN_LIMIT", default=4000)
+    rlm_prompt_token_limit: int = Field(alias="RLM_PROMPT_TOKEN_LIMIT", default=8000)
+    rlm_validation_attempts: int = Field(alias="RLM_VALIDATION_ATTEMPTS", default=2)
+    rlm_max_attempts: int = Field(alias="RLM_MAX_ATTEMPTS", default=2)
+    rlm_max_refinements: int = Field(alias="RLM_MAX_REFINEMENTS", default=3)
+    rlm_timeout_s: int = Field(alias="RLM_TIMEOUT_S", default=120)
+    rlm_budget_per_1k_tokens: float = Field(alias="RLM_BUDGET_PER_1K_TOKENS", default=0.02)
     feature_build_require_test_gates: int = Field(
         alias="FEATURE_BUILD_REQUIRE_TEST_GATES",
         default=1,
@@ -321,7 +331,10 @@ class Settings(BaseSettings):
         alias="MEMORY_REFLECTION_PRUNE_THRESHOLD",
         default=0.35,
     )
-    memory_reflection_prune_age_days: int = Field(alias="MEMORY_REFLECTION_PRUNE_AGE_DAYS", default=30)
+    memory_reflection_prune_age_days: int = Field(
+        alias="MEMORY_REFLECTION_PRUNE_AGE_DAYS",
+        default=30,
+    )
 
     searxng_base_url: str = Field(alias="SEARXNG_BASE_URL", default="http://localhost:8080")
     searxng_api_key: str = Field(alias="SEARXNG_API_KEY", default="")

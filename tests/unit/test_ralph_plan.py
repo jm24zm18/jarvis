@@ -9,7 +9,6 @@ import pytest
 
 from jarvis.selfupdate.ralph_plan import mark_task_done, mark_task_failed, next_ralph_task
 
-
 SAMPLE_PLAN = textwrap.dedent("""\
     # Jarvis Plan
 

@@ -301,6 +301,20 @@ class ApprovalDecisionBody(BaseModel):
     note: str = ""
 
 
+class FeatureSplitSubtask(BaseModel):
+    title: str
+    description: str
+    acceptance_criteria: str
+    target_files: list[str]
+    estimated_lines: int | None = None
+
+
+class FeatureSplitBody(BaseModel):
+    subtasks: list[FeatureSplitSubtask]
+    dry_run: bool = False
+    split_reason: str = "manual"
+
+
 @router.patch("/feature-requests/{feature_id}/approval")
 def set_feature_approval(
     feature_id: str,
@@ -335,6 +349,40 @@ def trigger_feature_build(
             task_runner=get_task_runner(),
         )
     return result
+
+
+@router.post("/feature-requests/{feature_id}/split")
+def split_feature_request_endpoint(
+    feature_id: str,
+    body: FeatureSplitBody,
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    from jarvis.services.feature_requests import split_feature_request
+
+    subtasks = [subtask.model_dump() for subtask in body.subtasks]
+    with get_conn() as conn:
+        if body.dry_run:
+            conn.execute("SAVEPOINT dry_feature_split")
+            try:
+                child_ids = split_feature_request(
+                    conn,
+                    parent_id=feature_id,
+                    subtasks=subtasks,
+                    actor_id=ctx.user_id,
+                    split_reason=body.split_reason,
+                )
+            finally:
+                conn.execute("ROLLBACK TO dry_feature_split")
+                conn.execute("RELEASE dry_feature_split")
+        else:
+            child_ids = split_feature_request(
+                conn,
+                parent_id=feature_id,
+                subtasks=subtasks,
+                actor_id=ctx.user_id,
+                split_reason=body.split_reason,
+            )
+    return {"parent_id": feature_id, "child_ids": child_ids, "dry_run": body.dry_run}
 
 
 @router.get("/feature-requests/{feature_id}/build-runs")

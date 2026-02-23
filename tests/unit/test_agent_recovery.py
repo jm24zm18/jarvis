@@ -137,7 +137,6 @@ def test_reaper_marks_stale_and_requeues_attempt(monkeypatch) -> None:
     assert str(row["status"]) == "abandoned"
     assert str(row["failure_kind"]) == "stale_timeout"
     assert recovered_note is not None
-    payload = json.loads(str(recovered_note["payload_json"]))
 
 
 def test_git_changed_files_subtracts_baseline(monkeypatch) -> None:

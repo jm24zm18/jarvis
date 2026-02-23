@@ -1781,7 +1781,15 @@ def set_feature_request_approval(
 # Feature request build run helpers
 # ---------------------------------------------------------------------------
 
-BUILD_RUN_STATUSES = {"queued", "running", "succeeded", "failed", "timed_out", "cancelled"}
+BUILD_RUN_STATUSES = {
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "timed_out",
+    "cancelled",
+    "decomposed",
+}
 BUILD_RUN_RETRY_STATES = {"none", "scheduled", "running", "exhausted"}
 
 

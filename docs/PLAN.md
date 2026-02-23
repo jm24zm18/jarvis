@@ -15,6 +15,9 @@
 - [ ] Run full quality gates and verify env rollout values for HUMAN_ESCALATION_TARGETS in each deployment environment
       Accept: make lint, make typecheck, make test-gates, make docs-check all pass; runbook section for HUMAN_ESCALATION_TARGETS configuration is verified and documented
 
+- [ ] Implement RLM decomposition + child build pipeline for large feature scopes
+      Accept: new `rlm` package + migration 077, `feature_request_build_runs` gains `decomposed` status, RLM config/docs updated, admin `/split` route implemented, and unit tests (`test_rlm_*`, `test_feature_split`, `test_feature_build_rlm_routing`) cover the new behavior.
+
 ## Mission and Operating Model
 
 Deliver a self-improving Jarvis that combines deterministic governance with agentic execution across self-update, memory, and WhatsApp channels.

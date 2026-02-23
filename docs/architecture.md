@@ -59,6 +59,12 @@
 7. Feature-build finalization emits `feature.build.terminal_synthesis` and enforces a deliverable gate (diff/no-op blockers + protected-path checks) before success.
 8. Repeated consecutive `placeholder_response_after_tool_loop` outcomes fail fast via `feature.build.retry.denied` instead of consuming all retry slots.
 
+## Feature-build decomposition pipeline
+
+- When `RLM_ENABLED` and `FEATURE_BUILD_USE_RLM` are both true, Ralph runs `_decompose_and_split` before starting the main agent. The new RLM service reads the feature spec, injects the most relevant context files (anchors + explicitly referenced paths), and calls the provider via `ProviderRouter` to produce a JSON plan with 3-6 atomic subtasks. Each subtask is validated against the injected context, allowed_paths, and acceptance-criteria heuristics; failures trigger a repair prompt up to the configured attempt limit. Timeouts or validation errors terminate the parent run with human escalation.
+- Successful decompositions insert a new `rlm_trajectories` row (featuring the spec/context hash, prompt hash, sanitized usage, and child IDs) and mark the parent build run status `decomposed` before splitting into child feature requests. Child builds reuse the existing `enqueue_feature_build` path so deliverable gate, capsule fail-fast, and human escalation remain unchanged. Duplicate decompositions are detected through the `(feature_id, run_hash)` unique constraint, avoiding repeated child creation.
+- The new admin route `POST /api/v1/feature-requests/{id}/split` (admin-only + dry-run capable) exposes the splitting logic for manual recovery, and agents drop a `NEEDS_USER_GUIDANCE` signal when RLM is disabled but the spec spans ≥3 layers, ≥4 files, or both migration+code/backends+prompt updates.
+
 ## Agent Run Reliability Flow
 
 1. `agent_step` creates a durable attempt row in `agent_run_attempts` before orchestration starts.

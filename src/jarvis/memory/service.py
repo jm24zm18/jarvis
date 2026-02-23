@@ -940,8 +940,12 @@ class MemoryService:
         return [
             {
                 "thread_id": str(row["thread_id"]),
-                "last_message": str(row["last_message"]) if row["last_message"] is not None else "",
-                "last_reflected_at": str(row["last_reflected_at"]) if row["last_reflected_at"] else "",
+                "last_message": (
+                    str(row["last_message"]) if row["last_message"] is not None else ""
+                ),
+                "last_reflected_at": (
+                    str(row["last_reflected_at"]) if row["last_reflected_at"] else ""
+                ),
             }
             for row in candidates
         ]
@@ -1117,7 +1121,11 @@ class MemoryService:
                         str(row["refs_json"]),
                         str(row["confidence"]),
                         str(row["replaced_by"]) if row["replaced_by"] is not None else None,
-                        str(row["supersession_evidence"]) if row["supersession_evidence"] is not None else None,
+                        (
+                            str(row["supersession_evidence"])
+                            if row["supersession_evidence"] is not None
+                            else None
+                        ),
                         int(row["conflict"]),
                         int(row["pinned"]),
                         str(row["source"]),
@@ -1129,7 +1137,11 @@ class MemoryService:
                         int(row["access_count"]),
                         int(row["conflict_count"]),
                         str(row["agent_id"]),
-                        str(row["last_accessed_at"]) if row["last_accessed_at"] is not None else None,
+                        (
+                            str(row["last_accessed_at"])
+                            if row["last_accessed_at"] is not None
+                            else None
+                        ),
                         archived_at,
                         "reflection_low_importance",
                     ),

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -10,10 +12,14 @@ from jarvis.config import get_settings
 from jarvis.db.queries import (
     create_feature_build_run,
     list_feature_build_runs,
+    now_iso,
     reconcile_stale_feature_build_runs,
     set_feature_request_approval,
     update_feature_build_run,
 )
+from jarvis.events.models import EventInput
+from jarvis.events.writer import emit_event, redact_payload
+from jarvis.ids import new_id
 
 
 def approve_feature_request(
@@ -155,3 +161,102 @@ def reconcile_feature_build_runs(
         stale_after_seconds=stale_after_seconds,
         limit=limit,
     )
+
+
+def split_feature_request(
+    conn: sqlite3.Connection,
+    parent_id: str,
+    *,
+    subtasks: list[dict[str, Any]],
+    actor_id: str,
+    split_reason: str = "manual",
+) -> list[str]:
+    row = conn.execute(
+        (
+            "SELECT parent_id, priority, reporter_id, assignee_agent, thread_id, trace_id, "
+            "approval_status FROM bug_reports WHERE id=? LIMIT 1"
+        ),
+        (parent_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Parent feature not found")
+    if row["parent_id"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot split a child feature request (no grandchildren allowed)",
+        )
+    priority = str(row["priority"] or "medium")
+    reporter_id = str(row["reporter_id"] or "")
+    assignee_agent = row["assignee_agent"]
+    thread_id = str(row["thread_id"] or "")
+    trace_id = str(row["trace_id"] or "")
+    approval_status = str(row["approval_status"] or "approved")
+    child_ids: list[str] = []
+    now = now_iso()
+    for idx, subtask in enumerate(subtasks, start=1):
+        title = str(subtask.get("title") or "").strip()
+        description = str(subtask.get("description") or "").strip()
+        acceptance = str(subtask.get("acceptance_criteria") or "").strip()
+        target_files = subtask.get("target_files") or []
+        if isinstance(target_files, str):
+            target_files = [target_files]
+        target_list = ", ".join(
+            str(path).strip() for path in target_files if str(path).strip()
+        )
+        if not title:
+            raise HTTPException(status_code=400, detail=f"Subtask {idx} missing title.")
+        if not description:
+            raise HTTPException(status_code=400, detail=f"Subtask {idx} missing description.")
+        description_parts = [description]
+        if acceptance:
+            description_parts.append(f"Acceptance criteria: {acceptance}")
+        if target_list:
+            description_parts.append(f"Target files: {target_list}")
+        child_description = "\n\n".join(description_parts)
+        child_id = new_id("bug")
+        conn.execute(
+            (
+                "INSERT INTO bug_reports("
+                "id, kind, title, description, status, priority, reporter_id, assignee_agent, "
+                "thread_id, trace_id, parent_id, approval_status, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            ),
+            (
+                child_id,
+                "feature",
+                title,
+                child_description,
+                "open",
+                priority,
+                reporter_id,
+                assignee_agent,
+                thread_id or None,
+                trace_id or None,
+                parent_id,
+                approval_status,
+                now,
+                now,
+            ),
+        )
+        child_ids.append(child_id)
+    payload = {
+        "parent_id": parent_id,
+        "child_ids": child_ids,
+        "split_reason": split_reason,
+    }
+    emit_event(
+        conn,
+        EventInput(
+            trace_id=trace_id,
+            span_id=new_id("spn"),
+            parent_span_id=None,
+            thread_id=thread_id or None,
+            event_type="feature.split",
+            component="feature_build",
+            actor_type="system",
+            actor_id=actor_id,
+            payload_json=json.dumps(payload),
+            payload_redacted_json=json.dumps(redact_payload(payload)),
+        ),
+    )
+    return child_ids

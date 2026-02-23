@@ -310,7 +310,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-23T09:28:59.232327+00:00",
+  "generated_at": "2026-02-23T23:25:12.131837+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -606,6 +606,10 @@
     {
       "file": "src/jarvis/db/migrations/076_feature_build_capsule.sql",
       "number": 76
+    },
+    {
+      "file": "src/jarvis/db/migrations/077_rlm_and_parent.sql",
+      "number": 77
     }
   ],
   "protected_modules": [

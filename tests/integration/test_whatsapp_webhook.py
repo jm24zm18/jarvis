@@ -163,6 +163,8 @@ def test_inbound_strict_mode_triggers_human_escalation(monkeypatch) -> None:
         os.environ["HUMAN_ESCALATION_CHANNEL_TYPE"] = "web"
         get_settings.cache_clear()
 
+        from jarvis.channels.whatsapp import router as whatsapp_router
+
         def fake_request(**kwargs: object) -> dict[str, object]:
             called.append(kwargs)
             return {"ok": True, "count": 1}
