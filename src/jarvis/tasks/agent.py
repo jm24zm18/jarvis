@@ -20,6 +20,7 @@ from jarvis.db.connection import get_conn  # noqa: E402
 from jarvis.db.queries import (  # noqa: E402
     create_feature_request,
     finalize_feature_build_run_by_trace,
+    get_attempt_initial_dirty_files,
     get_feature_build_run_by_trace,
     now_iso,
     update_feature_build_run,
@@ -52,6 +53,7 @@ from jarvis.tools.persona import update_persona  # noqa: E402
 from jarvis.tools.registry import ToolRegistry  # noqa: E402
 from jarvis.tools.runtime import ToolRuntime  # noqa: E402
 from jarvis.tools.session import session_history, session_list, session_send  # noqa: E402
+from jarvis.tools.thread_logs import summarize_thread_logs  # noqa: E402
 from jarvis.tools.web_search import web_search  # noqa: E402
 
 _DEFAULT_EXEC_HOST_TIMEOUT_S = 120
@@ -190,7 +192,7 @@ def _has_explicit_noop_with_blockers(text: str) -> bool:
     return no_change and blocked
 
 
-def _git_changed_files() -> tuple[list[str], str | None]:
+def _git_changed_files(baseline: set[str] | None = None) -> tuple[list[str], str | None]:
     try:
         proc = subprocess.run(
             ["git", "diff", "--name-only"],
@@ -204,7 +206,21 @@ def _git_changed_files() -> tuple[list[str], str | None]:
     if proc.returncode != 0:
         return [], f"git diff failed: {proc.stderr.strip() or proc.stdout.strip()}"
     files = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    if baseline:
+        files = [path for path in files if path not in baseline]
     return files, None
+
+
+def _capture_dirty_files_snapshot() -> tuple[set[str], str | None]:
+    files, err = _git_changed_files()
+    return set(files), err
+
+
+def _serialize_dirty_files(files: set[str]) -> str | None:
+    try:
+        return json.dumps(sorted(files))
+    except Exception:
+        return None
 
 
 def _is_placeholder_terminal_message(text: str) -> bool:
@@ -245,7 +261,9 @@ def _evaluate_feature_build_deliverable_gate(
     if not message_text or _is_placeholder_terminal_message(message_text):
         return False, "insufficient_deliverable_evidence", checks
 
-    changed_files, diff_error = _git_changed_files()
+    baseline_list = get_attempt_initial_dirty_files(conn, trace_id=trace_id)
+    baseline_set = set(baseline_list or [])
+    changed_files, diff_error = _git_changed_files(baseline=baseline_set)
     checks["git_diff_error"] = diff_error or ""
     checks["changed_files"] = changed_files
     checks["explicit_noop_with_blockers"] = _has_explicit_noop_with_blockers(message_text)
@@ -650,12 +668,15 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                 )
                 raise RuntimeError(f"trace already running: {trace_id}")
             attempt = next_attempt_number(conn, trace_id=trace_id)
+            baseline_files, _ = _capture_dirty_files_snapshot()
+            baseline_json = _serialize_dirty_files(baseline_files)
             start_attempt(
                 conn,
                 trace_id=trace_id,
                 thread_id=thread_id,
                 actor_id=actor_id,
                 attempt=attempt,
+                initial_dirty_files=baseline_json,
             )
             conn.execute(
                 (
@@ -1270,6 +1291,16 @@ def _build_registry(
             "trace_id": target_trace_id,
         }
 
+    async def tool_thread_logs(args: dict[str, object]) -> dict[str, object]:
+        raw_thread_id = args.get("thread_id")
+        target_thread_id = (
+            str(raw_thread_id).strip()
+            if isinstance(raw_thread_id, str) and raw_thread_id.strip()
+            else thread_id
+        )
+        summary = summarize_thread_logs(conn, target_thread_id)
+        return {"summary": summary, "thread_id": target_thread_id}
+
     async def tool_skill_list(args: dict[str, object]) -> dict[str, Any]:
         scope = str(args["scope"]) if isinstance(args.get("scope"), str) else actor_id
         raw_pinned_only = args.get("pinned_only")
@@ -1534,6 +1565,20 @@ def _build_registry(
                 "required": ["title"],
             },
         )
+    registry.register(
+        "thread_logs",
+        "Summarize recent messages/events for a thread",
+        tool_thread_logs,
+        parameters={
+            "type": "object",
+            "properties": {
+                "thread_id": {
+                    "type": "string",
+                    "description": "Thread ID (defaults to current thread)",
+                }
+            },
+        },
+    )
     registry.register(
         "web_search",
         "Search the web using SearXNG and return results",

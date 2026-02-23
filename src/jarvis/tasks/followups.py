@@ -212,16 +212,7 @@ def followup_heartbeat_tick() -> dict[str, object]:
     now_dt = datetime.now(UTC)
     idle_threshold = max(0, int(settings.followup_min_idle_seconds))
     limit = max(1, int(settings.followup_max_threads_per_tick))
-
-    _emit(
-        "followup.tick.start",
-        {
-            "max_threads": limit,
-            "idle_seconds": idle_threshold,
-        },
-        thread_id=None,
-        trace_id=trace_id,
-    )
+    emit_idle_ticks = int(settings.followup_emit_idle_ticks) == 1
 
     with get_conn() as conn:
         rows = conn.execute(
@@ -234,6 +225,39 @@ def followup_heartbeat_tick() -> dict[str, object]:
             ),
             (limit,),
         ).fetchall()
+
+    if not rows:
+        result = {
+            "ok": True,
+            "trace_id": trace_id,
+            "checked": 0,
+            "sent": 0,
+            "no_reply": 0,
+            "skipped": 0,
+            "errors": 0,
+        }
+        if emit_idle_ticks:
+            _emit(
+                "followup.tick.start",
+                {
+                    "max_threads": limit,
+                    "idle_seconds": idle_threshold,
+                },
+                thread_id=None,
+                trace_id=trace_id,
+            )
+            _emit("followup.tick.end", result, thread_id=None, trace_id=trace_id)
+        return result
+
+    _emit(
+        "followup.tick.start",
+        {
+            "max_threads": limit,
+            "idle_seconds": idle_threshold,
+        },
+        thread_id=None,
+        trace_id=trace_id,
+    )
 
     router = ProviderRouter(
         build_primary_provider(settings),

@@ -22,14 +22,15 @@ def start_attempt(
     thread_id: str,
     actor_id: str,
     attempt: int,
+    initial_dirty_files: str | None = None,
 ) -> None:
     stamp = now_iso()
     conn.execute(
         (
             "INSERT INTO agent_run_attempts("
             "trace_id, thread_id, actor_id, attempt, status, phase, started_at, "
-            "last_heartbeat_at, retry_count"
-            ") VALUES(?,?,?,?,?,?,?,?,?)"
+            "last_heartbeat_at, retry_count, initial_dirty_files"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?)"
         ),
         (
             trace_id,
@@ -41,6 +42,7 @@ def start_attempt(
             stamp,
             stamp,
             max(0, attempt - 1),
+            initial_dirty_files,
         ),
     )
 

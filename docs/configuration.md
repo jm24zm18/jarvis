@@ -65,6 +65,7 @@ Source of truth: `src/jarvis/config.py`.
 | `FOLLOWUP_HEARTBEAT_INTERVAL_SECONDS` | int | `300` | Interval for proactive follow-up heartbeat evaluation (`0` disables). |
 | `FOLLOWUP_MAX_THREADS_PER_TICK` | int | `20` | Max enabled threads evaluated each follow-up heartbeat tick. |
 | `FOLLOWUP_MIN_IDLE_SECONDS` | int | `300` | Minimum idle age for a thread before follow-up evaluation. |
+| `FOLLOWUP_EMIT_IDLE_TICKS` | int | `0` | Emit `followup.tick.*` events even when no followups are enabled (`1` to keep idle telemetry). |
 | `STALL_DETECT_ENABLED` | int | `1` | Enable periodic runtime stall watchdog and auto-recovery triggers. |
 | `STALL_DETECT_THRESHOLD_SECONDS` | int | `90` | Age threshold for inbound-without-progress before declaring a stall. |
 | `STALL_RECOVERY_COOLDOWN_SECONDS` | int | `600` | Minimum delay between consecutive stall-triggered recovery attempts. |
@@ -165,6 +166,12 @@ Source of truth: `src/jarvis/config.py`.
 | `MEMORY_REVIEW_QUEUE_ENABLED` | int | `1` | Enable conflict queue generation in `memory_review_queue`. |
 | `MEMORY_FAILURE_BRIDGE_ENABLED` | int | `1` | Enable failure capsule bridge into state memory. |
 | `MEMORY_SENTENCE_TRANSFORMERS_MODEL` | str | `all-MiniLM-L6-v2` | Sentence-transformers model used by memory similarity operations. |
+| `MEMORY_REFLECTION_ENABLED` | int | `1` | Enable periodic reflection job that synthesizes worldview/insights. |
+| `MEMORY_REFLECTION_INTERVAL_SECONDS` | int | `21600` | Interval (seconds) between automatic reflection runs. |
+| `MEMORY_REFLECTION_BATCH_SIZE` | int | `10` | Maximum open threads processed per reflection run. |
+| `MEMORY_REFLECTION_INSIGHT_LIMIT` | int | `3` | Max insights synthesized per reflection execution. |
+| `MEMORY_REFLECTION_PRUNE_THRESHOLD` | float | `0.35` | Importance score threshold for reflection-driven pruning. |
+| `MEMORY_REFLECTION_PRUNE_AGE_DAYS` | int | `30` | Minimum age (days) for state items considered for pruning. |
 | `SEARXNG_BASE_URL` | str | `http://localhost:8080` | SearXNG base URL. |
 | `SEARXNG_API_KEY` | str | `` | SearXNG API key. |
 | `SEARXNG_API_KEY_HEADER` | str | `X-API-Key` | SearXNG API key header name. |
@@ -241,6 +248,10 @@ Source of truth: `src/jarvis/config.py`.
 | `EXEC_HOST_MAX_OUTPUT_BYTES` | int | `1000000` | Output cap per command. |
 | `EXEC_HOST_MAX_MEMORY_MB` | int | `512` | Memory cap. |
 | `EXEC_HOST_MAX_CPU_SECONDS` | int | `120` | CPU time cap. |
+| `EXEC_HOST_FULL_LOG_MAX_BYTES` | int | `262144` | Max bytes persisted per full host-exec log file before truncation marker is appended. |
+| `EXEC_HOST_LOG_RETENTION_DAYS` | int | `7` | Remove host-exec logs older than this age (`0` disables age-based pruning). |
+| `EXEC_HOST_LOG_RETENTION_MAX_FILES` | int | `1000` | Max host-exec log files retained per directory (`0` disables file-count pruning). |
+| `EXEC_HOST_LOG_RETENTION_MAX_BYTES` | int | `524288000` | Max total retained bytes per directory for host-exec logs (`0` disables size-based pruning). |
 
 ## Production Validation Rules
 

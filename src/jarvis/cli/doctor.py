@@ -13,6 +13,7 @@ from jarvis.cli.checks import (
     check_config_loads,
     check_config_validates,
     check_database,
+    check_db_path_consistency,
     check_env_file,
     check_http_service,
     check_migrations_applied,
@@ -113,6 +114,7 @@ def run_doctor(*, json_output: bool = False, fix: bool = False) -> None:
             db_ok = _run(check_database(settings.app_db))
             if db_ok:
                 _run(check_migrations_applied(settings.app_db))
+                _run(check_db_path_consistency(settings.app_db, PROJECT_ROOT))
         except Exception as exc:
             _run(
                 CheckResult(

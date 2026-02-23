@@ -60,7 +60,27 @@ Tier flow: `working -> episodic -> semantic/procedural`, with low-importance sta
 | WhatsApp Channel + Admin UX | 7 | 0 | 0 |
 | Documentation + Ops Hardening | 2 | 1 | 1 |
 
-_Last updated: 2026-02-22 (Auto-Continue + Human Escalation Routing)_
+_Last updated: 2026-02-22 (Reliability hardening from runtime logs)_
+
+## Execution Update (2026-02-22, Reliability Hardening from Runtime Logs)
+
+- Completed:
+  - Added DB compatibility migration `073_feature_requests_compat_view.sql` (`feature_requests` view over `bug_reports WHERE kind='feature'`).
+  - Added `sqlite3` preflight in `exec_host` to catch unknown/missing tables before execution and return actionable hints (including `feature_requests -> bug_reports` guidance).
+  - Added bounded full-log metadata for host tool results (`full_log_size_bytes`, `full_log_truncated`, `full_log_sha256`) plus new log-size/retention config knobs.
+  - Added periodic host-exec log pruning task (`maintenance.exec_host_logs.pruned`).
+  - Added follow-up idle-noise suppression with `FOLLOWUP_EMIT_IDLE_TICKS=0` default.
+  - Added `task.failed` event emission for background task exceptions in task runner.
+  - Added doctor DB-path consistency check to detect split-brain local DB usage.
+
+- Missing tasks discovered during implementation:
+  - Add optional per-thread/trace dedupe window for repeated identical `task.failed` events.
+  - Add API/UI visibility for exec-host log retention metrics and prune counts.
+  - Evaluate whether compatibility views are needed for additional legacy names beyond `feature_requests`.
+
+- Remaining tasks before handoff:
+  - Run full quality gates (`make lint`, `make typecheck`, `make test-gates`, `make docs-check`).
+  - Validate retention defaults in staging workload (ensure `EXEC_HOST_LOG_RETENTION_*` thresholds match expected disk budget).
 
 ## Execution Update (2026-02-22, Memory Vector Map Upsert Concurrency Hotfix)
 
@@ -262,6 +282,17 @@ _Last updated: 2026-02-22 (Auto-Continue + Human Escalation Routing)_
     - roadmap contract tests extended for build-chat affordances
 - Remaining tasks before handoff:
   - Run full gate sweep (`make test-gates`) before release promotion.
+
+## Execution Update (2026-02-23, Memory Reflection Loop)
+
+- Completed:
+  - Added migration `075_memory_reflection_watermarks.sql` to track last reflection timestamps and counts per thread.
+  - Extended `MemoryService` with reflection helpers (candidate selection, worldview/insight upserts, pruning, watermark recording).
+  - Introduced `proactive_reflection` task + scheduler registration with configurable `MEMORY_REFLECTION_*` knobs plus docs + `.env` defaults.
+  - Added deterministic worldview/insight state item types and ensured renderer/orchestrator orderings recognise them.
+  - Created `tests/unit/test_memory_reflection.py` covering candidate selection, worldview/insight creation, pruning, and watermark persistence.
+- Remaining tasks before handoff:
+  - Run targeted regression tests (`uv run pytest tests/unit/test_memory_reflection.py -v`) and confirm periodic scheduler reflects the new job before any release gating.
 
 ## Execution Update (2026-02-22, WhatsApp Pairing 401 Auto-Recovery + Diagnostics)
 

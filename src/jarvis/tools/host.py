@@ -1,5 +1,7 @@
 """Host command execution tool with safety controls."""
 
+import difflib
+import hashlib
 import json
 import os
 import re
@@ -143,17 +145,123 @@ def _validate_caller_paths(
 
 
 def _write_full_log(start_event_id: str, stdout: str, stderr: str) -> str:
+    return _write_full_log_with_meta(start_event_id, stdout, stderr, max_bytes=262_144)[0]
+
+
+def _write_full_log_with_meta(
+    start_event_id: str, stdout: str, stderr: str, *, max_bytes: int
+) -> tuple[str, int, bool, str]:
+    full = f"[stdout]\n{stdout}\n\n[stderr]\n{stderr}\n"
+    encoded = full.encode("utf-8", errors="ignore")
+    digest = hashlib.sha256(encoded).hexdigest()
+    limit = max(128, int(max_bytes))
+    truncated = len(encoded) > limit
+    if truncated:
+        marker = b"\n...[full log truncated]\n"
+        encoded = encoded[: max(0, limit - len(marker))] + marker
+
     settings = get_settings()
     preferred = Path(settings.exec_host_log_dir)
     for base in (preferred, FALLBACK_LOG_DIR):
         try:
             base.mkdir(parents=True, exist_ok=True)
             path = base / f"{start_event_id}.log"
-            path.write_text(f"[stdout]\n{stdout}\n\n[stderr]\n{stderr}\n")
-            return str(path)
+            path.write_text(encoded.decode("utf-8", errors="ignore"))
+            return str(path), len(encoded), truncated, digest
         except OSError:
             continue
-    return ""
+    return "", len(encoded), truncated, digest
+
+
+def _extract_sqlite_table_names(sql: str) -> set[str]:
+    names: set[str] = set()
+    patterns = (
+        r"\bfrom\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+        r"\bjoin\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+        r"\bupdate\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+        r"\binto\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+        r"\btable\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+    )
+    for pattern in patterns:
+        for match in re.findall(pattern, sql, flags=re.IGNORECASE):
+            lowered = str(match).lower()
+            if lowered.startswith("sqlite_"):
+                continue
+            names.add(lowered)
+    return names
+
+
+def _preflight_sqlite_command(command: str, cwd: Path | None) -> str | None:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    if Path(tokens[0]).name != "sqlite3":
+        return None
+    if len(tokens) < 2:
+        return None
+    db_token = tokens[1]
+    if db_token.startswith("-") or db_token == ":memory:":
+        return None
+
+    base = cwd if cwd is not None else Path.cwd()
+    db_path = Path(db_token).expanduser()
+    if not db_path.is_absolute():
+        db_path = (base / db_path).resolve()
+    if not db_path.exists():
+        return f"sqlite preflight: database not found at {db_path}"
+
+    sql_fragment = " ".join(tokens[2:]).strip() if len(tokens) > 2 else ""
+    known_names: set[str] = set()
+    try:
+        with sqlite3.connect(str(db_path)) as check_conn:
+            rows = check_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
+            ).fetchall()
+            known_names = {str(row[0]).lower() for row in rows if row and row[0]}
+            migrated = check_conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+            ).fetchone()
+    except sqlite3.Error as exc:
+        return f"sqlite preflight: failed to inspect schema ({exc})"
+
+    if not known_names:
+        return f"sqlite preflight: {db_path} has no tables/views; database may be uninitialized"
+    if migrated is None or int(migrated[0]) == 0:
+        return (
+            f"sqlite preflight: {db_path} is missing schema_migrations; "
+            "run migrations or use configured APP_DB"
+        )
+
+    requested = _extract_sqlite_table_names(sql_fragment)
+    unknown = sorted(name for name in requested if name not in known_names)
+    if not unknown:
+        return None
+
+    hints: list[str] = []
+    for table in unknown:
+        if table == "feature_requests" and "bug_reports" in known_names:
+            hints.append(
+                "feature_requests -> bug_reports "
+                "(compat view available after migration 073)"
+            )
+            continue
+        matches = difflib.get_close_matches(table, sorted(known_names), n=2, cutoff=0.6)
+        if matches:
+            hints.append(f"{table} -> {', '.join(matches)}")
+        else:
+            hints.append(table)
+    hint_text = "; ".join(hints)
+
+    app_db = Path(get_settings().app_db).expanduser().resolve()
+    if db_path != app_db and app_db.exists():
+        return (
+            f"sqlite preflight: table(s) not found in {db_path.name}: {', '.join(unknown)}. "
+            f"Hints: {hint_text}. Configured APP_DB is {app_db}."
+        )
+    return f"sqlite preflight: table(s) not found: {', '.join(unknown)}. Hints: {hint_text}."
 
 
 def _emit(
@@ -388,6 +496,20 @@ def execute_host_command(
         _ = _emit(conn, trace_id, thread_id, "host.exec.end", end_payload)
         return {"exit_code": 126, "stdout": "", "stderr": caller_path_error}
 
+    sqlite_preflight_error = _preflight_sqlite_command(command, resolved_cwd)
+    if sqlite_preflight_error is not None:
+        end_payload = {
+            "start_event_id": start_event_id,
+            "exit_code": 2,
+            "stdout": "",
+            "stderr": sqlite_preflight_error,
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+            "log_path": "",
+        }
+        _ = _emit(conn, trace_id, thread_id, "host.exec.end", end_payload)
+        return {"exit_code": 2, "stdout": "", "stderr": sqlite_preflight_error, "log_path": ""}
+
     sanitized_env = _sanitize_env(env)
 
     # Resource limits via ulimit prefix when sandbox mode is not 'none'
@@ -440,7 +562,12 @@ def execute_host_command(
     capture_limit = min(max_output, _DEFAULT_MAX_CAPTURE_BYTES)
     stdout, out_truncated = _truncate_text(full_stdout, capture_limit)
     stderr, err_truncated = _truncate_text(full_stderr, capture_limit)
-    log_path = _write_full_log(start_event_id, full_stdout, full_stderr)
+    log_path, full_log_size_bytes, full_log_truncated, full_log_sha256 = _write_full_log_with_meta(
+        start_event_id,
+        full_stdout,
+        full_stderr,
+        max_bytes=int(settings.exec_host_full_log_max_bytes),
+    )
     end_payload = {
         "start_event_id": start_event_id,
         "exit_code": exit_code,
@@ -449,6 +576,9 @@ def execute_host_command(
         "stdout_truncated": out_truncated,
         "stderr_truncated": err_truncated,
         "log_path": log_path,
+        "full_log_size_bytes": full_log_size_bytes,
+        "full_log_truncated": full_log_truncated,
+        "full_log_sha256": full_log_sha256,
     }
     _ = _emit(conn, trace_id, thread_id, "host.exec.end", end_payload)
     locked = record_exec_host_result(
@@ -466,6 +596,9 @@ def execute_host_command(
         "log_path": log_path,
         "stdout_truncated": out_truncated,
         "stderr_truncated": err_truncated,
+        "full_log_size_bytes": full_log_size_bytes,
+        "full_log_truncated": full_log_truncated,
+        "full_log_sha256": full_log_sha256,
     }
 
 

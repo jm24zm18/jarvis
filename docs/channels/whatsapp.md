@@ -79,6 +79,7 @@ If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path f
 - `WHATSAPP_ALLOWED_SENDERS` is a comma-separated sender allowlist (`1555...` or `...@s.whatsapp.net` forms accepted).
 - Queued inbound emits `channel.inbound.review_required` and returns `{"accepted": true, "queued_for_review": true}` without message insertion.
 - Previously denied senders emit `channel.inbound.blocked` and return `{"accepted": true, "blocked_sender": true}`.
+- A new human escalation is created for each review request (once per thread and reason) so configured operators receive a notification via the `HUMAN_ESCALATION_*` settings.
 - In-chat review commands (admin WhatsApp IDs only): `/wa-review list [open|allowed|denied]`, `/wa-review allow <queue_id> [reason]`, `/wa-review deny <queue_id> [reason]`.
 
 ## Troubleshooting Decision Tree

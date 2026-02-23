@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     )
     followup_max_threads_per_tick: int = Field(alias="FOLLOWUP_MAX_THREADS_PER_TICK", default=20)
     followup_min_idle_seconds: int = Field(alias="FOLLOWUP_MIN_IDLE_SECONDS", default=300)
+    followup_emit_idle_ticks: int = Field(alias="FOLLOWUP_EMIT_IDLE_TICKS", default=0)
     task_runner_max_concurrent: int = Field(alias="TASK_RUNNER_MAX_CONCURRENT", default=20)
     task_runner_shutdown_timeout_seconds: int = Field(
         alias="TASK_RUNNER_SHUTDOWN_TIMEOUT_SECONDS",
@@ -107,6 +108,14 @@ class Settings(BaseSettings):
     feature_build_loop_cap_threshold: int = Field(
         alias="FEATURE_BUILD_LOOP_CAP_THRESHOLD",
         default=8,
+    )
+    orchestrator_max_tool_iterations: int = Field(
+        alias="ORCHESTRATOR_MAX_TOOL_ITERATIONS",
+        default=8,
+    )
+    orchestrator_fallback_only_retries: int = Field(
+        alias="ORCHESTRATOR_FALLBACK_ONLY_RETRIES",
+        default=2,
     )
     human_escalation_channel_type: str = Field(
         alias="HUMAN_ESCALATION_CHANNEL_TYPE",
@@ -289,6 +298,18 @@ class Settings(BaseSettings):
         alias="MEMORY_SENTENCE_TRANSFORMERS_MODEL",
         default="all-MiniLM-L6-v2",
     )
+    memory_reflection_enabled: int = Field(alias="MEMORY_REFLECTION_ENABLED", default=1)
+    memory_reflection_interval_seconds: int = Field(
+        alias="MEMORY_REFLECTION_INTERVAL_SECONDS",
+        default=21600,
+    )
+    memory_reflection_batch_size: int = Field(alias="MEMORY_REFLECTION_BATCH_SIZE", default=10)
+    memory_reflection_insight_limit: int = Field(alias="MEMORY_REFLECTION_INSIGHT_LIMIT", default=3)
+    memory_reflection_prune_threshold: float = Field(
+        alias="MEMORY_REFLECTION_PRUNE_THRESHOLD",
+        default=0.35,
+    )
+    memory_reflection_prune_age_days: int = Field(alias="MEMORY_REFLECTION_PRUNE_AGE_DAYS", default=30)
 
     searxng_base_url: str = Field(alias="SEARXNG_BASE_URL", default="http://localhost:8080")
     searxng_api_key: str = Field(alias="SEARXNG_API_KEY", default="")
@@ -374,6 +395,19 @@ class Settings(BaseSettings):
     exec_host_max_output_bytes: int = Field(alias="EXEC_HOST_MAX_OUTPUT_BYTES", default=1_000_000)
     exec_host_max_memory_mb: int = Field(alias="EXEC_HOST_MAX_MEMORY_MB", default=512)
     exec_host_max_cpu_seconds: int = Field(alias="EXEC_HOST_MAX_CPU_SECONDS", default=120)
+    exec_host_full_log_max_bytes: int = Field(
+        alias="EXEC_HOST_FULL_LOG_MAX_BYTES",
+        default=262_144,
+    )
+    exec_host_log_retention_days: int = Field(alias="EXEC_HOST_LOG_RETENTION_DAYS", default=7)
+    exec_host_log_retention_max_files: int = Field(
+        alias="EXEC_HOST_LOG_RETENTION_MAX_FILES",
+        default=1_000,
+    )
+    exec_host_log_retention_max_bytes: int = Field(
+        alias="EXEC_HOST_LOG_RETENTION_MAX_BYTES",
+        default=524_288_000,
+    )
     stall_detect_enabled: int = Field(alias="STALL_DETECT_ENABLED", default=1)
     stall_detect_threshold_seconds: int = Field(
         alias="STALL_DETECT_THRESHOLD_SECONDS",

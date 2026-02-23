@@ -1250,3 +1250,59 @@ def test_run_agent_step_allows_roadmap_claim_with_verified_tool_write(monkeypatc
     assert "added it to the roadmap" in str(row["content"]).lower()
     assert evt is not None
     assert int(evt["c"]) == 0
+
+
+class _RecordingSynthesisRouter:
+    """Router that records messages passed during terminal synthesis (tools=None) calls."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.synthesis_messages: list[list[dict[str, str]]] = []
+
+    async def generate(
+        self,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, object]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        priority: str = "normal",
+    ) -> tuple[ModelResponse, str, str | None]:
+        self.calls += 1
+        if tools is None:
+            self.synthesis_messages.append(list(messages))
+            return ModelResponse(text="Synthesized answer.", tool_calls=[]), "primary", None
+        return (
+            ModelResponse(
+                text="I can help with that.",
+                tool_calls=[{"name": "echo", "arguments": {"x": 1}}],
+            ),
+            "primary",
+            None,
+        )
+
+
+def test_terminal_synthesis_injects_synthesis_hint_message(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", lambda **_kwargs: None)
+    monkeypatch.setattr("jarvis.events.writer.MemoryService.embed_text", lambda _self, _text: [0.0])
+    monkeypatch.setattr(
+        "jarvis.events.writer.MemoryService.upsert_event_vector",
+        lambda _self, _conn, _event_id, _thread_id, _vector: None,
+    )
+    router = _RecordingSynthesisRouter()
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550180")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "test synthesis hint")
+        asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_synth_hint")
+        )
+    assert len(router.synthesis_messages) >= 1
+    last_synthesis_msgs = router.synthesis_messages[0]
+    last_msg = last_synthesis_msgs[-1]
+    assert last_msg["role"] == "user"
+    assert "All tool calls are complete" in last_msg["content"]
+    assert "clear, direct final answer" in last_msg["content"]

@@ -149,6 +149,8 @@
   - memory map upsert uses `INSERT OR IGNORE` + subsequent rowid lookup.
   - event map upsert uses `ON CONFLICT(event_id) DO UPDATE` to keep `thread_id` current.
 - Vector backfill is best-effort and non-fatal: per-row map integrity conflicts are logged and skipped so background indexing continues under concurrent writes.
+- Background task `proactive_reflection` runs every 6 hours (configurable) to synthesize `worldview` and `insight` state items from recent activity, prune low-importance state rows, and emit `memory.reflection.run` events that record how many insights/prunes happened per thread.
+- `state_items` now includes `insight`/`worldview` type tags so the renderer and orchestrator prompts can surface higher-level context updates supplied by reflection runs.
 
 ## Migration Ledger
 

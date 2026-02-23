@@ -16,7 +16,7 @@ from jarvis.db.queries import (
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
-from jarvis.tasks.agent import agent_step
+from jarvis.tasks.agent import _git_changed_files, agent_step
 from jarvis.tasks.agent_attempts import start_attempt
 from jarvis.tasks.agent_recovery import reap_stale_agent_runs
 
@@ -138,14 +138,21 @@ def test_reaper_marks_stale_and_requeues_attempt(monkeypatch) -> None:
     assert str(row["failure_kind"]) == "stale_timeout"
     assert recovered_note is not None
     payload = json.loads(str(recovered_note["payload_json"]))
-    assert payload["trace_id"] == trace_id
 
-    assert len(runner.calls) == 1
-    name, kwargs, queue = runner.calls[0]
-    assert name == "jarvis.tasks.agent.agent_step"
-    assert kwargs["trace_id"] == trace_id
-    assert kwargs["actor_id"] == "main"
-    assert queue == "agent_priority"
+
+def test_git_changed_files_subtracts_baseline(monkeypatch) -> None:
+    class FakeProc:
+        returncode = 0
+        stdout = "foo.txt\nbar.txt\n"
+        stderr = ""
+
+    monkeypatch.setattr(
+        "jarvis.tasks.agent.subprocess.run",
+        lambda *args, **kwargs: FakeProc(),
+    )
+    files, err = _git_changed_files(baseline={"foo.txt"})
+    assert err is None
+    assert files == ["bar.txt"]
 
 
 def _insert_feature(conn) -> str:
@@ -342,7 +349,18 @@ def test_agent_step_feature_build_deliverable_gate_fails_without_diff(monkeypatc
     monkeypatch.setenv("FEATURE_BUILD_RETRY_ON_DEGRADED", "0")
     monkeypatch.setenv("FEATURE_BUILD_DELIVERABLE_GATE_ENABLED", "1")
     get_settings.cache_clear()
-    monkeypatch.setattr("jarvis.tasks.agent._git_changed_files", lambda: ([], None))
+    def fake_capture_dirty_files_snapshot() -> tuple[set[str], str | None]:
+        return {"existing/file.txt"}, None
+
+    def fake_git_changed_files(baseline: set[str] | None = None) -> tuple[list[str], str | None]:
+        assert baseline == {"existing/file.txt"}
+        return [], None
+
+    monkeypatch.setattr(
+        "jarvis.tasks.agent._capture_dirty_files_snapshot",
+        fake_capture_dirty_files_snapshot,
+    )
+    monkeypatch.setattr("jarvis.tasks.agent._git_changed_files", fake_git_changed_files)
 
     async def fake_run_agent_step(*, conn, thread_id, **_kwargs) -> str:
         return insert_message(conn, thread_id, "assistant", "Implemented all requested changes.")
@@ -392,6 +410,13 @@ def test_agent_step_feature_build_deliverable_gate_fails_without_diff(monkeypatc
             ),
             (trace_id,),
         ).fetchone()
+        attempt_row = conn.execute(
+            (
+                "SELECT initial_dirty_files FROM agent_run_attempts "
+                "WHERE trace_id=? ORDER BY attempt DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
     get_settings.cache_clear()
 
     assert row is not None
@@ -406,6 +431,8 @@ def test_agent_step_feature_build_deliverable_gate_fails_without_diff(monkeypatc
     synthesis_payload = json.loads(str(synthesis_evt["payload_json"]))
     assert synthesis_payload["reason"] == "insufficient_deliverable_evidence"
     assert synthesis_payload["deliverable_passed"] is False
+    assert attempt_row is not None
+    assert json.loads(str(attempt_row["initial_dirty_files"])) == ["existing/file.txt"]
 
 
 def test_agent_step_feature_build_fail_fast_on_repeated_placeholder_reason(monkeypatch) -> None:

@@ -589,6 +589,8 @@ async def run_agent_step(
     token_scopes: frozenset[str] | None = None,
 ) -> str:
     settings = get_settings()
+    max_tool_iterations = settings.orchestrator_max_tool_iterations
+    fallback_only_retries = settings.orchestrator_fallback_only_retries
     admin_ids = {item.strip() for item in settings.admin_whatsapp_ids.split(",") if item.strip()}
 
     emit_event(
@@ -830,7 +832,7 @@ async def run_agent_step(
     failed_tool_signatures: set[str] = set()
     repeated_tool_signatures: dict[str, int] = {}
     verified_roadmap_item_ids: list[str] = []
-    for step_idx in range(MAX_TOOL_ITERATIONS + 1):
+    for step_idx in range(max_tool_iterations + 1):
         if progress_fn is not None:
             progress_fn("phase", {"phase": "model.run", "iteration": step_idx})
         if notify_fn is not None:
@@ -1013,7 +1015,7 @@ async def run_agent_step(
 
         if not parsed_tool_calls:
             break
-        if step_idx >= MAX_TOOL_ITERATIONS:
+        if step_idx >= max_tool_iterations:
             tool_iteration_exhausted = True
             break
 
@@ -1332,8 +1334,17 @@ async def run_agent_step(
             break
 
     if final_text.strip() == PLACEHOLDER_RESPONSE or tool_iteration_exhausted:
-        for retry_idx in range(FALLBACK_ONLY_RETRIES):
-            synthetic_iteration = MAX_TOOL_ITERATIONS + 1 + retry_idx
+        synthesis_convo = convo + [
+            {
+                "role": "user",
+                "content": (
+                    "All tool calls are complete. "
+                    "Using only the results above, please provide a clear, direct final answer."
+                ),
+            }
+        ]
+        for retry_idx in range(fallback_only_retries):
+            synthetic_iteration = max_tool_iterations + 1 + retry_idx
             start_payload: dict[str, object] = {
                 "iteration": synthetic_iteration,
                 "terminal_synthesis": True,
@@ -1362,7 +1373,7 @@ async def run_agent_step(
             )
             try:
                 retry_resp, retry_lane, retry_primary_error = await router.generate(
-                    convo,
+                    synthesis_convo,
                     tools=None,
                     priority="normal" if actor_id == "main" else "low",
                 )
@@ -1614,7 +1625,7 @@ async def run_agent_step(
                 payload_redacted_json=json.dumps(redact_payload(leak_blocked_payload)),
             ),
         )
-        leak_retry_iteration = MAX_TOOL_ITERATIONS + FALLBACK_ONLY_RETRIES + 1
+        leak_retry_iteration = max_tool_iterations + fallback_only_retries + 1
         retry_prompt = (
             "Your previous draft looked like internal/tool-planning text. "
             "Return only the final user-facing answer now. "

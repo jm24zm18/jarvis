@@ -65,6 +65,9 @@ uv run jarvis skill list
 - `network_unreachable`
 - `provider_unavailable`
 
+Doctor also validates DB-path consistency to detect split-brain local setups
+(for example, querying an empty `jarvis.db` while `APP_DB` points to `app.db`).
+
 Use targeted evidence checks:
 
 ```bash

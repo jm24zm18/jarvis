@@ -53,6 +53,23 @@ def get_system_state(conn: sqlite3.Connection) -> dict[str, int]:
     }
 
 
+def clear_stale_restarting_flag(conn: sqlite3.Connection) -> bool:
+    ensure_system_state(conn)
+    row = conn.execute(
+        "SELECT restarting FROM system_state WHERE id='singleton'"
+    ).fetchone()
+    if row is None:
+        return False
+    restarting = int(row["restarting"])
+    if restarting == 0:
+        return False
+    conn.execute(
+        "UPDATE system_state SET restarting=0, updated_at=? WHERE id='singleton'",
+        (now_iso(),),
+    )
+    return True
+
+
 def record_readyz_result(conn: sqlite3.Connection, ok: bool, threshold: int = 3) -> bool:
     ensure_system_state(conn)
     if ok:
@@ -692,6 +709,25 @@ def create_human_escalation(
         ),
     )
     return escalation_id
+
+
+def has_pending_human_escalation(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    reason: str | None = None,
+) -> bool:
+    query = (
+        "SELECT 1 FROM human_escalations "
+        "WHERE thread_id=? AND status IN ('queued','dispatched')"
+    )
+    params: list[object] = [thread_id]
+    if reason:
+        query += " AND reason=?"
+        params.append(reason)
+    query += " LIMIT 1"
+    row = conn.execute(query, tuple(params)).fetchone()
+    return row is not None
 
 
 def list_due_human_escalations(
@@ -1924,6 +1960,43 @@ def get_feature_build_run_by_trace(
         (trace,),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def get_attempt_initial_dirty_files(
+    conn: sqlite3.Connection,
+    *,
+    trace_id: str,
+) -> list[str] | None:
+    try:
+        row = conn.execute(
+            (
+                "SELECT initial_dirty_files FROM agent_run_attempts "
+                "WHERE trace_id=? ORDER BY attempt DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None:
+        return None
+    raw = str(row["initial_dirty_files"] or "").strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, list):
+        return None
+    filtered: list[str] = []
+    for item in payload:
+        if not isinstance(item, str):
+            continue
+        candidate = item.strip()
+        if not candidate or candidate in filtered:
+            continue
+        filtered.append(candidate)
+    return filtered or None
 
 
 def get_feature_build_run(

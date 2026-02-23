@@ -102,3 +102,17 @@ def test_followup_tick_reply_writes_message(monkeypatch) -> None:
         assert str(status_row["last_result"]) == "reply"
         assert int(status_row["consecutive_no_reply"] or 0) == 0
         assert status_row["last_sent_at"] is not None
+
+
+def test_followup_tick_skips_provider_when_no_enabled_threads(monkeypatch) -> None:
+    async def fail_eval(*_args, **_kwargs):
+        raise AssertionError("_evaluate should not be called when no followups are enabled")
+
+    monkeypatch.setattr(followups, "_evaluate", fail_eval)
+    monkeypatch.setenv("FOLLOWUP_EMIT_IDLE_TICKS", "0")
+    followups.get_settings.cache_clear()
+
+    result = followups.followup_heartbeat_tick()
+    assert result["ok"] is True
+    assert result["checked"] == 0
+    assert result["sent"] == 0
