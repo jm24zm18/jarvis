@@ -16,7 +16,7 @@ dependencies = [
   "httpx==0.28.1",
   "python-dotenv==1.1.1",
   "click>=8.1,<9",
-  "textual>=1.0,<2",
+  "textual>=1.0,<9",
   "tiktoken>=0.7,<1",
   "structlog>=24.1,<26",
   "slowapi>=0.1.9,<1",
