@@ -1,10 +1,13 @@
 """Agent registry service."""
 
 import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 
 from jarvis.agents.types import AgentBundle
+
+logger = logging.getLogger(__name__)
 
 
 def sync_tool_permissions(conn: sqlite3.Connection, bundles: dict[str, AgentBundle]) -> None:
@@ -30,6 +33,21 @@ def sync_tool_permissions(conn: sqlite3.Connection, bundles: dict[str, AgentBund
                 now,
             ),
         )
+        existing_tools = {
+            str(row["tool_name"])
+            for row in conn.execute(
+                "SELECT tool_name FROM tool_permissions WHERE principal_id=? AND effect='allow'",
+                (bundle.agent_id,),
+            ).fetchall()
+        }
+        expected_tools = set(bundle.allowed_tools)
+        if existing_tools != expected_tools:
+            logger.warning(
+                "Tool permission drift for principal_id=%s (existing=%s expected=%s)",
+                bundle.agent_id,
+                sorted(existing_tools),
+                sorted(expected_tools),
+            )
         conn.execute("DELETE FROM tool_permissions WHERE principal_id=?", (bundle.agent_id,))
         for tool in bundle.allowed_tools:
             conn.execute(

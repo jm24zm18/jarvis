@@ -103,6 +103,25 @@
   - Admin domains: agents, events, memory, schedules, threads, selfupdate, permissions, providers, bugs
 - Real-time updates: WebSocket hub route `/ws` (`src/jarvis/routes/ws.py`) backed by `web_notifications` polling.
 
+## Provider Compatibility Layer
+
+OSS models served via SGLang (e.g. `openai/gpt-oss-120b`) require the OpenAI-standard conversation format with:
+
+1. `role: "assistant"` messages including a `tool_calls: [...]` array when tool calls were made.
+2. Tool results delivered as `role: "tool"` messages with a matching `tool_call_id`, **not** as `role: "user"` with a `[tool_result]` prefix.
+
+The compat layer is implemented across three modules:
+
+- **`src/jarvis/providers/compat.py`**: `ProviderCompat` frozen dataclass holding per-provider behavioural flags (`tool_choice`, `parallel_tool_calls`, `strict_tool_schema`).  Pre-built `OPENROUTER_COMPAT` and `SGLANG_COMPAT` constants are wired by the factory.
+- **`src/jarvis/providers/message_builder.py`**: Four helpers consumed by the orchestrator:
+  - `build_assistant_message(text, tool_calls)` — builds an assistant dict with `tool_calls` array.
+  - `build_tool_result_message(tool_call_id, content)` — builds a `role: "tool"` result dict.
+  - `ensure_tool_ids(tool_calls)` — synthesises `spn_<uuid>` IDs for tool calls that omit them.
+  - `inject_synthetic_errors_for_orphaned_calls(messages)` — two-pass scan that appends synthetic `role: "tool"` error entries for any assistant `tool_calls` entries that were never answered, preventing OSS models from looping on unacknowledged calls during terminal synthesis.
+- **`src/jarvis/providers/factory.py`**: `_build_openrouter_compat` / `_build_sglang_compat` build `ProviderCompat` from settings (`SGLANG_PARALLEL_TOOL_CALLS`, `SGLANG_TOOL_CHOICE`, `OPENROUTER_TOOL_CHOICE`, `OPENROUTER_PARALLEL_TOOL_CALLS`) and pass them to provider constructors.
+
+The orchestrator (`src/jarvis/orchestrator/step.py`) uses `ensure_tool_ids` + `build_assistant_message` before each tool-execution loop, and `build_tool_result_message` for all three tool-result append sites (suppressed duplicates, exception path, and normal success/error path).
+
 ## Package Map
 
 - `src/jarvis/agents/*`: agent bundle load/registry/seed and permission sync.
@@ -119,7 +138,7 @@
 - `src/jarvis/orchestrator/*`: agent-step loop + prompt assembly.
 - `src/jarvis/plugins/*`: plugin interfaces and built-ins.
 - `src/jarvis/policy/*`: policy decision engine and lockdown handling.
-- `src/jarvis/providers/*`: model adapters and fallback router.
+- `src/jarvis/providers/*`: model adapters, fallback router, compat layer, and message builders.
 - `src/jarvis/routes/*`: HTTP and WebSocket route handlers.
 - `src/jarvis/scheduler/*`: schedule evaluation and task enqueue.
 - `src/jarvis/selfupdate/*`: propose/validate/test/apply/rollback pipeline.

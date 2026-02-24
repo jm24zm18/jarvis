@@ -6,7 +6,6 @@ allowed_tools:
   - skill_list
   - skill_read
   - skill_write
-  - request_human_escalation
 risk_tier: medium
 max_actions_per_step: 20
 allowed_paths:

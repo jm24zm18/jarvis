@@ -59,11 +59,11 @@ class _SequenceRouter:
     def __init__(self, responses: list[tuple[ModelResponse, str]]) -> None:
         self._responses = responses
         self.calls = 0
-        self.messages_by_call: list[list[dict[str, str]]] = []
+        self.messages_by_call: list[list[dict[str, Any]]] = []
 
     async def generate(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, object]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
@@ -1257,11 +1257,11 @@ class _RecordingSynthesisRouter:
 
     def __init__(self) -> None:
         self.calls = 0
-        self.synthesis_messages: list[list[dict[str, str]]] = []
+        self.synthesis_messages: list[list[dict[str, Any]]] = []
 
     async def generate(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, object]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
@@ -1306,3 +1306,116 @@ def test_terminal_synthesis_injects_synthesis_hint_message(monkeypatch) -> None:
     assert last_msg["role"] == "user"
     assert "All tool calls are complete" in last_msg["content"]
     assert "clear, direct final answer" in last_msg["content"]
+
+
+def test_run_agent_step_conversation_uses_openai_tool_format(monkeypatch) -> None:
+    """After a tool call iteration, the conversation must use OpenAI-standard format:
+    - assistant message MUST include 'tool_calls' key
+    - tool results MUST use role='tool' with 'tool_call_id' (not role='user')
+    """
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", lambda **_kwargs: None)
+
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="thinking",
+                    tool_calls=[{"id": "call_test_99", "name": "echo", "arguments": {"x": 1}}],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="done", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550991")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "run tool")
+        asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_convo_format",
+            )
+        )
+
+    # The second call receives the conversation built after iteration 0's tool call
+    assert router.calls == 2
+    second_call_msgs = router.messages_by_call[1]
+
+    # Find the assistant message from iteration 0
+    assistant_msgs = [m for m in second_call_msgs if m.get("role") == "assistant"]
+    assert assistant_msgs, "Expected at least one assistant message in second call"
+    asst = assistant_msgs[-1]
+    assert "tool_calls" in asst, "assistant message must include 'tool_calls' key for OSS compat"
+    assert isinstance(asst["tool_calls"], list)
+    assert len(asst["tool_calls"]) >= 1
+
+    # Find the tool result message
+    tool_msgs = [m for m in second_call_msgs if m.get("role") == "tool"]
+    assert tool_msgs, "Expected role='tool' result message, not role='user'"
+    tool_msg = tool_msgs[-1]
+    assert "tool_call_id" in tool_msg, "tool result must have 'tool_call_id'"
+    # Verify 'role: user' with [tool_result] prefix is NOT used
+    user_tool_msgs = [
+        m for m in second_call_msgs
+        if m.get("role") == "user" and str(m.get("content", "")).startswith("[tool_result]")
+    ]
+    assert not user_tool_msgs, "Legacy [tool_result] user messages must not appear"
+
+
+def test_run_agent_step_conversation_assigns_ids_when_model_omits_them(monkeypatch) -> None:
+    """When the model omits tool call IDs, ensure_tool_ids synthesises them so
+    tool results can still be properly paired."""
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", lambda **_kwargs: None)
+
+    # Model response has NO 'id' on tool call
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="",
+                    tool_calls=[{"name": "echo", "arguments": {}}],  # no id
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="done", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550992")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "go")
+        asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_synth_ids",
+            )
+        )
+
+    second_call_msgs = router.messages_by_call[1]
+    assistant_msgs = [m for m in second_call_msgs if m.get("role") == "assistant"]
+    assert assistant_msgs
+    asst = assistant_msgs[-1]
+    # Synthesised ID must appear in the assistant message
+    assert "tool_calls" in asst
+    synth_id = asst["tool_calls"][0]["id"]
+    assert synth_id  # not empty
+
+    # And the matching tool result must carry the same synthesised ID
+    tool_msgs = [m for m in second_call_msgs if m.get("role") == "tool"]
+    assert tool_msgs
+    assert tool_msgs[-1]["tool_call_id"] == synth_id

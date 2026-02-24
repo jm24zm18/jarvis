@@ -31,6 +31,12 @@ from jarvis.memory.state_renderer import render_state_section
 from jarvis.memory.state_store import StateStore
 from jarvis.orchestrator.prompt_builder import build_prompt_with_report, estimate_tokens
 from jarvis.providers.factory import resolve_primary_provider_name
+from jarvis.providers.message_builder import (
+    build_assistant_message,
+    build_tool_result_message,
+    ensure_tool_ids,
+    inject_synthetic_errors_for_orphaned_calls,
+)
 from jarvis.providers.router import ProviderRouter
 from jarvis.repo_index import read_repo_index
 from jarvis.tools.runtime import ToolRuntime
@@ -106,12 +112,14 @@ def _normalize_tool_calls(tool_calls_raw: object) -> list[dict[str, Any]]:
         arguments = item.get("arguments", {})
         if not isinstance(name, str) or not name.strip():
             continue
-        calls.append(
-            {
-                "name": name.strip(),
-                "arguments": arguments if isinstance(arguments, dict) else {},
-            }
-        )
+        call: dict[str, Any] = {
+            "name": name.strip(),
+            "arguments": arguments if isinstance(arguments, dict) else {},
+        }
+        raw_id = item.get("id")
+        if isinstance(raw_id, str) and raw_id:
+            call["id"] = raw_id
+        calls.append(call)
     return calls
 
 
@@ -736,8 +744,8 @@ async def run_agent_step(
 
     primary_provider = resolve_primary_provider_name(settings)
     token_budget = (
-        settings.prompt_budget_gemini_tokens
-        if primary_provider == "gemini"
+        settings.prompt_budget_openrouter_tokens
+        if primary_provider == "openrouter"
         else settings.prompt_budget_sglang_tokens
     )
 
@@ -819,7 +827,7 @@ async def run_agent_step(
             skill_catalog=skill_catalog,
         )
 
-    convo: list[dict[str, str]] = [
+    convo: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
@@ -1019,10 +1027,11 @@ async def run_agent_step(
             tool_iteration_exhausted = True
             break
 
-        convo.append({"role": "assistant", "content": stripped_text})
+        iteration_calls = ensure_tool_ids(parsed_tool_calls)
+        convo.append(build_assistant_message(stripped_text, iteration_calls))
         loop_cap_threshold = max(1, int(settings.feature_build_loop_cap_threshold))
         loop_cap_reached = False
-        for tool_call in parsed_tool_calls:
+        for tool_call in iteration_calls:
             if action_calls_used >= max_actions_per_step:
                 deny_payload = {
                     "tool": str(tool_call.get("name", "")),
@@ -1047,6 +1056,7 @@ async def run_agent_step(
                 )
                 break
             action_calls_used += 1
+            current_call_id = str(tool_call.get("id", ""))
             tool_name = str(tool_call.get("name", ""))
             raw_args = tool_call.get("arguments", {})
             arguments = raw_args if isinstance(raw_args, dict) else {}
@@ -1089,7 +1099,7 @@ async def run_agent_step(
                         "suppressed_duplicate_failure": True,
                     }
                 )
-                convo.append({"role": "user", "content": f"[tool_result] {payload}"})
+                convo.append(build_tool_result_message(current_call_id, payload))
                 if signature_hit_cap:
                     loop_cap_payload = {
                         "tool": tool_name,
@@ -1234,7 +1244,7 @@ async def run_agent_step(
                             "suppressed_duplicate_failure": True,
                         }
                     )
-                    convo.append({"role": "user", "content": f"[tool_result] {payload}"})
+                    convo.append(build_tool_result_message(current_call_id, payload))
                     if signature_hit_cap:
                         loop_cap_payload = {
                             "tool": tool_name,
@@ -1300,7 +1310,7 @@ async def run_agent_step(
                         "result_char_count": len(tool_error_memory_text),
                     },
                 )
-            convo.append({"role": "user", "content": f"[tool_result] {payload}"})
+            convo.append(build_tool_result_message(current_call_id, payload))
             if signature_hit_cap:
                 loop_cap_payload = {
                     "tool": tool_name,
@@ -1334,7 +1344,7 @@ async def run_agent_step(
             break
 
     if final_text.strip() == PLACEHOLDER_RESPONSE or tool_iteration_exhausted:
-        synthesis_convo = convo + [
+        synthesis_convo = inject_synthetic_errors_for_orphaned_calls(convo) + [
             {
                 "role": "user",
                 "content": (

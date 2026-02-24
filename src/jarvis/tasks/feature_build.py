@@ -48,7 +48,7 @@ def _capsule_stable_hash(capsule: dict) -> str:
         "tools_used": sorted(capsule.get("tools_used") or []),
         "top_errors": sorted(capsule.get("top_errors") or []),
         "next_action": str(capsule.get("next_action", "")),
-        "blockers_summary": str(capsule.get("blockers_summary", "")),
+        "blocker_category": str(capsule.get("blocker_category", "")),
     }
     blob = json.dumps(stable, sort_keys=True).encode()
     return hashlib.sha256(blob).hexdigest()
@@ -64,6 +64,7 @@ def _build_attempt_capsule(
     tools_used: list[str],
     top_errors: list[str],
     blockers_summary: str,
+    blocker_category: str = "",
     next_action: str,
 ) -> dict:
     """Build a structured attempt capsule dict."""
@@ -77,6 +78,7 @@ def _build_attempt_capsule(
         "tools_used": sorted(tools_used),
         "top_errors": top_errors[:5],
         "blockers_summary": blockers_summary[:500],
+        "blocker_category": blocker_category[:64],
         "next_action": next_action[:200],
     }
 

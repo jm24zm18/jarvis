@@ -15,7 +15,7 @@ class ModelResponse:
 class ModelProvider(Protocol):
     async def generate(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,

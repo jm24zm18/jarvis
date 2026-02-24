@@ -214,7 +214,7 @@ def compute_phase_stale_seconds(phase: str, settings: Settings) -> int:
     if phase_norm == "model.run":
         provider_timeout = max(
             1,
-            int(max(settings.gemini_cli_timeout_seconds, settings.sglang_timeout_seconds)),
+            int(max(settings.openrouter_timeout_seconds, settings.sglang_timeout_seconds)),
         )
         dynamic = int(math.ceil(1.25 * provider_timeout) + 30)
         return max(int(settings.agent_run_model_stale_min_seconds), dynamic)

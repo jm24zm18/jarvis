@@ -38,6 +38,20 @@ Unknown routes redirect to `/chat` after auth.
 - Non-admin users are ownership-scoped for thread/message/event/memory reads.
 - WebSocket subscriptions enforce thread ownership unless role is `admin`.
 
+## Provider Admin Page
+
+`/admin/providers` is admin-only and manages provider runtime configuration through:
+- `GET /api/v1/auth/providers/config`
+- `POST /api/v1/auth/providers/config`
+- `GET /api/v1/auth/providers/models`
+
+Behavior:
+- Primary provider and model updates apply immediately to API runtime after save.
+- OpenRouter API key is write-only from UI:
+  - UI receives `openrouter_api_key_set` and `openrouter_api_key_masked`.
+  - UI never receives the raw key value.
+  - Clearing requires explicit `clear_openrouter_api_key=true`.
+
 ## WebSocket Model
 
 Endpoint: `/ws`

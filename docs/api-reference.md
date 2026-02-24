@@ -16,10 +16,6 @@ Auth levels:
 | `GET` | `/api/v1/approvals` | `admin` | `list_approvals_endpoint_api_v1_approvals_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/approvals` | `admin` | `create_approval_endpoint_api_v1_approvals_post` | `application/json` | `200, 422` |
 | `POST` | `/api/v1/approvals/{approval_id}/revoke` | `admin` | `revoke_approval_endpoint_api_v1_approvals__approval_id__revoke_post` | `-` | `200, 422` |
-| `GET` | `/api/v1/auth/google/callback` | `public` | `google_callback_api_v1_auth_google_callback_get` | `-` | `200, 422` |
-| `GET` | `/api/v1/auth/google/config` | `auth` | `google_config_api_v1_auth_google_config_get` | `-` | `200, 422` |
-| `POST` | `/api/v1/auth/google/start` | `auth` | `google_start_api_v1_auth_google_start_post` | `application/json` | `200, 422` |
-| `GET` | `/api/v1/auth/google/status` | `auth` | `google_status_api_v1_auth_google_status_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/auth/login` | `public` | `login_api_v1_auth_login_post` | `application/json` | `200, 422` |
 | `POST` | `/api/v1/auth/logout` | `auth` | `logout_api_v1_auth_logout_post` | `-` | `200, 422` |
 | `GET` | `/api/v1/auth/me` | `auth` | `me_api_v1_auth_me_get` | `-` | `200, 422` |
@@ -145,12 +141,12 @@ Auth levels:
 
 - `title`: `Jarvis Agent Framework`
 - `version`: `0.1.0`
-- `path_count`: `111`
+- `path_count`: `107`
 
 ```json
 {
   "title": "Jarvis Agent Framework",
   "version": "0.1.0",
-  "path_count": 111
+  "path_count": 107
 }
 ```

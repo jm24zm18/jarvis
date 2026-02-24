@@ -12,7 +12,6 @@ uv run jarvis --help
 
 - `setup`: interactive setup wizard.
 - `doctor`: diagnostics (`--fix`, `--json`).
-- `gemini-login`: manual OAuth token bootstrap for Gemini Code Assist.
 - `ask`: single prompt/reply interaction.
 - `chat`: interactive chat loop.
 - `export`: export thread data as JSONL.
@@ -55,7 +54,6 @@ uv run jarvis skill list
 
 - API runtime should be active (`make api`) for chat/ask/build flows.
 - DB migrations should be current (`make migrate`).
-- For `gemini-login`, environment must include Gemini provider config in `.env`.
 
 ## Diagnostics Error Contract
 

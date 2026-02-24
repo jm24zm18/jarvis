@@ -18,6 +18,70 @@
 - [ ] Implement RLM decomposition + child build pipeline for large feature scopes
       Accept: new `rlm` package + migration 077, `feature_request_build_runs` gains `decomposed` status, RLM config/docs updated, admin `/split` route implemented, and unit tests (`test_rlm_*`, `test_feature_split`, `test_feature_build_rlm_routing`) cover the new behavior.
 
+## Execution Update (2026-02-24, Provider Config Runtime Precedence + OpenRouter Key Admin UX)
+
+- Completed:
+  - Fixed provider-config runtime precedence mismatch in `POST /api/v1/auth/providers/config`:
+    - save now applies provider env values to live API process before settings reload.
+    - addresses cases where runtime process env previously overrode `.env` after save.
+  - Hardened provider `.env` persistence path to deduplicate repeated touched keys when writing updates.
+  - Extended provider config contract:
+    - `GET /api/v1/auth/providers/config` now includes `openrouter_api_key_set` and `openrouter_api_key_masked`.
+    - `POST /api/v1/auth/providers/config` now supports `openrouter_api_key` (set/replace) and `clear_openrouter_api_key` (explicit clear).
+  - Added admin web UX for OpenRouter key management on `/admin/providers`:
+    - masked key preview,
+    - password input for set/replace,
+    - explicit clear action.
+  - Added integration coverage for:
+    - runtime precedence fix (`PRIMARY_PROVIDER` conflict path),
+    - OpenRouter key set/masked response behavior,
+    - explicit key clear behavior.
+
+- Missing tasks discovered during implementation:
+  - Add equivalent runtime-apply semantics (or explicit conflict warnings) for other admin-managed env settings beyond provider keys to avoid similar precedence drift.
+  - Consider centralizing masked-secret response patterns across admin APIs for consistency.
+
+- Remaining tasks before handoff:
+  - Run focused and full quality gates:
+    - `uv run pytest tests/integration/test_web_api.py -k provider_config -v`
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
+## Execution Update (2026-02-24, Feature-Build Reliability + Escalation Permission Reconciliation)
+
+- Completed:
+  - Added migration `078_reconcile_escalation_tool_permissions.sql` to enforce escalation tool ownership (`main` allow, `feature_builder` remove).
+  - Updated agent identity contracts:
+    - `agents/main/identity.md` includes `request_human_escalation`.
+    - `agents/feature_builder/identity.md` no longer includes `request_human_escalation`.
+  - Hardened `sync_tool_permissions` with startup drift warning prior to permission replacement.
+  - Added feature-build output correction behavior:
+    - emits `feature.build.output.corrected`
+    - posts corrective system message when prior completion claim is unverifiable.
+  - Added non-blocking feature-build diagnostic event for memory timeouts:
+    - `feature.build.state_extraction.timeout_observed`.
+  - Stabilized capsule repeat-fail-fast hashing by using structured blocker category and excluding volatile blocker prose.
+  - Added/updated tests:
+    - `tests/unit/test_agent_registry.py`
+    - `tests/unit/test_agent_recovery.py`
+    - `tests/unit/test_feature_build_capsule.py`
+    - `tests/unit/test_tool_runtime_governance.py`
+
+- Missing tasks discovered during implementation:
+  - Add API/Web admin surfacing for `feature.build.output.corrected` events to reduce manual DB/event inspection during incident response.
+  - Add integration coverage for full retry lifecycle showing `output.corrected -> retry.scheduled/exhausted`.
+
+- Remaining tasks before handoff:
+  - Run targeted and full quality gates (`make lint`, `make typecheck`, `make test-gates`, `make docs-check`).
+  - Validate migration 078 on a fresh DB and upgraded DB path.
+
+- Follow-up completed:
+  - Added exhausted-build retry intent routing in `agent_step` so thread-level `continue/retry` messages trigger a new build run enqueue instead of generic audit-only loops.
+  - Added feature-build events `feature.build.retry.manual_requested` and `feature.build.retry.manual_enqueued` for traceability.
+  - Added unit coverage for enqueue and non-enqueue paths in `tests/unit/test_agent_recovery.py`.
+
 ## Mission and Operating Model
 
 Deliver a self-improving Jarvis that combines deterministic governance with agentic execution across self-update, memory, and WhatsApp channels.

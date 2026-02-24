@@ -344,6 +344,152 @@ def test_agent_step_finalizes_feature_build_run_failed_when_retry_disabled(monke
     assert "terminal response" in str(row["summary"]).lower()
 
 
+def test_agent_step_manual_continue_enqueues_exhausted_feature_build(monkeypatch) -> None:
+    class _StubTaskRunner:
+        def send_task(self, *_args, **_kwargs) -> bool:
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.agent.get_task_runner", lambda: _StubTaskRunner())
+    monkeypatch.setattr("jarvis.tasks.runner.TaskRunner", _StubTaskRunner)
+
+    called = {"run": 0}
+
+    async def should_not_run(*, conn, thread_id, **_kwargs) -> str:
+        called["run"] += 1
+        return insert_message(conn, thread_id, "assistant", "unexpected run_agent_step execution")
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", should_not_run)
+
+    trace_id = new_id("trc")
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, f"15555550782_{new_id('usr')}")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "continue")
+        feature_id = _insert_feature(conn)
+        conn.execute(
+            "UPDATE bug_reports SET approval_status='approved' WHERE id=?",
+            (feature_id,),
+        )
+        old_run_id = create_feature_build_run(
+            conn,
+            feature_id=feature_id,
+            created_by=user_id,
+            trace_id="trc_old_exhausted",
+            thread_id=thread_id,
+        )
+        update_feature_build_run(
+            conn,
+            old_run_id,
+            status="failed",
+            attempt_count=5,
+            max_attempts=5,
+            retry_state="exhausted",
+            last_failure_reason="insufficient_deliverable_evidence",
+            terminal_reason="insufficient_deliverable_evidence",
+        )
+
+    message_id = agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+
+    with get_conn() as conn:
+        new_runs = conn.execute(
+            (
+                "SELECT id, status, retry_state, trace_id FROM feature_request_build_runs "
+                "WHERE feature_id=? ORDER BY created_at DESC LIMIT 2"
+            ),
+            (feature_id,),
+        ).fetchall()
+        evt_requested = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.retry.manual_requested' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+        evt_enqueued = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.retry.manual_enqueued' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+        msg_row = conn.execute(
+            "SELECT content FROM messages WHERE id=? LIMIT 1",
+            (message_id,),
+        ).fetchone()
+
+    assert len(new_runs) == 2
+    assert str(new_runs[0]["status"]) == "queued"
+    assert str(new_runs[0]["retry_state"]) == "none"
+    assert str(new_runs[1]["id"]) == old_run_id
+    assert called["run"] == 0
+    assert evt_requested is not None
+    assert evt_enqueued is not None
+    requested_payload = json.loads(str(evt_requested["payload_json"]))
+    enqueued_payload = json.loads(str(evt_enqueued["payload_json"]))
+    assert requested_payload["previous_run_id"] == old_run_id
+    assert enqueued_payload["previous_run_id"] == old_run_id
+    assert enqueued_payload["queued"] is True
+    assert msg_row is not None
+    assert "Queued manual retry for feature build" in str(msg_row["content"])
+
+
+def test_agent_step_continue_does_not_enqueue_when_latest_run_not_exhausted(monkeypatch) -> None:
+    called = {"run": 0}
+
+    async def fake_run_agent_step(*, conn, thread_id, **_kwargs) -> str:
+        called["run"] += 1
+        return insert_message(conn, thread_id, "assistant", "normal assistant flow")
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+
+    trace_id = new_id("trc")
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, f"15555550783_{new_id('usr')}")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "continue")
+        feature_id = _insert_feature(conn)
+        conn.execute(
+            "UPDATE bug_reports SET approval_status='approved' WHERE id=?",
+            (feature_id,),
+        )
+        run_id = create_feature_build_run(
+            conn,
+            feature_id=feature_id,
+            created_by=user_id,
+            trace_id="trc_latest_running",
+            thread_id=thread_id,
+        )
+        update_feature_build_run(conn, run_id, status="running", retry_state="none")
+
+    agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+
+    with get_conn() as conn:
+        evt_requested = conn.execute(
+            (
+                "SELECT id FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.retry.manual_requested' LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+        evt_enqueued = conn.execute(
+            (
+                "SELECT id FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.retry.manual_enqueued' LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+
+    assert called["run"] == 1
+    assert evt_requested is None
+    assert evt_enqueued is None
+
+
 def test_agent_step_feature_build_deliverable_gate_fails_without_diff(monkeypatch) -> None:
     monkeypatch.setenv("FEATURE_BUILD_RETRY_ON_DEGRADED", "0")
     monkeypatch.setenv("FEATURE_BUILD_DELIVERABLE_GATE_ENABLED", "1")
@@ -409,6 +555,22 @@ def test_agent_step_feature_build_deliverable_gate_fails_without_diff(monkeypatc
             ),
             (trace_id,),
         ).fetchone()
+        corrected_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.output.corrected' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+        corrected_msg = conn.execute(
+            (
+                "SELECT content FROM messages WHERE thread_id=? AND role='system' "
+                "AND content LIKE 'BUILD_OUTPUT_CORRECTION:%' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (thread_id,),
+        ).fetchone()
         attempt_row = conn.execute(
             (
                 "SELECT initial_dirty_files FROM agent_run_attempts "
@@ -430,6 +592,12 @@ def test_agent_step_feature_build_deliverable_gate_fails_without_diff(monkeypatc
     synthesis_payload = json.loads(str(synthesis_evt["payload_json"]))
     assert synthesis_payload["reason"] == "insufficient_deliverable_evidence"
     assert synthesis_payload["deliverable_passed"] is False
+    assert corrected_evt is not None
+    corrected_payload = json.loads(str(corrected_evt["payload_json"]))
+    assert corrected_payload["prior_message_id"] is not None
+    assert "insufficient_deliverable_evidence" in corrected_payload["verification_failures"]
+    assert corrected_msg is not None
+    assert "Build output could not be verified" in str(corrected_msg["content"])
     assert attempt_row is not None
     assert json.loads(str(attempt_row["initial_dirty_files"])) == ["existing/file.txt"]
 

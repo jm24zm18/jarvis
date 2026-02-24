@@ -1,4 +1,4 @@
-"""SGLang provider adapter using OpenAI-compatible chat completions API."""
+"""OpenRouter provider adapter using OpenAI-compatible chat completions API."""
 
 import json
 from typing import Any
@@ -10,7 +10,7 @@ from jarvis.providers.base import ModelResponse
 from jarvis.providers.compat import ProviderCompat
 
 
-class SGLangProvider:
+class OpenRouterProvider:
     def __init__(
         self,
         model: str,
@@ -72,15 +72,15 @@ class SGLangProvider:
     def _parse_response(payload: dict[str, Any]) -> ModelResponse:
         choices = payload.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise RuntimeError("sglang response missing choices")
+            raise RuntimeError("openrouter response missing choices")
         first = choices[0]
         if not isinstance(first, dict):
-            raise RuntimeError("sglang response choice malformed")
+            raise RuntimeError("openrouter response choice malformed")
         message = first.get("message")
         if not isinstance(message, dict):
-            raise RuntimeError("sglang response message missing")
-        content = SGLangProvider._coerce_text(message.get("content"))
-        reasoning = SGLangProvider._coerce_text(message.get("reasoning_content"))
+            raise RuntimeError("openrouter response message missing")
+        content = OpenRouterProvider._coerce_text(message.get("content"))
+        reasoning = OpenRouterProvider._coerce_text(message.get("reasoning_content"))
         tool_calls_raw = message.get("tool_calls", [])
         tool_calls: list[dict[str, Any]] = []
         if isinstance(tool_calls_raw, list):
@@ -118,14 +118,14 @@ class SGLangProvider:
         max_tokens: int = 4096,
     ) -> ModelResponse:
         settings = get_settings()
-        base_url = self._normalize_base_url(settings.sglang_base_url)
+        base_url = self._normalize_base_url(settings.openrouter_base_url)
+        api_key = settings.openrouter_api_key
         compat = self._compat
         body: dict[str, object] = {
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "separate_reasoning": True,
         }
         normalized_tools = self._to_tools(tools)
         if normalized_tools is not None:
@@ -135,18 +135,21 @@ class SGLangProvider:
                     body["tool_choice"] = compat.tool_choice
                 body["parallel_tool_calls"] = compat.parallel_tool_calls
         endpoint = f"{base_url}/chat/completions"
-        timeout_seconds = max(10, int(settings.sglang_timeout_seconds))
-        async with httpx.AsyncClient(timeout=timeout_seconds, transport=self._transport) as client:
-            response = await client.post(endpoint, json=body)
+        timeout_seconds = max(10, int(settings.openrouter_timeout_seconds))
+        headers = {"Authorization": f"Bearer {api_key}"}
+        async with httpx.AsyncClient(
+            timeout=timeout_seconds, transport=self._transport
+        ) as client:
+            response = await client.post(endpoint, json=body, headers=headers)
             response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
-            raise RuntimeError("sglang response is not an object")
+            raise RuntimeError("openrouter response is not an object")
         return self._parse_response(payload)
 
     async def health_check(self) -> bool:
         settings = get_settings()
-        base_url = self._normalize_base_url(settings.sglang_base_url)
+        base_url = self._normalize_base_url(settings.openrouter_base_url)
         endpoint = f"{base_url}/models"
         try:
             async with httpx.AsyncClient(timeout=10, transport=self._transport) as client:

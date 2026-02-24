@@ -69,16 +69,15 @@ def test_web_auth_login_me_logout_flow() -> None:
 
 def test_provider_config_get_and_update(monkeypatch) -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
-    os.environ["PRIMARY_PROVIDER"] = "gemini"
-    os.environ["GEMINI_MODEL"] = "gemini-2.5-flash"
+    os.environ["PRIMARY_PROVIDER"] = "sglang"
+    os.environ["OPENROUTER_MODEL"] = "google/gemini-2.5-flash"
     os.environ["SGLANG_MODEL"] = "openai/gpt-oss-120b"
+    os.environ["OPENROUTER_API_KEY"] = ""
     get_settings.cache_clear()
     saved: dict[str, str] = {}
 
     def fake_save_env_values(values: dict[str, str]) -> None:
         saved.update(values)
-        for key, value in values.items():
-            os.environ[key] = value
 
     monkeypatch.setattr("jarvis.routes.api.auth._save_env_values", fake_save_env_values)
     monkeypatch.setattr("jarvis.routes.api.auth.enqueue_settings_reload", lambda: True)
@@ -95,26 +94,48 @@ def test_provider_config_get_and_update(monkeypatch) -> None:
 
     before = client.get("/api/v1/auth/providers/config", headers=headers)
     assert before.status_code == 200
-    assert before.json()["primary_provider"] == "gemini"
+    before_payload = before.json()
+    assert before_payload["primary_provider"] == "sglang"
+    assert before_payload["openrouter_api_key_set"] is False
+    assert before_payload["openrouter_api_key_masked"] == ""
 
     update = client.post(
         "/api/v1/auth/providers/config",
         headers=headers,
         json={
-            "primary_provider": "sglang",
-            "gemini_model": "gemini-2.5-pro",
+            "primary_provider": "openrouter",
+            "openrouter_model": "google/gemini-2.5-pro",
             "sglang_model": "openai/gpt-oss-20b",
+            "openrouter_api_key": "sk-or-v1-example-secret-123456",
         },
     )
     assert update.status_code == 200
     payload = update.json()
     assert payload["ok"] is True
-    assert payload["primary_provider"] == "sglang"
-    assert payload["gemini_model"] == "gemini-2.5-pro"
+    assert payload["primary_provider"] == "openrouter"
+    assert payload["openrouter_model"] == "google/gemini-2.5-pro"
     assert payload["sglang_model"] == "openai/gpt-oss-20b"
-    assert saved["PRIMARY_PROVIDER"] == "sglang"
-    assert saved["GEMINI_MODEL"] == "gemini-2.5-pro"
+    assert payload["openrouter_api_key_set"] is True
+    assert payload["openrouter_api_key_masked"]
+    assert "example-secret" not in payload["openrouter_api_key_masked"]
+    assert saved["PRIMARY_PROVIDER"] == "openrouter"
+    assert saved["OPENROUTER_MODEL"] == "google/gemini-2.5-pro"
     assert saved["SGLANG_MODEL"] == "openai/gpt-oss-20b"
+    assert saved["OPENROUTER_API_KEY"] == "sk-or-v1-example-secret-123456"
+    assert os.environ["PRIMARY_PROVIDER"] == "openrouter"
+    assert os.environ["OPENROUTER_API_KEY"] == "sk-or-v1-example-secret-123456"
+
+    clear = client.post(
+        "/api/v1/auth/providers/config",
+        headers=headers,
+        json={"clear_openrouter_api_key": True},
+    )
+    assert clear.status_code == 200
+    clear_payload = clear.json()
+    assert clear_payload["openrouter_api_key_set"] is False
+    assert clear_payload["openrouter_api_key_masked"] == ""
+    assert saved["OPENROUTER_API_KEY"] == ""
+    assert os.environ["OPENROUTER_API_KEY"] == ""
     get_settings.cache_clear()
 
 

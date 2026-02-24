@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import shlex
 import sqlite3
 import subprocess
@@ -22,6 +23,8 @@ from jarvis.db.queries import (  # noqa: E402
     finalize_feature_build_run_by_trace,
     get_attempt_initial_dirty_files,
     get_feature_build_run_by_trace,
+    get_latest_feature_build_run_for_thread,
+    insert_message,
     now_iso,
     update_feature_build_run,
 )
@@ -72,6 +75,21 @@ _TERMINAL_PLACEHOLDER_PREFIX = (
     "I completed tool execution but could not synthesize a final summary."
 )
 _NEEDS_USER_GUIDANCE_PREFIX = "NEEDS_USER_GUIDANCE:"
+_BUILD_OUTPUT_CORRECTION_PREFIX = "BUILD_OUTPUT_CORRECTION:"
+_MANUAL_BUILD_RETRY_PHRASES = frozenset(
+    {
+        "continue",
+        "continue please",
+        "retry",
+        "retry please",
+        "try again",
+        "go ahead",
+        "go ahead please",
+        "again",
+        "rerun",
+        "re run",
+    }
+)
 _WRITE_COMMAND_MARKERS = (
     ">>",
     " > ",
@@ -199,6 +217,218 @@ def _has_explicit_noop_with_blockers(text: str) -> bool:
     no_change = ("no-op" in lowered) or ("no changes" in lowered) or ("no code changes" in lowered)
     blocked = ("blocker" in lowered) or ("blocked" in lowered)
     return no_change and blocked
+
+
+def _categorize_build_blocker(
+    *,
+    gate_checks: dict[str, object],
+    top_errors: list[str],
+) -> str:
+    if str(gate_checks.get("git_diff_error", "")).strip():
+        return "git_diff_error"
+    if bool(gate_checks.get("message_is_needs_user_guidance")):
+        return "needs_user_guidance"
+    changed_files = list(gate_checks.get("changed_files") or [])
+    if not changed_files:
+        if bool(gate_checks.get("explicit_noop_with_blockers")):
+            return "explicit_noop_blocked"
+        return "no_repo_changes"
+    lower_errors = [item.lower() for item in top_errors]
+    if any(("policy_deny" in item) or ("permission denied" in item) for item in lower_errors):
+        return "policy_denied"
+    if top_errors:
+        return "tool_error"
+    return "unspecified"
+
+
+def _is_manual_build_retry_intent(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    normalized = re.sub(r"[^a-z0-9]+", " ", lowered).strip()
+    normalized = " ".join(normalized.split())
+    return normalized in _MANUAL_BUILD_RETRY_PHRASES
+
+
+def _maybe_trigger_manual_feature_build_retry(
+    conn: sqlite3.Connection,
+    *,
+    trace_id: str,
+    thread_id: str,
+    actor_id: str,
+) -> str | None:
+    if actor_id != "main":
+        return None
+    # If this trace is already tied to a build run, continue normal flow.
+    if get_feature_build_run_by_trace(conn, trace_id):
+        return None
+    user_row = conn.execute(
+        (
+            "SELECT id, content FROM messages WHERE thread_id=? AND role='user' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ),
+        (thread_id,),
+    ).fetchone()
+    if user_row is None:
+        return None
+    user_message_id = str(user_row["id"])
+    user_text = str(user_row["content"] or "")
+    if not _is_manual_build_retry_intent(user_text):
+        return None
+
+    latest_run = get_latest_feature_build_run_for_thread(conn, thread_id)
+    if latest_run is None:
+        return None
+    if str(latest_run.get("status") or "") != "failed":
+        return None
+    if str(latest_run.get("retry_state") or "") != "exhausted":
+        return None
+
+    emit_event(
+        conn,
+        EventInput(
+            trace_id=trace_id,
+            span_id=new_id("spn"),
+            parent_span_id=None,
+            thread_id=thread_id,
+            event_type="feature.build.retry.manual_requested",
+            component="feature_build",
+            actor_type="system",
+            actor_id="feature_build",
+            payload_json=json.dumps(
+                {
+                    "thread_id": thread_id,
+                    "previous_run_id": str(latest_run.get("id") or ""),
+                    "feature_id": str(latest_run.get("feature_id") or ""),
+                    "user_message_id": user_message_id,
+                    "user_intent": "manual_retry",
+                }
+            ),
+            payload_redacted_json=json.dumps(
+                redact_payload(
+                    {
+                        "thread_id": thread_id,
+                        "previous_run_id": str(latest_run.get("id") or ""),
+                        "feature_id": str(latest_run.get("feature_id") or ""),
+                        "user_message_id": user_message_id,
+                        "user_intent": "manual_retry",
+                    }
+                )
+            ),
+        ),
+    )
+
+    feature_id = str(latest_run.get("feature_id") or "")
+    created_by = str(latest_run.get("created_by") or "").strip() or actor_id
+    title = str(latest_run.get("feature_title") or "").strip() or feature_id
+    try:
+        from jarvis.services.feature_requests import enqueue_feature_build
+
+        result = enqueue_feature_build(
+            conn,
+            feature_id,
+            actor_id=created_by,
+            task_runner=get_task_runner(),
+        )
+    except Exception as exc:
+        message_id = insert_message(
+            conn,
+            thread_id,
+            "assistant",
+            (
+                "I tried to enqueue a manual retry for the exhausted feature build, "
+                f"but it failed: {exc.__class__.__name__}: {exc}"
+            ),
+        )
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="feature.build.retry.manual_enqueue_failed",
+                component="feature_build",
+                actor_type="system",
+                actor_id="feature_build",
+                payload_json=json.dumps(
+                    {
+                        "thread_id": thread_id,
+                        "previous_run_id": str(latest_run.get("id") or ""),
+                        "feature_id": feature_id,
+                        "error": f"{exc.__class__.__name__}: {exc}",
+                        "response_message_id": message_id,
+                    }
+                ),
+                payload_redacted_json=json.dumps(
+                    redact_payload(
+                        {
+                            "thread_id": thread_id,
+                            "previous_run_id": str(latest_run.get("id") or ""),
+                            "feature_id": feature_id,
+                            "error": f"{exc.__class__.__name__}: {exc}",
+                            "response_message_id": message_id,
+                        }
+                    )
+                ),
+            ),
+        )
+        return message_id
+
+    new_run_id = str(result.get("run_id") or "")
+    new_trace_id = str(result.get("trace_id") or "")
+    queued = bool(result.get("queued"))
+    if queued:
+        message = (
+            f"Queued manual retry for feature build `{feature_id}` ({title}). "
+            f"New run `{new_run_id}` trace `{new_trace_id}`."
+        )
+        event_type = "feature.build.retry.manual_enqueued"
+    else:
+        message = (
+            f"Manual retry for feature build `{feature_id}` was requested, but enqueue failed. "
+            f"Run `{new_run_id}` trace `{new_trace_id}`."
+        )
+        event_type = "feature.build.retry.manual_enqueue_failed"
+    message_id = insert_message(conn, thread_id, "assistant", message)
+    emit_event(
+        conn,
+        EventInput(
+            trace_id=trace_id,
+            span_id=new_id("spn"),
+            parent_span_id=None,
+            thread_id=thread_id,
+            event_type=event_type,
+            component="feature_build",
+            actor_type="system",
+            actor_id="feature_build",
+            payload_json=json.dumps(
+                {
+                    "thread_id": thread_id,
+                    "feature_id": feature_id,
+                    "previous_run_id": str(latest_run.get("id") or ""),
+                    "new_run_id": new_run_id,
+                    "new_trace_id": new_trace_id,
+                    "queued": queued,
+                    "response_message_id": message_id,
+                }
+            ),
+            payload_redacted_json=json.dumps(
+                redact_payload(
+                    {
+                        "thread_id": thread_id,
+                        "feature_id": feature_id,
+                        "previous_run_id": str(latest_run.get("id") or ""),
+                        "new_run_id": new_run_id,
+                        "new_trace_id": new_trace_id,
+                        "queued": queued,
+                        "response_message_id": message_id,
+                    }
+                )
+            ),
+        ),
+    )
+    return message_id
 
 
 def _git_changed_files(baseline: set[str] | None = None) -> tuple[list[str], str | None]:
@@ -401,15 +631,22 @@ def _apply_capsule_repeat_fail_fast(
 
         # Extract blockers summary from message text.
         blockers_summary = ""
+        message_text = ""
         if message_id:
             msg_row = conn.execute(
                 "SELECT content FROM messages WHERE id=? LIMIT 1",
                 (message_id,),
             ).fetchone()
             if msg_row is not None:
-                text = str(msg_row["content"] or "").strip()
+                message_text = str(msg_row["content"] or "").strip()
                 # Use message tail as blockers context (up to 300 chars).
-                blockers_summary = text[-300:] if len(text) > 300 else text
+                blockers_summary = (
+                    message_text[-300:] if len(message_text) > 300 else message_text
+                )
+        blocker_category = _categorize_build_blocker(
+            gate_checks=gate_checks,
+            top_errors=top_errors,
+        )
 
         capsule = _build_attempt_capsule(
             run_id=run_id,
@@ -420,6 +657,7 @@ def _apply_capsule_repeat_fail_fast(
             tools_used=tools_used,
             top_errors=top_errors,
             blockers_summary=blockers_summary,
+            blocker_category=blocker_category,
             next_action="retry",
         )
         current_hash = _capsule_stable_hash(capsule)
@@ -635,6 +873,50 @@ def _finalize_feature_build_run_from_trace_result(
         )
         return True
 
+    def _emit_build_output_correction(
+        *,
+        prior_message_id: str,
+        verification_failures: list[str],
+        changed_files_count: int,
+        retry_state: str,
+    ) -> None:
+        if thread_id is None:
+            return
+        exists = conn.execute(
+            (
+                "SELECT id FROM messages WHERE thread_id=? AND role='system' "
+                "AND content LIKE ? ORDER BY created_at DESC LIMIT 1"
+            ),
+            (thread_id, f"{_BUILD_OUTPUT_CORRECTION_PREFIX}%{prior_message_id}%"),
+        ).fetchone()
+        if exists is not None:
+            return
+        correction_id = new_id("msg")
+        correction_text = (
+            f"{_BUILD_OUTPUT_CORRECTION_PREFIX} previous_message_id={prior_message_id}\n"
+            "Build output could not be verified against repository evidence. "
+            "The prior completion claim is not accepted for this run.\n"
+            f"verification_failures={','.join(verification_failures)}\n"
+            f"changed_files_count={changed_files_count}\n"
+            f"retry_state={retry_state}"
+        )
+        conn.execute(
+            "INSERT INTO messages(id, thread_id, role, content, created_at) VALUES(?,?,?,?,?)",
+            (correction_id, thread_id, "system", correction_text, now_iso()),
+        )
+        _emit_build_event(
+            "feature.build.output.corrected",
+            {
+                "run_id": run_id,
+                "attempt": attempt_count,
+                "prior_message_id": prior_message_id,
+                "correction_message_id": correction_id,
+                "verification_failures": verification_failures,
+                "changed_files_count": changed_files_count,
+                "retry_state": retry_state,
+            },
+        )
+
     if failure_kind is not None:
         detail = str(failure_error or "").strip()
         if detail:
@@ -672,6 +954,33 @@ def _finalize_feature_build_run_from_trace_result(
     gate_passed = False
     gate_reason: str | None = None
     gate_checks: dict[str, object] = {}
+    message_text = ""
+    if message_id:
+        row = conn.execute(
+            "SELECT content FROM messages WHERE id=? LIMIT 1", (message_id,)
+        ).fetchone()
+        if row is not None:
+            message_text = str(row["content"] or "").strip()
+    timeout_count = int(
+        conn.execute(
+            (
+                "SELECT COUNT(*) AS n FROM events WHERE trace_id=? "
+                "AND event_type='state.extraction.failed' "
+                "AND json_extract(payload_json, '$.primary_failure_kind')='timeout'"
+            ),
+            (trace_id,),
+        ).fetchone()["n"]
+    )
+    if timeout_count > 0:
+        _emit_build_event(
+            "feature.build.state_extraction.timeout_observed",
+            {
+                "run_id": run_id,
+                "attempt": attempt_count,
+                "timeout_failure_count": timeout_count,
+                "non_blocking": True,
+            },
+        )
 
     if (
         terminal_reason is None
@@ -786,11 +1095,57 @@ def _finalize_feature_build_run_from_trace_result(
                     max_attempts=max_attempts,
                 )
                 if _capsule_deny:
+                    if (
+                        message_id
+                        and message_text
+                        and not _is_placeholder_terminal_message(message_text)
+                    ):
+                        _emit_build_output_correction(
+                            prior_message_id=message_id,
+                            verification_failures=[
+                                "insufficient_deliverable_evidence",
+                                "no_repo_changes",
+                            ],
+                            changed_files_count=len(list(gate_checks.get("changed_files") or [])),
+                            retry_state="exhausted",
+                        )
                     return
-            _schedule_retry(retryable_reason, summary)
+            scheduled = _schedule_retry(retryable_reason, summary)
+            if (
+                message_id
+                and message_text
+                and not _is_placeholder_terminal_message(message_text)
+                and retryable_reason == "insufficient_deliverable_evidence"
+            ):
+                failures: list[str] = ["insufficient_deliverable_evidence"]
+                if not list(gate_checks.get("changed_files") or []):
+                    failures.append("no_repo_changes")
+                if not bool(gate_checks.get("explicit_noop_with_blockers")):
+                    failures.append("no_explicit_noop_blockers")
+                _emit_build_output_correction(
+                    prior_message_id=message_id,
+                    verification_failures=failures,
+                    changed_files_count=len(list(gate_checks.get("changed_files") or [])),
+                    retry_state="scheduled" if scheduled else "exhausted",
+                )
             return
 
         finalize_feature_build_run_by_trace(conn, trace_id, status="failed", summary=summary)
+        if (
+            message_id
+            and message_text
+            and not _is_placeholder_terminal_message(message_text)
+            and terminal_reason == "insufficient_deliverable_evidence"
+        ):
+            _emit_build_output_correction(
+                prior_message_id=message_id,
+                verification_failures=[
+                    "insufficient_deliverable_evidence",
+                    "no_repo_changes",
+                ],
+                changed_files_count=len(list(gate_checks.get("changed_files") or [])),
+                retry_state="exhausted",
+            )
         if int(settings.feature_build_escalate_on_exhausted) == 1:
             thread_id_for_escalation = str(run.get("thread_id") or "").strip()
             if thread_id_for_escalation:
@@ -945,6 +1300,32 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                 registry = _build_registry(conn, trace_id, thread_id, actor_id)
                 runtime = ToolRuntime(registry)
                 touch_attempt(conn, trace_id=trace_id, attempt=attempt, phase="init")
+                manual_retry_message_id = _maybe_trigger_manual_feature_build_retry(
+                    conn,
+                    trace_id=trace_id,
+                    thread_id=thread_id,
+                    actor_id=actor_id,
+                )
+                if manual_retry_message_id:
+                    finish_attempt(
+                        conn,
+                        trace_id=trace_id,
+                        attempt=attempt_no,
+                        status="succeeded",
+                        final_message_id=manual_retry_message_id,
+                    )
+                    _notify_trace_event(
+                        conn=conn,
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        event_type="agent.step.end",
+                        payload={
+                            "attempt": attempt_no,
+                            "message_id": manual_retry_message_id,
+                            "manual_feature_build_retry": True,
+                        },
+                    )
+                    return manual_retry_message_id
                 message_id = asyncio.run(
                     run_agent_step(
                         conn=conn,

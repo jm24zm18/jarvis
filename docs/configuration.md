@@ -25,7 +25,7 @@ Source of truth: `src/jarvis/config.py`.
 |---|---|---|---|
 | `COMPACTION_EVERY_N_EVENTS` | int | `25` | Trigger compaction every N events. |
 | `COMPACTION_INTERVAL_SECONDS` | int | `600` | Min interval between compactions. |
-| `PROMPT_BUDGET_GEMINI_TOKENS` | int | `200000` | Prompt budget for Gemini lane. |
+| `PROMPT_BUDGET_OPENROUTER_TOKENS` | int | `200000` | Prompt budget for OpenRouter lane. |
 | `PROMPT_BUDGET_SGLANG_TOKENS` | int | `110000` | Prompt budget for SGLang lane. |
 
 ### Lockdown and Queue Controls
@@ -136,19 +136,22 @@ Source of truth: `src/jarvis/config.py`.
 | `EVOLUTION_WEBHOOK_URL` | str | `` | Callback URL Evolution should post inbound events to (usually `/webhooks/whatsapp`). |
 | `EVOLUTION_WEBHOOK_BY_EVENTS` | int | `1` | When `1`, Evolution filters callback delivery to configured events only. |
 | `EVOLUTION_WEBHOOK_EVENTS` | str | `messages.upsert` | Comma-separated Evolution event names allowed for callback delivery. |
-| `GOOGLE_OAUTH_CLIENT_ID` | str | `` | Google OAuth client ID. |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | str | `` | Google OAuth client secret. |
-| `GOOGLE_OAUTH_REFRESH_TOKEN` | str | `` | OAuth refresh token. |
-| `PRIMARY_PROVIDER` | str | `gemini` | Primary chat provider (`gemini` or `sglang`). |
-| `GEMINI_MODEL` | str | `gemini-2.5-flash` | Default Gemini model. |
-| `GEMINI_CODE_ASSIST_PLAN_TIER` | str | `free` | Gemini Code Assist tier (`free`, `pro`, `ultra`, `standard`, `enterprise`). |
-| `GEMINI_CODE_ASSIST_REQUESTS_PER_MINUTE` | int | `0` | Local cap for Gemini requests per minute (`0` uses tier default). |
-| `GEMINI_CODE_ASSIST_REQUESTS_PER_DAY` | int | `0` | Local cap for Gemini requests per day (`0` uses tier default). |
-| `GEMINI_CLI_TIMEOUT_SECONDS` | int | `120` | Gemini CLI timeout. |
-| `GEMINI_QUOTA_COOLDOWN_DEFAULT_SECONDS` | int | `60` | Fallback cooldown after quota errors when reset time is not provided. |
+| `PRIMARY_PROVIDER` | str | `openrouter` | Primary chat provider (`openrouter` or `sglang`). |
+| `OPENROUTER_API_KEY` | str | `` | OpenRouter API key. |
+| `OPENROUTER_MODEL` | str | `google/gemini-2.5-flash` | OpenRouter model name. |
+| `OPENROUTER_BASE_URL` | str | `https://openrouter.ai/api/v1` | OpenRouter API base URL. |
+| `OPENROUTER_TIMEOUT_SECONDS` | int | `120` | OpenRouter request timeout. |
 | `SGLANG_BASE_URL` | str | `http://localhost:30000/v1` | SGLang endpoint. |
 | `SGLANG_MODEL` | str | `openai/gpt-oss-120b` | SGLang model name. |
 | `SGLANG_TIMEOUT_SECONDS` | int | `600` | SGLang timeout. |
+| `SGLANG_PARALLEL_TOOL_CALLS` | int | `0` | When `0` (default), disables parallel tool calls for SGLang/OSS models that handle them poorly. Set to `1` to enable. |
+| `SGLANG_TOOL_CHOICE` | str | `auto` | Tool choice mode for SGLang provider (`auto`, `none`, or a specific function). |
+| `OPENROUTER_TOOL_CHOICE` | str | `auto` | Tool choice mode for OpenRouter provider (`auto`, `none`, or a specific function). |
+| `OPENROUTER_PARALLEL_TOOL_CALLS` | int | `1` | When `1` (default), allows parallel tool calls for OpenRouter/frontier models. Set to `0` to disable. |
+
+Provider admin runtime note:
+- Saving provider settings from the admin API/UI updates `.env` and applies provider keys (`PRIMARY_PROVIDER`, `OPENROUTER_MODEL`, `SGLANG_MODEL`, `OPENROUTER_API_KEY`) to the live API runtime immediately.
+- OpenRouter API key reads are masked in API responses; raw key retrieval is not supported.
 
 ### Memory and Search
 
