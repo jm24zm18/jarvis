@@ -29,8 +29,11 @@
 - Feature-request create path must be idempotent for retry scenarios when `trace_id` is supplied.
 - Follow-up heartbeat checks must remain opt-in per thread with ownership enforcement on management APIs; `no_reply` outcomes must not emit user-visible outbound messages.
 - Feature-build runs must reject terminal success when deliverable evidence is missing (no allowed-scope diff and no explicit no-op blockers) and emit `feature.build.deliverable_gate.failed`.
+- When deliverable evidence is missing, feature-build runs must emit a corrective system message and `feature.build.output.corrected` before retry/exhaustion so unverifiable completion claims are not left unqualified.
 - Feature-build runs must fail fast on repeated consecutive `placeholder_response_after_tool_loop` outcomes (`feature.build.retry.denied`) to avoid deterministic retry churn.
 - Feature-build execution attempts must not include write attempts against `RALPH_NEVER_EDIT_PATHS` or `PROTECTED_PATH_PATTERNS`; violations must block success finalization.
+- `request_human_escalation` permission ownership must remain aligned with policy: allowed for `main`, denied for non-main principals.
+- Retry-intent messages in exhausted feature-build threads must enqueue a fresh build run (`feature.build.retry.manual_enqueued`) instead of entering generic audit/tool-only loops.
 
 ## High-Risk Files
 

@@ -42,7 +42,8 @@ const COMMANDS: Array<{ value: string; help: string }> = [
 function toThreadPreview(content?: string | null): string {
   if (!content) return "No messages yet";
   let text = content;
-  text = text.replace(/\u200B|\u200C|\u200D|\uFEFF/g, "");
+  // Preserve joiners so composed emojis (for example family/skin-tone variants) stay intact.
+  text = text.replace(/\u200B|\uFEFF/g, "");
   text = text.replace(/\u202f/g, " ");
   text = text.replace(/```[\s\S]*?```/g, " [code] ");
   text = text.replace(/`([^`]+)`/g, "$1");

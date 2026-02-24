@@ -37,7 +37,6 @@
     "feature_builder": [
       "echo",
       "exec_host",
-      "request_human_escalation",
       "skill_list",
       "skill_read",
       "skill_write"
@@ -53,6 +52,7 @@
       "create_feature_request",
       "echo",
       "exec_host",
+      "request_human_escalation",
       "session_history",
       "session_list",
       "session_send",
@@ -310,7 +310,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-23T23:25:12.131837+00:00",
+  "generated_at": "2026-02-24T23:16:15.516408+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -610,6 +610,10 @@
     {
       "file": "src/jarvis/db/migrations/077_rlm_and_parent.sql",
       "number": 77
+    },
+    {
+      "file": "src/jarvis/db/migrations/078_reconcile_escalation_tool_permissions.sql",
+      "number": 78
     }
   ],
   "protected_modules": [

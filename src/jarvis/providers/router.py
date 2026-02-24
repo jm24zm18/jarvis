@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import re
+from typing import Any
 
 from jarvis.errors import ProviderError
 from jarvis.providers.base import ModelProvider, ModelResponse
@@ -40,7 +41,7 @@ class ProviderRouter:
 
     async def generate(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, object]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,

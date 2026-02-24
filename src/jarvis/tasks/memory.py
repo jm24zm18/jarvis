@@ -121,7 +121,7 @@ def _set_state_backoff(thread_id: str, *, failure_kind: str, settings) -> int:
     base = max(5, int(settings.state_extraction_backoff_base_seconds))
     cap = max(base, int(settings.state_extraction_backoff_max_seconds))
     if failure_kind == "quota_retryable":
-        seconds = max(base, int(settings.gemini_quota_cooldown_default_seconds))
+        seconds = max(base, 60)
     else:
         seconds = min(cap, base * (2 ** max(0, failures - 1)))
     until = datetime.now(UTC) + timedelta(seconds=seconds)

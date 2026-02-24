@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 from pathlib import Path
@@ -69,24 +68,6 @@ def _classify_cli_error(message: str) -> tuple[str, str]:
             "Request timed out. Verify service health and connectivity.",
         )
     return ("provider_unavailable", message)
-
-
-@cli.command("gemini-login")
-@click.option(
-    "--token-path",
-    type=click.Path(path_type=str),
-    default=None,
-    help="Override token cache path (default: GEMINI_CODE_ASSIST_TOKEN_PATH).",
-)
-def gemini_login(token_path: str | None) -> None:
-    """Run manual Gemini OAuth login and write Code Assist token cache."""
-    from jarvis.providers.google_gemini_cli import run_manual_login
-
-    settings = get_settings()
-    resolved = Path(token_path or settings.gemini_code_assist_token_path).expanduser()
-    result = asyncio.run(run_manual_login(resolved))
-    click.echo(f"token cache: {result['token_path']}")
-    click.echo(f"cloudaicompanionProject: {result['cloudaicompanion_project']}")
 
 
 @cli.command()

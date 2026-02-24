@@ -73,47 +73,35 @@ ENV_GROUPS: list[EnvGroup] = [
         ],
     ),
     EnvGroup(
-        title="Google / Gemini",
-        description="Google OAuth + Gemini model. Skip for local-only development.",
+        title="OpenRouter",
+        description="OpenRouter API. Set OPENROUTER_API_KEY to enable.",
         required=False,
         vars=[
             EnvVarDef(
                 "PRIMARY_PROVIDER",
-                "Primary model provider (gemini or sglang)",
-                default="gemini",
+                "Primary model provider (openrouter or sglang)",
+                default="openrouter",
             ),
-            EnvVarDef("GOOGLE_OAUTH_CLIENT_ID", "OAuth client ID", secret=True),
-            EnvVarDef("GOOGLE_OAUTH_CLIENT_SECRET", "OAuth client secret", secret=True),
-            EnvVarDef("GEMINI_MODEL", "Gemini model name", default="gemini-2.5-flash"),
+            EnvVarDef("OPENROUTER_API_KEY", "OpenRouter API key", default="", secret=True),
             EnvVarDef(
-                "GEMINI_CODE_ASSIST_PLAN_TIER",
-                "Plan tier (free, pro, ultra, standard, enterprise)",
-                default="free",
+                "OPENROUTER_MODEL",
+                "OpenRouter model name",
+                default="google/gemini-2.5-flash",
             ),
             EnvVarDef(
-                "GEMINI_CODE_ASSIST_REQUESTS_PER_MINUTE",
-                "Override requests/minute (0 uses tier default)",
-                default="0",
+                "OPENROUTER_BASE_URL",
+                "OpenRouter base URL",
+                default="https://openrouter.ai/api/v1",
             ),
             EnvVarDef(
-                "GEMINI_CODE_ASSIST_REQUESTS_PER_DAY",
-                "Override requests/day (0 uses tier default)",
-                default="0",
-            ),
-            EnvVarDef(
-                "GEMINI_CODE_ASSIST_TOKEN_PATH",
-                "Code Assist token cache path",
-                default="~/.config/gemini-cli-oauth/token.json",
-            ),
-            EnvVarDef(
-                "GEMINI_CLI_TIMEOUT_SECONDS",
-                "Code Assist request timeout in seconds",
+                "OPENROUTER_TIMEOUT_SECONDS",
+                "Request timeout (seconds)",
                 default="120",
             ),
             EnvVarDef(
-                "GEMINI_QUOTA_COOLDOWN_DEFAULT_SECONDS",
-                "Fallback cooldown after quota errors when reset is unknown",
-                default="60",
+                "PROMPT_BUDGET_OPENROUTER_TOKENS",
+                "OpenRouter token budget",
+                default="200000",
             ),
         ],
     ),
@@ -378,9 +366,6 @@ ENV_GROUPS: list[EnvGroup] = [
             EnvVarDef("COMPACTION_EVERY_N_EVENTS", "Event compaction interval", default="25"),
             EnvVarDef(
                 "COMPACTION_INTERVAL_SECONDS", "Compaction time interval", default="600"
-            ),
-            EnvVarDef(
-                "PROMPT_BUDGET_GEMINI_TOKENS", "Gemini token budget", default="200000"
             ),
             EnvVarDef(
                 "PROMPT_BUDGET_SGLANG_TOKENS", "SGLang token budget", default="110000"

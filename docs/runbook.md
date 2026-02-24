@@ -50,6 +50,25 @@ Periodic health visibility:
 3. Verify periodic pruning event:
    - `maintenance.exec_host_logs.pruned`
 
+## Feature-Build Recovery Signals
+
+1. When build output is not verifiable (for example, no repo diff and no explicit no-op blockers), expect:
+   - `feature.build.deliverable_gate.failed`
+   - `feature.build.output.corrected`
+2. `feature.build.output.corrected` payload includes:
+   - `prior_message_id`
+   - `verification_failures`
+   - `changed_files_count`
+   - `retry_state`
+3. If repeated retries show unchanged failure state, expect:
+   - `feature.build.retry.denied` with `policy_action=repeat_fail_fast`
+4. If state extraction timed out during build attempt, this is non-blocking and recorded as:
+   - `feature.build.state_extraction.timeout_observed`
+5. If an exhausted build thread receives a retry-intent user message (`continue`, `retry`, `try again`, `go ahead`), expect:
+   - `feature.build.retry.manual_requested`
+   - `feature.build.retry.manual_enqueued`
+   - a new `feature_request_build_runs` row in `queued` state.
+
 ## GitHub Integration Ops
 
 1. PR automation:

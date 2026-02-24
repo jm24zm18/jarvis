@@ -76,7 +76,7 @@ async def system_status(ctx: UserContext = Depends(require_auth)) -> dict[str, o
     del ctx
     settings = get_settings()
     primary_provider_name = resolve_primary_provider_name(settings)
-    fallback_provider_name = "gemini" if primary_provider_name == "sglang" else "sglang"
+    fallback_provider_name = "openrouter" if primary_provider_name == "sglang" else "sglang"
     provider_status = await ProviderRouter(
         build_primary_provider(settings),
         build_fallback_provider(settings),

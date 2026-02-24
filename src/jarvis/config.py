@@ -16,7 +16,9 @@ class Settings(BaseSettings):
     trace_sample_rate: float = Field(alias="TRACE_SAMPLE_RATE", default=1.0)
     compaction_every_n_events: int = Field(alias="COMPACTION_EVERY_N_EVENTS", default=25)
     compaction_interval_seconds: int = Field(alias="COMPACTION_INTERVAL_SECONDS", default=600)
-    prompt_budget_gemini_tokens: int = Field(alias="PROMPT_BUDGET_GEMINI_TOKENS", default=200000)
+    prompt_budget_openrouter_tokens: int = Field(
+        alias="PROMPT_BUDGET_OPENROUTER_TOKENS", default=200000
+    )
     prompt_budget_sglang_tokens: int = Field(alias="PROMPT_BUDGET_SGLANG_TOKENS", default=110000)
     lockdown_default: int = Field(alias="LOCKDOWN_DEFAULT", default=0)
     selfupdate_auto_apply_dev: int = Field(alias="SELFUPDATE_AUTO_APPLY_DEV", default=1)
@@ -247,30 +249,21 @@ class Settings(BaseSettings):
 
     google_oauth_client_id: str = Field(alias="GOOGLE_OAUTH_CLIENT_ID", default="")
     google_oauth_client_secret: str = Field(alias="GOOGLE_OAUTH_CLIENT_SECRET", default="")
-    primary_provider: str = Field(alias="PRIMARY_PROVIDER", default="gemini")
-    gemini_model: str = Field(alias="GEMINI_MODEL", default="gemini-2.5-flash")
-    gemini_code_assist_token_path: str = Field(
-        alias="GEMINI_CODE_ASSIST_TOKEN_PATH",
-        default="~/.config/gemini-cli-oauth/token.json",
+    primary_provider: str = Field(alias="PRIMARY_PROVIDER", default="openrouter")
+    openrouter_api_key: str = Field(alias="OPENROUTER_API_KEY", default="")
+    openrouter_model: str = Field(alias="OPENROUTER_MODEL", default="google/gemini-2.5-flash")
+    openrouter_base_url: str = Field(
+        alias="OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1"
     )
-    gemini_cli_timeout_seconds: int = Field(alias="GEMINI_CLI_TIMEOUT_SECONDS", default=120)
-    gemini_code_assist_plan_tier: str = Field(alias="GEMINI_CODE_ASSIST_PLAN_TIER", default="free")
-    gemini_code_assist_requests_per_minute: int = Field(
-        alias="GEMINI_CODE_ASSIST_REQUESTS_PER_MINUTE",
-        default=0,
-    )
-    gemini_code_assist_requests_per_day: int = Field(
-        alias="GEMINI_CODE_ASSIST_REQUESTS_PER_DAY",
-        default=0,
-    )
-    gemini_quota_cooldown_default_seconds: int = Field(
-        alias="GEMINI_QUOTA_COOLDOWN_DEFAULT_SECONDS",
-        default=60,
-    )
+    openrouter_timeout_seconds: int = Field(alias="OPENROUTER_TIMEOUT_SECONDS", default=120, ge=10)
 
     sglang_base_url: str = Field(alias="SGLANG_BASE_URL", default="http://localhost:30000/v1")
     sglang_model: str = Field(alias="SGLANG_MODEL", default="openai/gpt-oss-120b")
     sglang_timeout_seconds: int = Field(alias="SGLANG_TIMEOUT_SECONDS", default=600)
+    sglang_parallel_tool_calls: int = Field(alias="SGLANG_PARALLEL_TOOL_CALLS", default=0)
+    sglang_tool_choice: str = Field(alias="SGLANG_TOOL_CHOICE", default="auto")
+    openrouter_tool_choice: str = Field(alias="OPENROUTER_TOOL_CHOICE", default="auto")
+    openrouter_parallel_tool_calls: int = Field(alias="OPENROUTER_PARALLEL_TOOL_CALLS", default=1)
 
     ollama_base_url: str = Field(alias="OLLAMA_BASE_URL", default="http://localhost:11434")
     ollama_embed_model: str = Field(alias="OLLAMA_EMBED_MODEL", default="nomic-embed-text")
@@ -494,10 +487,8 @@ def validate_settings_for_env(settings: Settings) -> None:
     missing: list[str] = []
     required_non_empty = {
         "APP_DB": settings.app_db,
-        "GOOGLE_OAUTH_CLIENT_ID": settings.google_oauth_client_id,
-        "GOOGLE_OAUTH_CLIENT_SECRET": settings.google_oauth_client_secret,
         "PRIMARY_PROVIDER": settings.primary_provider,
-        "GEMINI_MODEL": settings.gemini_model,
+        "OPENROUTER_MODEL": settings.openrouter_model,
         "SGLANG_BASE_URL": settings.sglang_base_url,
         "SGLANG_MODEL": settings.sglang_model,
         "OLLAMA_BASE_URL": settings.ollama_base_url,

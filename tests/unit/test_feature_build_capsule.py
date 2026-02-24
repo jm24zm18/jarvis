@@ -74,6 +74,23 @@ def test_capsule_stable_hash_differs_on_changed_files() -> None:
     assert _capsule_stable_hash(c1) != _capsule_stable_hash(c2)
 
 
+def test_capsule_stable_hash_ignores_blockers_summary_text() -> None:
+    base = dict(
+        run_id="run_1",
+        trace_id="trc_1",
+        attempt=1,
+        reason="insufficient_deliverable_evidence",
+        changed_files=[],
+        tools_used=[],
+        top_errors=[],
+        blocker_category="no_repo_changes",
+        next_action="retry",
+    )
+    c1 = _build_attempt_capsule(blockers_summary="first wording", **base)  # type: ignore[arg-type]
+    c2 = _build_attempt_capsule(blockers_summary="second wording", **base)  # type: ignore[arg-type]
+    assert _capsule_stable_hash(c1) == _capsule_stable_hash(c2)
+
+
 # ---------------------------------------------------------------------------
 # get_previous_capsule / save_capsule
 # ---------------------------------------------------------------------------
@@ -196,6 +213,7 @@ def test_repeat_fail_fast_triggers_on_matching_hash(monkeypatch) -> None:
             tools_used=[],
             top_errors=[],
             blockers_summary="",
+            blocker_category="no_repo_changes",
             next_action="retry",
         )
         prev_hash = _capsule_stable_hash(prev_capsule)
@@ -301,6 +319,7 @@ def test_repeat_fail_fast_skips_when_attempt_below_limit() -> None:
             tools_used=[],
             top_errors=[],
             blockers_summary="",
+            blocker_category="no_repo_changes",
             next_action="retry",
         )
         prev_hash = _capsule_stable_hash(prev_capsule)

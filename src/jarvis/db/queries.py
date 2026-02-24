@@ -2072,6 +2072,27 @@ def list_feature_build_runs(
     return [dict(r) for r in rows]
 
 
+def get_latest_feature_build_run_for_thread(
+    conn: sqlite3.Connection,
+    thread_id: str,
+) -> dict[str, object] | None:
+    row = conn.execute(
+        (
+            "SELECT r.id, r.feature_id, r.trace_id, r.thread_id, r.status, r.summary, "
+            "r.attempt_count, r.max_attempts, r.retry_state, r.next_retry_at, "
+            "r.last_failure_reason, r.active_attempt, r.last_progress_at, "
+            "r.last_event_type, r.last_trace_id, r.terminal_reason, r.created_by, "
+            "r.created_at, r.updated_at, b.title AS feature_title, b.approval_status "
+            "FROM feature_request_build_runs r "
+            "JOIN bug_reports b ON b.id=r.feature_id "
+            "WHERE r.thread_id=? AND b.kind='feature' "
+            "ORDER BY r.updated_at DESC LIMIT 1"
+        ),
+        (thread_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
 def reconcile_stale_feature_build_runs(
     conn: sqlite3.Connection,
     *,

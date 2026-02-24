@@ -12,6 +12,27 @@ Web UI uses an HTTP-only `jarvis_session` cookie for authenticated requests.
 Bearer headers remain supported for compatibility and CLI/test flows.
 `external_id` in login payload is bounded to 256 characters; oversized values are rejected.
 
+## Provider Config Flow (Admin)
+
+- Read config: `GET /api/v1/auth/providers/config`
+- Update config: `POST /api/v1/auth/providers/config`
+- Read SGLang model catalog: `GET /api/v1/auth/providers/models`
+
+Provider config response includes:
+- `primary_provider`, `openrouter_model`, `sglang_model`
+- `openrouter_api_key_set` (boolean)
+- `openrouter_api_key_masked` (masked preview only; raw key is never returned)
+
+Provider update payload supports:
+- `primary_provider` (`openrouter` or `sglang`)
+- `openrouter_model`
+- `sglang_model`
+- `openrouter_api_key` (set/replace when non-empty)
+- `clear_openrouter_api_key` (explicit clear)
+
+Runtime behavior:
+- Provider saves apply to live API runtime immediately for provider env keys.
+
 ## Thread and Message Flow
 
 1. List threads: `GET /api/v1/threads`

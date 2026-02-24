@@ -22,12 +22,9 @@ import type {
   SystemStatus,
   ThreadItem,
   OnboardingStatus,
-  GoogleOAuthConfig,
   ProviderConfig,
   ProviderModelsCatalog,
   ProviderConfigUpdateResult,
-  GoogleOAuthStartResult,
-  GoogleOAuthStatus,
   FitnessSnapshot,
   GovernanceSlo,
   GovernanceSloHistoryItem,
@@ -217,22 +214,6 @@ export const deletePermission = (principalId: string, toolName: string) =>
     method: "DELETE",
   });
 
-export const getGoogleOAuthConfig = () =>
-  apiFetch<GoogleOAuthConfig>("/api/v1/auth/google/config");
-
-export const startGoogleOAuth = (payload: {
-  client_id?: string;
-  client_secret?: string;
-  redirect_uri?: string;
-}) =>
-  apiFetch<GoogleOAuthStartResult>("/api/v1/auth/google/start", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-
-export const getGoogleOAuthStatus = (state: string) =>
-  apiFetch<GoogleOAuthStatus>(`/api/v1/auth/google/status?state=${encodeURIComponent(state)}`);
-
 export const getProviderConfig = () =>
   apiFetch<ProviderConfig>("/api/v1/auth/providers/config");
 
@@ -240,9 +221,11 @@ export const getProviderModelsCatalog = () =>
   apiFetch<ProviderModelsCatalog>("/api/v1/auth/providers/models");
 
 export const updateProviderConfig = (payload: {
-  primary_provider?: "gemini" | "sglang" | string;
-  gemini_model?: string;
+  primary_provider?: "openrouter" | "sglang" | string;
+  openrouter_model?: string;
   sglang_model?: string;
+  openrouter_api_key?: string;
+  clear_openrouter_api_key?: boolean;
 }) =>
   apiFetch<ProviderConfigUpdateResult>("/api/v1/auth/providers/config", {
     method: "POST",
