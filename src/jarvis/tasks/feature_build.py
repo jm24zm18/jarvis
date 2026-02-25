@@ -26,6 +26,7 @@ from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
 from jarvis.rlm.config import build_rlm_config
 from jarvis.rlm.decomposer import compute_run_hash, context_reasons, select_context_files
+from jarvis.rlm.fallback_splitter import build_fallback_subtasks
 from jarvis.rlm.service import AsyncRLMService
 from jarvis.services.feature_requests import enqueue_feature_build, split_feature_request
 from jarvis.tasks.github import github_feature_validation_comment
@@ -312,6 +313,89 @@ def _resolve_retry_delay_seconds(attempt_number: int) -> int:
     return values[idx]
 
 
+def _feature_scope_layers(text: str) -> set[str]:
+    lowered = text.lower()
+    layers: dict[str, tuple[str, ...]] = {
+        "db": ("db", "database", "sqlite", "schema", "migration"),
+        "services": ("service", "business logic"),
+        "tasks": ("task", "orchestrator", "runner"),
+        "memory": ("memory", "state item"),
+        "prompt": ("prompt", "agent bundle", "identity.md", "soul.md"),
+        "docs": ("docs", "documentation", "runbook", "guide"),
+        "cli": ("cli", "command"),
+        "web": ("web", "ui", "frontend", "react", "theme", "styles"),
+        "api": ("api", "endpoint", "route"),
+        "skills": ("skill", "skills"),
+    }
+    detected: set[str] = set()
+    for layer, needles in layers.items():
+        if any(token in lowered for token in needles):
+            detected.add(layer)
+    return detected
+
+
+def _is_broad_scope_feature(*, title: str, description: str) -> bool:
+    text = f"{title}\n{description}"
+    layers = _feature_scope_layers(text)
+    path_markers = text.count("src/") + text.count("web/") + text.count("docs/")
+    has_db = "migration" in text.lower() or "schema" in text.lower() or "db" in text.lower()
+    has_web = "web" in layers or "ui" in text.lower() or "frontend" in text.lower()
+    has_backend = bool({"api", "services", "tasks", "db"} & layers)
+    has_skills_or_prompt = bool({"skills", "prompt"} & layers)
+    return (
+        len(layers) >= 3
+        or has_db and (has_web or has_backend)
+        or path_markers >= 4
+        or (has_backend and has_skills_or_prompt)
+    )
+
+
+def _choose_build_thread(
+    *,
+    conn: sqlite3.Connection,
+    run_row: dict[str, object],
+    actor_id: str,
+    settings,
+) -> str:
+    existing_thread_id = str(run_row.get("thread_id") or "").strip()
+    if existing_thread_id:
+        row = conn.execute(
+            "SELECT id FROM threads WHERE id=? AND status='open' LIMIT 1",
+            (existing_thread_id,),
+        ).fetchone()
+        if row is not None:
+            return str(row["id"])
+
+    target_mode = str(getattr(settings, "feature_build_thread_target", "reporter") or "reporter")
+    target_mode = target_mode.strip().lower()
+    if target_mode not in {"reporter", "admin"}:
+        target_mode = "reporter"
+
+    if target_mode == "reporter":
+        source_thread_id = str(run_row.get("source_thread_id") or "").strip()
+        if source_thread_id:
+            row = conn.execute(
+                "SELECT id FROM threads WHERE id=? AND status='open' LIMIT 1",
+                (source_thread_id,),
+            ).fetchone()
+            if row is not None:
+                return str(row["id"])
+
+    row = conn.execute(
+        (
+            "SELECT t.id FROM threads t "
+            "JOIN channels c ON c.id=t.channel_id "
+            "WHERE t.user_id=? AND c.channel_type='web' AND t.status='open' "
+            "ORDER BY t.updated_at DESC LIMIT 1"
+        ),
+        (actor_id,),
+    ).fetchone()
+    if row is not None:
+        return str(row["id"])
+    channel_id = ensure_channel(conn, actor_id, "web")
+    return create_thread(conn, actor_id, channel_id)
+
+
 def run_feature_build(
     run_id: str,
     feature_id: str,
@@ -335,6 +419,21 @@ def run_feature_build(
                 ttl_hours=int(settings.feature_isolation_ttl_hours),
             )
         rlm_config = build_rlm_config(settings)
+        with get_conn() as conn:
+            feature_row = conn.execute(
+                "SELECT title, description FROM bug_reports WHERE id=? AND kind='feature' LIMIT 1",
+                (feature_id,),
+            ).fetchone()
+        feature_title = str(feature_row["title"] or title) if feature_row is not None else title
+        feature_description = (
+            str(feature_row["description"] or "") if feature_row is not None else ""
+        )
+        broad_scope = _is_broad_scope_feature(title=feature_title, description=feature_description)
+        force_decompose = (
+            not rlm_config.active
+            and broad_scope
+            and int(settings.feature_build_auto_decompose) == 1
+        )
         rlm_result = _decompose_and_split(
             run_id=run_id,
             feature_id=feature_id,
@@ -342,6 +441,9 @@ def run_feature_build(
             actor_id=actor_id,
             settings=settings,
             rlm_config=rlm_config,
+            force=force_decompose,
+            use_fallback=int(settings.feature_build_decompose_fallback) == 1,
+            layer_strict=int(settings.feature_build_subtask_layer_strict) == 1,
         )
         if rlm_result is not None:
             return rlm_result
@@ -456,6 +558,7 @@ def run_feature_build(
                 run_id,
                 status="running",
                 trace_id=trace_id,
+                execution_mode="direct",
                 retry_state="none",
                 next_retry_at="",
                 active_attempt=attempt_count,
@@ -465,31 +568,13 @@ def run_feature_build(
                 summary=f"Build attempt {attempt_count}/{max_attempts} in progress.",
             )
 
-            # Find or create a web channel thread for build runs.
-            row = None
-            existing_thread_id = str(run_row.get("thread_id") or "").strip()
-            if existing_thread_id:
-                row = conn.execute(
-                    "SELECT id FROM threads WHERE id=? AND status='open' LIMIT 1",
-                    (existing_thread_id,),
-                ).fetchone()
-            if row is not None:
-                thread_id = str(row["id"])
-            else:
-                row = conn.execute(
-                    (
-                        "SELECT t.id FROM threads t "
-                        "JOIN channels c ON c.id=t.channel_id "
-                        "WHERE t.user_id=? AND c.channel_type='web' AND t.status='open' "
-                        "ORDER BY t.updated_at DESC LIMIT 1"
-                    ),
-                    (actor_id,),
-                ).fetchone()
-                if row is not None:
-                    thread_id = str(row["id"])
-                else:
-                    channel_id = ensure_channel(conn, actor_id, "web")
-                    thread_id = create_thread(conn, actor_id, channel_id)
+            # Route build updates to the configured thread target.
+            thread_id = _choose_build_thread(
+                conn=conn,
+                run_row=run_row,
+                actor_id=actor_id,
+                settings=settings,
+            )
 
             # Update run with thread_id.
             update_feature_build_run(conn, run_id, thread_id=thread_id)
@@ -774,8 +859,11 @@ def _decompose_and_split(
     actor_id: str,
     settings,
     rlm_config,
+    force: bool = False,
+    use_fallback: bool = True,
+    layer_strict: bool = True,
 ) -> dict[str, object] | None:
-    if not rlm_config.active:
+    if not rlm_config.active and not force:
         return None
     with get_conn() as conn:
         feature_row = conn.execute(
@@ -850,6 +938,7 @@ def _decompose_and_split(
                 summary=f"Decomposed into {len(child_ids)} child feature builds.",
                 terminal_reason="decomposed",
                 last_event_type="feature.build.decomposed",
+                execution_mode="decomposed",
             )
             _emit_build_event(
                 conn=conn,
@@ -861,6 +950,7 @@ def _decompose_and_split(
                     "feature_id": feature_id,
                     "child_ids": child_ids,
                     "trajectory_id": trajectory_id,
+                    "decomposition_mode": "rlm_forced" if force else "rlm",
                 },
             )
             _emit_rlm_event(
@@ -892,6 +982,77 @@ def _decompose_and_split(
                 "status": "decomposed",
                 "child_ids": child_ids,
             }
+        if use_fallback:
+            fallback_subtasks = build_fallback_subtasks(
+                feature_title=feature_title,
+                feature_description=feature_description,
+                layer_strict=layer_strict,
+            )
+            if len(fallback_subtasks) >= 3:
+                child_ids = split_feature_request(
+                    conn,
+                    parent_id=feature_id,
+                    subtasks=fallback_subtasks,
+                    actor_id=actor_id,
+                    split_reason="fallback_split",
+                )
+                _update_rlm_trajectory(
+                    conn,
+                    trajectory_id,
+                    status="completed",
+                    prompt_hash=result.get("prompt_hash", ""),
+                    results_raw=result.get("raw", ""),
+                    usage_json=json.dumps(result.get("usage") or {}),
+                    child_ids_json=json.dumps(child_ids),
+                    validation_errors_json=json.dumps(
+                        (result.get("validation_errors") or []) + ["fallback_split"]
+                    ),
+                    error="",
+                    provider=result.get("provider", ""),
+                )
+                update_feature_build_run(
+                    conn,
+                    run_id,
+                    status="decomposed",
+                    summary=(
+                        "RLM decomposition failed; deterministic fallback split created "
+                        f"{len(child_ids)} child feature builds."
+                    )[:500],
+                    terminal_reason="decomposed",
+                    last_event_type="feature.build.decomposed",
+                    execution_mode="fallback_split",
+                )
+                _emit_build_event(
+                    conn=conn,
+                    trace_id=trace_id,
+                    thread_id=thread_id or None,
+                    event_type="feature.build.decomposed",
+                    payload={
+                        "run_id": run_id,
+                        "feature_id": feature_id,
+                        "child_ids": child_ids,
+                        "trajectory_id": trajectory_id,
+                        "decomposition_mode": "fallback_split",
+                        "fallback_reason": result.get("error") or "rlm_decompose_failed",
+                    },
+                )
+                from jarvis.tasks import get_task_runner
+
+                runner = get_task_runner()
+                for child_id in child_ids:
+                    enqueue_feature_build(
+                        conn,
+                        child_id,
+                        actor_id=actor_id,
+                        task_runner=runner,
+                    )
+                return {
+                    "run_id": run_id,
+                    "feature_id": feature_id,
+                    "trace_id": trace_id,
+                    "status": "decomposed",
+                    "child_ids": child_ids,
+                }
         error_code = result.get("error") or "rlm_decompose_failed"
         usage_json = json.dumps(result.get("usage") or {})
         validation_errors = result.get("validation_errors") or []

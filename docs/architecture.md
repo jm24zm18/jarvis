@@ -61,9 +61,11 @@
 
 ## Feature-build decomposition pipeline
 
-- When `RLM_ENABLED` and `FEATURE_BUILD_USE_RLM` are both true, feature-build dispatch runs `_decompose_and_split` before starting implementation execution. The RLM service reads the feature spec, injects the most relevant context files (anchors + explicitly referenced paths), and calls the provider via `ProviderRouter` to produce a JSON plan with 3-6 atomic subtasks. Each subtask is validated against the injected context, allowed_paths, and acceptance-criteria heuristics; failures trigger a repair prompt up to the configured attempt limit. Timeouts or validation errors terminate the parent run with human escalation.
-- Successful decompositions insert a new `rlm_trajectories` row (featuring the spec/context hash, prompt hash, sanitized usage, and child IDs) and mark the parent build run status `decomposed` before splitting into child feature requests. Child builds reuse the existing `enqueue_feature_build` path so deliverable gate, capsule fail-fast, and human escalation remain unchanged. Duplicate decompositions are detected through the `(feature_id, run_hash)` unique constraint, avoiding repeated child creation.
-- The admin route `POST /api/v1/feature-requests/{id}/split` (admin-only + dry-run capable) exposes the splitting logic for manual recovery, and agents drop a `NEEDS_USER_GUIDANCE` signal when RLM is disabled but the spec spans ≥3 layers, ≥4 files, or both migration+code/backends+prompt updates.
+- When `RLM_ENABLED` and `FEATURE_BUILD_USE_RLM` are both true, feature-build dispatch runs `_decompose_and_split` before starting implementation execution. The RLM service reads the feature spec, injects the most relevant context files (anchors + explicitly referenced paths), and calls the provider via `ProviderRouter` to produce a JSON plan with 3-6 atomic subtasks. Each subtask is validated against the injected context, allowed_paths, and acceptance-criteria heuristics; failures trigger a repair prompt up to the configured attempt limit.
+- When RLM is disabled but `FEATURE_BUILD_AUTO_DECOMPOSE=1`, broad-scope features auto-trigger decomposition in forced mode instead of immediately returning `NEEDS_USER_GUIDANCE`.
+- If decomposition still fails and `FEATURE_BUILD_DECOMPOSE_FALLBACK=1`, Jarvis uses deterministic layer-based fallback splitting (`web`, `api`, `db`, `skills`, `docs`, `tests`) and keeps subtasks one-layer-per-child when `FEATURE_BUILD_SUBTASK_LAYER_STRICT=1`.
+- Successful decomposition or fallback-split inserts/updates `rlm_trajectories`, marks parent build run `decomposed`, and records `execution_mode` (`decomposed` or `fallback_split`) before enqueueing child feature builds. Duplicate decompositions remain guarded by `(feature_id, run_hash)`.
+- The admin route `POST /api/v1/feature-requests/{id}/split` (admin-only + dry-run capable) remains available for manual recovery and operator-driven slicing.
 
 ## Isolated Feature Workspaces
 
@@ -71,6 +73,7 @@
 - Validation runs inside the clean clone before implementation (`uv sync --frozen`) and blocks execution if dependency snapshots drift.
 - Build execution is dispatched as `feature_builder`, and isolated workspace write access is reserved for `feature_builder` only.
 - Validation evidence (`validation_status`, log path, error summary, dependency snapshot digest) is persisted and optionally posted to synced GitHub feature issues.
+- Build-run routing records both `source_thread_id` (request origin thread) and resolved `thread_id` (active build thread). `FEATURE_BUILD_THREAD_TARGET` controls whether run updates prefer reporter thread context (`reporter`, default) or admin web thread (`admin`).
 
 ## Agent Run Reliability Flow
 

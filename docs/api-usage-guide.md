@@ -142,7 +142,7 @@ PATCH /api/v1/feature-requests/{id}/approval   # admin only
   Body: { "decision": "approved"|"rejected", "note": "..." }
 
 POST  /api/v1/feature-requests/{id}/build      # admin only, requires approval_status=approved
-  Returns: { run_id, trace_id, feature_id, status }
+  Returns: { run_id, trace_id, feature_id, status, execution_mode, target_thread_id }
 
 GET   /api/v1/feature-requests/{id}/build-runs  # admin only
   Returns: { items: [...], feature_id }
@@ -152,6 +152,8 @@ GET   /api/v1/feature-requests?approval_status=pending|approved|rejected  # filt
 
 Build-runs payload fields include:
 - `thread_id`: chat thread attached to the run (empty until assigned)
+- `source_thread_id`: original feature-request thread that build routing prefers when configured
+- `execution_mode`: `direct`, `decomposed`, or `fallback_split`
 - `updated_at`: run row freshness timestamp (used by roadmap live monitor)
 
 Idempotent create behavior:

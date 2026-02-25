@@ -18,6 +18,45 @@
 - [ ] Implement RLM decomposition + child build pipeline for large feature scopes
       Accept: new `rlm` package + migration 077, `feature_request_build_runs` gains `decomposed` status, RLM config/docs updated, admin `/split` route implemented, and unit tests (`test_rlm_*`, `test_feature_split`, `test_feature_build_rlm_routing`) cover the new behavior.
 
+## Execution Update (2026-02-25, Auto-Decompose Fallback + Build Thread Routing + Attempt Finalization)
+
+- Completed:
+  - Added feature-build auto-decomposition controls:
+    - `FEATURE_BUILD_AUTO_DECOMPOSE`
+    - `FEATURE_BUILD_DECOMPOSE_FALLBACK`
+    - `FEATURE_BUILD_THREAD_TARGET`
+    - `FEATURE_BUILD_SUBTASK_LAYER_STRICT`
+  - Added migration `080_feature_build_run_routing_mode.sql`:
+    - `feature_request_build_runs.source_thread_id`
+    - `feature_request_build_runs.execution_mode`
+    - supporting indexes.
+  - Updated feature build enqueue + runtime routing:
+    - build runs now persist source thread at enqueue time,
+    - reporter-thread-targeted build output path enabled by default,
+    - run metadata exposes execution mode (`direct`, `decomposed`, `fallback_split`).
+  - Extended decomposition pipeline:
+    - broad-scope builds can force decomposition even with RLM toggles off,
+    - deterministic fallback splitter creates one-layer-per-child subtasks when RLM decomposition fails.
+  - Hardened agent attempt lifecycle:
+    - post-success side-effect failures no longer strand attempts in `running`,
+    - `feature_builder` worker relay no longer writes duplicate `[feature_builder->main]` thread messages.
+  - Added/updated unit coverage:
+    - `tests/unit/test_feature_build_rlm_routing.py`
+    - `tests/unit/test_feature_build_task.py`
+    - `tests/unit/test_agent_recovery.py`
+
+- Missing tasks discovered during implementation:
+  - Add integration coverage for end-to-end reporter-thread routing on non-web channels.
+  - Add admin observability surfacing for `execution_mode` transitions (`direct -> decomposed/fallback_split`) in build-run dashboards.
+
+- Remaining tasks before handoff:
+  - Run focused and full quality gates:
+    - `uv run pytest tests/unit/test_feature_build_rlm_routing.py tests/unit/test_feature_build_task.py tests/unit/test_agent_recovery.py -q`
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
 ## Execution Update (2026-02-25, Chat UI Readability + Emoji Integrity Hardening)
 
 - Completed:

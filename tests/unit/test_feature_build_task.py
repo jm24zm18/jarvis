@@ -6,13 +6,19 @@ from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
     create_feature_build_run,
+    create_feature_request,
+    create_thread,
+    ensure_channel,
     ensure_system_state,
     ensure_user,
+    set_feature_request_approval,
     update_feature_build_run,
 )
+from jarvis.rlm.config import build_rlm_config
 from jarvis.tasks.feature_build import (
     _build_attempt_capsule,
     _capsule_stable_hash,
+    _decompose_and_split,
     dispatch_due_feature_build_retries,
     get_previous_capsule,
     run_feature_build,
@@ -216,3 +222,124 @@ def test_capsule_saved_on_gate_failure_and_loaded_on_retry(monkeypatch) -> None:
         loaded = get_previous_capsule(conn, run_id)
     assert loaded is not None
     assert loaded["reason"] == "insufficient_deliverable_evidence"
+
+
+def test_run_feature_build_prefers_reporter_thread_target(monkeypatch) -> None:
+    monkeypatch.setenv("FEATURE_BUILD_THREAD_TARGET", "reporter")
+    get_settings.cache_clear()
+    queued: list[tuple[str, dict[str, object], str]] = []
+
+    class _Runner:
+        def send_task(self, name: str, kwargs: dict[str, object], queue: str) -> bool:
+            queued.append((name, kwargs, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        reporter_id = ensure_user(conn, "reporter_feature_thread")
+        channel_id = ensure_channel(conn, reporter_id, "web")
+        source_thread_id = create_thread(conn, reporter_id, channel_id)
+        run_id = create_feature_build_run(
+            conn,
+            feature_id="bug_feature_build_target",
+            created_by=reporter_id,
+            source_thread_id=source_thread_id,
+        )
+
+    result = run_feature_build(
+        run_id=run_id,
+        feature_id="bug_feature_build_target",
+        trace_id="trc_feature_build_target",
+        title="Small web tweak",
+        actor_id=reporter_id,
+    )
+    assert result["status"] == "running"
+    assert queued
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT thread_id FROM feature_request_build_runs WHERE id=? LIMIT 1",
+            (run_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["thread_id"]) == source_thread_id
+
+
+def test_decompose_and_split_uses_deterministic_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("FEATURE_BUILD_USE_RLM", "0")
+    monkeypatch.setenv("RLM_ENABLED", "0")
+    get_settings.cache_clear()
+
+    class _StubRunner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object], str]] = []
+
+        def send_task(self, name: str, kwargs: dict[str, object], queue: str) -> bool:
+            self.calls.append((name, kwargs, queue))
+            return True
+
+    runner = _StubRunner()
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: runner)
+    async def _fake_decompose(*_args, **_kwargs):
+        return {
+            "status": "invalid",
+            "error": "validation_failed",
+            "validation_errors": ["bad json"],
+            "raw": "{}",
+            "prompt_hash": "abc",
+            "usage": {},
+            "provider": "stub",
+        }
+
+    monkeypatch.setattr("jarvis.tasks.feature_build.AsyncRLMService.decompose", _fake_decompose)
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        reporter_id = ensure_user(conn, "fallback_split_reporter")
+        source_channel = ensure_channel(conn, reporter_id, "web")
+        source_thread = create_thread(conn, reporter_id, source_channel)
+        feature_id, _ = create_feature_request(
+            conn,
+            title="Custom Skill Builder UI for Jarvis",
+            description=(
+                "Needs web UI, backend API, and skill persistence updates with docs/tests."
+            ),
+            priority="medium",
+            reporter_id=reporter_id,
+            thread_id=source_thread,
+            trace_id="trc_src_feature",
+        )
+        set_feature_request_approval(conn, feature_id, decision="approved", actor_id=reporter_id)
+        run_id = create_feature_build_run(
+            conn,
+            feature_id=feature_id,
+            created_by=reporter_id,
+            source_thread_id=source_thread,
+            trace_id="trc_fallback_split",
+            thread_id=source_thread,
+        )
+
+    settings = get_settings()
+    result = _decompose_and_split(
+        run_id=run_id,
+        feature_id=feature_id,
+        trace_id="trc_fallback_split",
+        actor_id=reporter_id,
+        settings=settings,
+        rlm_config=build_rlm_config(settings),
+        force=True,
+        use_fallback=True,
+        layer_strict=True,
+    )
+    assert result is not None
+    assert result["status"] == "decomposed"
+    assert len(result["child_ids"]) >= 3
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, execution_mode FROM feature_request_build_runs WHERE id=?",
+            (run_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["status"]) == "decomposed"
+    assert str(row["execution_mode"]) == "fallback_split"

@@ -120,6 +120,22 @@ class Settings(BaseSettings):
         default=2,
     )
     feature_build_use_rlm: int = Field(alias="FEATURE_BUILD_USE_RLM", default=0)
+    feature_build_auto_decompose: int = Field(
+        alias="FEATURE_BUILD_AUTO_DECOMPOSE",
+        default=1,
+    )
+    feature_build_decompose_fallback: int = Field(
+        alias="FEATURE_BUILD_DECOMPOSE_FALLBACK",
+        default=1,
+    )
+    feature_build_thread_target: str = Field(
+        alias="FEATURE_BUILD_THREAD_TARGET",
+        default="reporter",
+    )
+    feature_build_subtask_layer_strict: int = Field(
+        alias="FEATURE_BUILD_SUBTASK_LAYER_STRICT",
+        default=1,
+    )
     rlm_enabled: int = Field(alias="RLM_ENABLED", default=0)
     rlm_context_files_limit: int = Field(alias="RLM_CONTEXT_FILES_LIMIT", default=8)
     rlm_context_token_limit: int = Field(alias="RLM_CONTEXT_TOKEN_LIMIT", default=4000)

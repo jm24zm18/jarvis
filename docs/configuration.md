@@ -81,6 +81,10 @@ Source of truth: `src/jarvis/config.py`.
 | `FEATURE_BUILD_DELIVERABLE_GATE_ENABLED` | int | `1` | When `1`, feature-build runs require deliverable evidence (diff/no-op blockers + safety checks) before success finalization. |
 | `FEATURE_BUILD_LOOP_CAP_THRESHOLD` | int | `8` | Max repeated identical tool-call signature count per build attempt before forcing terminal synthesis fallback. |
 | `FEATURE_BUILD_USE_RLM` | int | `0` | When `1`, enable pre-build RLM decomposition (requires `RLM_ENABLED=1`). |
+| `FEATURE_BUILD_AUTO_DECOMPOSE` | int | `1` | When `1`, broad-scope feature builds automatically attempt decomposition even when RLM toggles are disabled. |
+| `FEATURE_BUILD_DECOMPOSE_FALLBACK` | int | `1` | When `1`, failed decomposition falls back to deterministic layer-based subtask splitting before terminal guidance. |
+| `FEATURE_BUILD_THREAD_TARGET` | str | `reporter` | Preferred thread target for build status updates (`reporter` or `admin`). |
+| `FEATURE_BUILD_SUBTASK_LAYER_STRICT` | int | `1` | When `1`, decomposition fallback enforces one-layer-per-child subtask planning. |
 | `FEATURE_ISOLATION_ENABLED` | int | `1` | When `1`, feature-build runs use isolated `/tmp` workspaces and enforce validation before execution. |
 | `FEATURE_ISOLATION_TMP_PREFIX` | str | `/tmp/jarvis-feature` | Prefix used for per-feature ephemeral workspace paths. |
 | `FEATURE_ISOLATION_MIN_DISK_GB` | int | `10` | Minimum required free disk in workspace volume before validation/build starts. |

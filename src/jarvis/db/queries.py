@@ -1800,6 +1800,8 @@ def create_feature_build_run(
     created_by: str,
     trace_id: str = "",
     thread_id: str = "",
+    source_thread_id: str = "",
+    execution_mode: str = "direct",
     workspace_path: str = "",
     workspace_created_at: str = "",
     workspace_expires_at: str = "",
@@ -1818,9 +1820,9 @@ def create_feature_build_run(
             "retry_state, next_retry_at, last_failure_reason, active_attempt, last_progress_at, "
             "last_event_type, last_trace_id, terminal_reason, workspace_path, "
             "workspace_created_at, workspace_expires_at, dependency_snapshot_json, "
-            "validation_status, validation_log_path, validation_error, created_by, "
-            "created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            "validation_status, validation_log_path, validation_error, source_thread_id, "
+            "execution_mode, created_by, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         ),
         (
             run_id,
@@ -1846,6 +1848,8 @@ def create_feature_build_run(
             validation_status,
             validation_log_path,
             validation_error,
+            source_thread_id,
+            execution_mode,
             created_by,
             ts,
             ts,
@@ -1879,6 +1883,8 @@ def update_feature_build_run(
     validation_status: str | None = None,
     validation_log_path: str | None = None,
     validation_error: str | None = None,
+    source_thread_id: str | None = None,
+    execution_mode: str | None = None,
 ) -> None:
     """Partial update for a feature build run row."""
     updates: list[str] = []
@@ -1951,6 +1957,12 @@ def update_feature_build_run(
     if validation_error is not None:
         updates.append("validation_error=?")
         params.append(str(validation_error)[:500])
+    if source_thread_id is not None:
+        updates.append("source_thread_id=?")
+        params.append(str(source_thread_id))
+    if execution_mode is not None:
+        updates.append("execution_mode=?")
+        params.append(str(execution_mode)[:40])
     if not updates:
         return
     updates.append("updated_at=?")
@@ -2073,8 +2085,8 @@ def list_due_feature_build_retries(
     max_rows = max(1, int(limit))
     rows = conn.execute(
         (
-            "SELECT id, feature_id, trace_id, thread_id, created_by, attempt_count, max_attempts, "
-            "retry_state, next_retry_at, status "
+            "SELECT id, feature_id, trace_id, thread_id, source_thread_id, execution_mode, "
+            "created_by, attempt_count, max_attempts, retry_state, next_retry_at, status "
             "FROM feature_request_build_runs "
             "WHERE status='running' AND retry_state='scheduled' AND next_retry_at!='' "
             "ORDER BY next_retry_at ASC LIMIT ?"
@@ -2110,7 +2122,7 @@ def list_feature_build_runs(
             "active_attempt, last_progress_at, last_event_type, last_trace_id, terminal_reason, "
             "workspace_path, workspace_created_at, workspace_expires_at, "
             "dependency_snapshot_json, validation_status, validation_log_path, validation_error, "
-            "created_by, created_at, updated_at "
+            "source_thread_id, execution_mode, created_by, created_at, updated_at "
             "FROM feature_request_build_runs WHERE feature_id=? "
             "ORDER BY created_at DESC LIMIT ?"
         ),
@@ -2131,7 +2143,7 @@ def get_latest_feature_build_run_for_thread(
             "r.last_event_type, r.last_trace_id, r.terminal_reason, "
             "r.workspace_path, r.workspace_created_at, r.workspace_expires_at, "
             "r.dependency_snapshot_json, r.validation_status, r.validation_log_path, "
-            "r.validation_error, r.created_by, "
+            "r.validation_error, r.source_thread_id, r.execution_mode, r.created_by, "
             "r.created_at, r.updated_at, b.title AS feature_title, b.approval_status "
             "FROM feature_request_build_runs r "
             "JOIN bug_reports b ON b.id=r.feature_id "

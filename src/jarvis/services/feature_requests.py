@@ -67,7 +67,10 @@ def enqueue_feature_build(
     Returns run metadata including run_id and trace_id.
     """
     row = conn.execute(
-        "SELECT id, kind, approval_status, title FROM bug_reports WHERE id=? LIMIT 1",
+        (
+            "SELECT id, kind, approval_status, title, thread_id "
+            "FROM bug_reports WHERE id=? LIMIT 1"
+        ),
         (feature_id,),
     ).fetchone()
     if row is None:
@@ -82,7 +85,14 @@ def enqueue_feature_build(
                 f"current approval_status={row['approval_status']!r}"
             ),
         )
-    run_id = create_feature_build_run(conn, feature_id=feature_id, created_by=actor_id)
+    source_thread_id = str(row["thread_id"] or "").strip()
+    run_id = create_feature_build_run(
+        conn,
+        feature_id=feature_id,
+        created_by=actor_id,
+        source_thread_id=source_thread_id,
+        execution_mode="direct",
+    )
     from jarvis.ids import new_id
 
     settings = get_settings()
@@ -127,6 +137,8 @@ def enqueue_feature_build(
         "run_id": run_id,
         "trace_id": trace_id,
         "feature_id": feature_id,
+        "execution_mode": "direct",
+        "target_thread_id": source_thread_id,
         "status": "queued" if queued else "failed",
         "queued": queued,
     }

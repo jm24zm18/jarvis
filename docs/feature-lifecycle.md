@@ -7,9 +7,20 @@ Feature implementation is driven by the roadmap feature-request pipeline.
 1. Create a feature request through `/api/v1/feature-requests` or `create_feature_request`.
 2. Approve the request (`approval_status=approved`).
 3. Start the build run (`/api/v1/feature-requests/{id}/build`).
-4. Jarvis creates an isolated workspace in `/tmp/jarvis-feature-*`.
-5. Jarvis validates dependencies in that clean workspace (`uv sync --frozen`).
-6. Only validated runs continue to implementation execution.
+4. Broad-scope requests are decomposed into child feature builds:
+   - RLM path when enabled (`FEATURE_BUILD_USE_RLM=1` + `RLM_ENABLED=1`), or
+   - forced auto-decomposition when `FEATURE_BUILD_AUTO_DECOMPOSE=1`, with deterministic fallback split when `FEATURE_BUILD_DECOMPOSE_FALLBACK=1`.
+5. Jarvis creates an isolated workspace in `/tmp/jarvis-feature-*` for each active build.
+6. Jarvis validates dependencies in that clean workspace (`uv sync --frozen`).
+7. Only validated runs continue to implementation execution.
+
+## Build Routing
+
+- `source_thread_id` captures where the feature originated.
+- `thread_id` captures where active build updates are posted.
+- `FEATURE_BUILD_THREAD_TARGET` controls target preference:
+  - `reporter` (default): prefer source thread visibility.
+  - `admin`: prefer admin-triggering web thread.
 
 ## Isolated Development
 

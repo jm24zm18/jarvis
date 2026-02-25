@@ -36,6 +36,8 @@
 - Retry-intent messages in exhausted feature-build threads must enqueue a fresh build run (`feature.build.retry.manual_enqueued`) instead of entering generic audit/tool-only loops.
 - Feature builds must execute and validate in isolated `/tmp` workspaces; clean clones + frozen dependency validation are required to prevent dependency drift, branch contamination, and credential leakage.
 - Workspace write operations under the feature isolation prefix must be restricted to `feature_builder`; non-feature principals must be denied.
+- Broad-scope feature builds must prefer decomposition over immediate `NEEDS_USER_GUIDANCE` when auto-decompose is enabled, and deterministic fallback splitting must produce bounded one-layer child tasks when configured.
+- Feature-build thread routing must preserve source-thread visibility when `FEATURE_BUILD_THREAD_TARGET=reporter`; run metadata (`source_thread_id`, `thread_id`, `execution_mode`) must remain internally consistent across retries.
 
 ## High-Risk Files
 

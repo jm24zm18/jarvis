@@ -43,3 +43,35 @@ def test_run_feature_build_returns_failure_when_decompose_fails(monkeypatch):
         actor_id="agent",
     )
     assert result == failure
+
+
+def test_run_feature_build_forces_decompose_for_broad_scope_when_rlm_disabled(monkeypatch):
+    monkeypatch.setenv("FEATURE_BUILD_USE_RLM", "0")
+    monkeypatch.setenv("RLM_ENABLED", "0")
+    monkeypatch.setenv("FEATURE_BUILD_AUTO_DECOMPOSE", "1")
+    from jarvis.config import get_settings
+
+    get_settings.cache_clear()
+    captured: dict[str, object] = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return {
+            "run_id": "run789",
+            "feature_id": "feat789",
+            "trace_id": "trc789",
+            "status": "decomposed",
+            "child_ids": ["child1", "child2", "child3"],
+        }
+
+    monkeypatch.setattr("jarvis.tasks.feature_build._decompose_and_split", _capture)
+    result = run_feature_build(
+        run_id="run789",
+        feature_id="feat789",
+        trace_id="trc789",
+        title="Custom Skill Builder UI API",
+        actor_id="agent",
+    )
+    assert result["status"] == "decomposed"
+    assert captured.get("force") is True
+    assert captured.get("use_fallback") is True

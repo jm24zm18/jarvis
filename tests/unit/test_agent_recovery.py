@@ -154,6 +154,68 @@ def test_git_changed_files_subtracts_baseline(monkeypatch) -> None:
     assert files == ["bar.txt"]
 
 
+def test_agent_step_keeps_succeeded_attempt_when_post_side_effects_fail(monkeypatch) -> None:
+    async def fake_run_agent_step(*, conn, thread_id, **_kwargs) -> str:
+        return insert_message(conn, thread_id, "assistant", "done")
+
+    class _ExplodingRunner:
+        def send_task(self, *_args, **_kwargs) -> bool:
+            raise RuntimeError("dispatch boom")
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _ExplodingRunner())
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550991")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "hello")
+
+    trace_id = "trc_post_effect_failure"
+    message_id = agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+    assert message_id.startswith("msg_")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, ended_at FROM agent_run_attempts WHERE trace_id=? AND attempt=1",
+            (trace_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["status"]) == "succeeded"
+    assert str(row["ended_at"] or "").strip()
+
+
+def test_agent_step_feature_builder_does_not_emit_relay_message(monkeypatch) -> None:
+    async def fake_run_agent_step(*, conn, thread_id, **_kwargs) -> str:
+        return insert_message(conn, thread_id, "agent", "NEEDS_USER_GUIDANCE: split me")
+
+    relay_calls: list[str] = []
+
+    def _record_session_send(*_args, **_kwargs):
+        relay_calls.append("called")
+        return "evt_test"
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr("jarvis.tasks.agent.session_send", _record_session_send)
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550992")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "build")
+
+    trace_id = "trc_feature_builder_no_relay"
+    _ = agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="feature_builder")
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT content FROM messages WHERE thread_id=? ORDER BY created_at",
+            (thread_id,),
+        ).fetchall()
+    assert relay_calls == []
+    assert not any("[feature_builder->main]" in str(row["content"]) for row in rows)
+
+
 def _insert_feature(conn) -> str:
     feature_id = new_id("bug")
     now = now_iso()

@@ -1392,119 +1392,93 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                     trace_id=trace_id,
                     message_id=message_id,
                 )
-
-                if actor_id == "main":
+                try:
+                    if actor_id == "main":
+                        conn.execute(
+                            (
+                                "INSERT INTO web_notifications("
+                                "thread_id, event_type, payload_json, created_at"
+                                ") "
+                                "VALUES(?,?,?,?)"
+                            ),
+                            (
+                                thread_id,
+                                "message.new",
+                                json.dumps({"message_id": message_id, "agent_id": actor_id}),
+                                now_iso(),
+                            ),
+                        )
                     conn.execute(
                         (
                             "INSERT INTO web_notifications("
                             "thread_id, event_type, payload_json, created_at"
-                            ") "
-                            "VALUES(?,?,?,?)"
+                            ") VALUES(?,?,?,?)"
                         ),
                         (
                             thread_id,
-                            "message.new",
-                            json.dumps({"message_id": message_id, "agent_id": actor_id}),
+                            "agent.done",
+                            json.dumps({"thread_id": thread_id, "agent_id": actor_id}),
                             now_iso(),
                         ),
                     )
-                conn.execute(
-                    (
-                        "INSERT INTO web_notifications("
-                        "thread_id, event_type, payload_json, created_at"
-                        ") VALUES(?,?,?,?)"
-                    ),
-                    (
-                        thread_id,
-                        "agent.done",
-                        json.dumps({"thread_id": thread_id, "agent_id": actor_id}),
-                        now_iso(),
-                    ),
-                )
-                if actor_id == "main":
-                    channel_row = conn.execute(
-                        (
-                            "SELECT c.channel_type FROM threads t "
-                            "JOIN channels c ON c.id=t.channel_id WHERE t.id=? LIMIT 1"
-                        ),
-                        (thread_id,),
-                    ).fetchone()
-                    channel_type = (
-                        str(channel_row["channel_type"]) if channel_row is not None else ""
-                    )
-                    if channel_type and channel_type != "web":
-                        def _emit(evt_type: str, evt_payload: dict[str, object]) -> None:
-                            emit_event(
-                                conn,
-                                EventInput(
-                                    trace_id=trace_id,
-                                    span_id=new_id("spn"),
-                                    parent_span_id=None,
-                                    thread_id=thread_id,
-                                    event_type=evt_type,
-                                    component="agent",
-                                    actor_type="system",
-                                    actor_id="agent",
-                                    payload_json=json.dumps(evt_payload),
-                                    payload_redacted_json=json.dumps(redact_payload(evt_payload)),
-                                ),
-                            )
-
-                        _emit(
-                            "channel.dispatch.enqueue.start",
-                            {
-                                "message_id": message_id,
-                                "channel_type": channel_type,
-                            },
+                    if actor_id == "main":
+                        channel_row = conn.execute(
+                            (
+                                "SELECT c.channel_type FROM threads t "
+                                "JOIN channels c ON c.id=t.channel_id WHERE t.id=? LIMIT 1"
+                            ),
+                            (thread_id,),
+                        ).fetchone()
+                        channel_type = (
+                            str(channel_row["channel_type"]) if channel_row is not None else ""
                         )
+                        if channel_type and channel_type != "web":
 
-                        ok = get_task_runner().send_task(
-                            "jarvis.tasks.channel.send_channel_message",
-                            kwargs={
-                                "thread_id": thread_id,
-                                "message_id": message_id,
-                                "channel_type": channel_type,
-                            },
-                            queue="tools_io",
-                        )
-                        if ok:
+                            def _emit(evt_type: str, evt_payload: dict[str, object]) -> None:
+                                emit_event(
+                                    conn,
+                                    EventInput(
+                                        trace_id=trace_id,
+                                        span_id=new_id("spn"),
+                                        parent_span_id=None,
+                                        thread_id=thread_id,
+                                        event_type=evt_type,
+                                        component="agent",
+                                        actor_type="system",
+                                        actor_id="agent",
+                                        payload_json=json.dumps(evt_payload),
+                                        payload_redacted_json=json.dumps(redact_payload(evt_payload)),
+                                    ),
+                                )
+
                             _emit(
-                                "channel.dispatch.enqueue.end",
+                                "channel.dispatch.enqueue.start",
                                 {
                                     "message_id": message_id,
                                     "channel_type": channel_type,
                                 },
                             )
-                        else:
-                            logger.warning(
-                                "Failed to dispatch %s send task "
-                                "thread_id=%s message_id=%s trace_id=%s",
-                                channel_type,
-                                thread_id,
-                                message_id,
-                                trace_id,
-                            )
-                            _emit(
-                                "channel.dispatch.enqueue.failed",
-                                {
-                                    "message_id": message_id,
-                                    "channel_type": channel_type,
-                                    "attempt": 1,
-                                    "queue": "tools_io",
-                                },
-                            )
-                            fallback_ok = get_task_runner().send_task(
+
+                            ok = get_task_runner().send_task(
                                 "jarvis.tasks.channel.send_channel_message",
                                 kwargs={
                                     "thread_id": thread_id,
                                     "message_id": message_id,
                                     "channel_type": channel_type,
                                 },
-                                queue="tools_io_retry",
+                                queue="tools_io",
                             )
-                            if not fallback_ok:
-                                logger.error(
-                                    "Fallback dispatch to tools_io_retry failed for %s "
+                            if ok:
+                                _emit(
+                                    "channel.dispatch.enqueue.end",
+                                    {
+                                        "message_id": message_id,
+                                        "channel_type": channel_type,
+                                    },
+                                )
+                            else:
+                                logger.warning(
+                                    "Failed to dispatch %s send task "
                                     "thread_id=%s message_id=%s trace_id=%s",
                                     channel_type,
                                     thread_id,
@@ -1516,38 +1490,73 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                                     {
                                         "message_id": message_id,
                                         "channel_type": channel_type,
-                                        "attempt": 2,
-                                        "queue": "tools_io_retry",
+                                        "attempt": 1,
+                                        "queue": "tools_io",
                                     },
                                 )
-                                from jarvis.routes.health import increment_metric
-                                increment_metric("task_runner_enqueue_failures_total")
-                else:
-                    # Worker auto-reply: send result back to main agent
-                    row = conn.execute(
-                        "SELECT content FROM messages WHERE id=?", (message_id,)
-                    ).fetchone()
-                    if row is not None:
-                        result_text = str(row["content"])
-                        session_send(
-                            conn,
-                            session_id=thread_id,
-                            to_agent_id="main",
-                            message=result_text,
-                            trace_id=trace_id,
-                            from_agent_id=actor_id,
-                        )
-                        ok = get_task_runner().send_task(
-                            "jarvis.tasks.agent.agent_step",
-                            kwargs={
-                                "trace_id": trace_id,
-                                "thread_id": thread_id,
-                                "actor_id": "main",
-                            },
-                            queue="agent_priority",
-                        )
-                        if not ok:
-                            logger.error("Failed to dispatch main agent reply task")
+                                fallback_ok = get_task_runner().send_task(
+                                    "jarvis.tasks.channel.send_channel_message",
+                                    kwargs={
+                                        "thread_id": thread_id,
+                                        "message_id": message_id,
+                                        "channel_type": channel_type,
+                                    },
+                                    queue="tools_io_retry",
+                                )
+                                if not fallback_ok:
+                                    logger.error(
+                                        "Fallback dispatch to tools_io_retry failed for %s "
+                                        "thread_id=%s message_id=%s trace_id=%s",
+                                        channel_type,
+                                        thread_id,
+                                        message_id,
+                                        trace_id,
+                                    )
+                                    _emit(
+                                        "channel.dispatch.enqueue.failed",
+                                        {
+                                            "message_id": message_id,
+                                            "channel_type": channel_type,
+                                            "attempt": 2,
+                                            "queue": "tools_io_retry",
+                                        },
+                                    )
+                                    from jarvis.routes.health import increment_metric
+
+                                    increment_metric("task_runner_enqueue_failures_total")
+                    elif actor_id != "feature_builder":
+                        # Worker auto-reply: send result back to main agent
+                        row = conn.execute(
+                            "SELECT content FROM messages WHERE id=?", (message_id,)
+                        ).fetchone()
+                        if row is not None:
+                            result_text = str(row["content"])
+                            session_send(
+                                conn,
+                                session_id=thread_id,
+                                to_agent_id="main",
+                                message=result_text,
+                                trace_id=trace_id,
+                                from_agent_id=actor_id,
+                            )
+                            ok = get_task_runner().send_task(
+                                "jarvis.tasks.agent.agent_step",
+                                kwargs={
+                                    "trace_id": trace_id,
+                                    "thread_id": thread_id,
+                                    "actor_id": "main",
+                                },
+                                queue="agent_priority",
+                            )
+                            if not ok:
+                                logger.error("Failed to dispatch main agent reply task")
+                except Exception:
+                    logger.exception(
+                        "post-success side effects failed trace_id=%s attempt=%s actor=%s",
+                        trace_id,
+                        attempt_no,
+                        actor_id,
+                    )
                 return message_id
         except Exception as exc:
             failure_kind = classify_failure(exc)
