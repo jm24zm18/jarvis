@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { parseBlocks } from "./markdownParser";
+import { sanitizeForDisplay } from "./textSanitizer";
 
 function parseInline(text: string): ReactNode[] {
   const parts: ReactNode[] = [];
@@ -52,9 +53,9 @@ function parseInline(text: string): ReactNode[] {
 }
 
 export default function MarkdownLite({ content }: { content: string }) {
-  const blocks = parseBlocks(content);
+  const blocks = parseBlocks(sanitizeForDisplay(content));
   return (
-    <div className="markdown-lite">
+    <div className="markdown-lite min-w-0 break-words [overflow-wrap:anywhere]">
       {blocks.map((block, idx) => {
         if (block.type === "heading") {
           const cls =
@@ -106,12 +107,12 @@ export default function MarkdownLite({ content }: { content: string }) {
         }
         if (block.type === "table") {
           return (
-            <div key={idx} className="my-2 overflow-x-auto">
-              <table className="min-w-full border-collapse text-left text-xs">
+            <div key={idx} className="my-2 min-w-0 overflow-x-auto">
+              <table className="markdown-lite-table min-w-full border-collapse text-left text-xs">
                 <thead>
                   <tr>
                     {block.header.map((cell, cellIdx) => (
-                      <th key={cellIdx} className="border border-[var(--border-strong)] bg-mist px-2 py-1">
+                      <th key={cellIdx} className="border border-[var(--border-strong)] bg-mist px-2 py-1 align-top">
                         {parseInline(cell)}
                       </th>
                     ))}
@@ -132,12 +133,13 @@ export default function MarkdownLite({ content }: { content: string }) {
             </div>
           );
         }
+        const lines = block.text.split("\n");
         return (
-          <p key={idx} className="my-1">
-            {block.text.split("\n").map((line, lineIdx) => (
+          <p key={idx} className="my-1 min-w-0 break-words [overflow-wrap:anywhere]">
+            {lines.map((line, lineIdx) => (
               <span key={lineIdx}>
                 {parseInline(line)}
-                {lineIdx < block.text.split("\n").length - 1 ? <br /> : null}
+                {lineIdx < lines.length - 1 ? <br /> : null}
               </span>
             ))}
           </p>

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
     create_feature_build_run,
@@ -15,6 +18,12 @@ from jarvis.tasks.feature_build import (
     get_previous_capsule,
     save_capsule,
 )
+
+
+@pytest.fixture(autouse=True)
+def _disable_isolation_for_capsule_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FEATURE_ISOLATION_ENABLED", "0")
+    get_settings.cache_clear()
 
 # ---------------------------------------------------------------------------
 # _capsule_stable_hash

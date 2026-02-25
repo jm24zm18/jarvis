@@ -37,6 +37,7 @@ Canonical navigation for repository documentation.
 ## Architecture and Safety
 
 - `docs/architecture.md`
+- `docs/feature-lifecycle.md`
 - `docs/codebase-tour.md`
 - `docs/change-safety.md`
 - `docs/testing.md`

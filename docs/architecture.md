@@ -61,9 +61,16 @@
 
 ## Feature-build decomposition pipeline
 
-- When `RLM_ENABLED` and `FEATURE_BUILD_USE_RLM` are both true, Ralph runs `_decompose_and_split` before starting the main agent. The new RLM service reads the feature spec, injects the most relevant context files (anchors + explicitly referenced paths), and calls the provider via `ProviderRouter` to produce a JSON plan with 3-6 atomic subtasks. Each subtask is validated against the injected context, allowed_paths, and acceptance-criteria heuristics; failures trigger a repair prompt up to the configured attempt limit. Timeouts or validation errors terminate the parent run with human escalation.
+- When `RLM_ENABLED` and `FEATURE_BUILD_USE_RLM` are both true, feature-build dispatch runs `_decompose_and_split` before starting implementation execution. The RLM service reads the feature spec, injects the most relevant context files (anchors + explicitly referenced paths), and calls the provider via `ProviderRouter` to produce a JSON plan with 3-6 atomic subtasks. Each subtask is validated against the injected context, allowed_paths, and acceptance-criteria heuristics; failures trigger a repair prompt up to the configured attempt limit. Timeouts or validation errors terminate the parent run with human escalation.
 - Successful decompositions insert a new `rlm_trajectories` row (featuring the spec/context hash, prompt hash, sanitized usage, and child IDs) and mark the parent build run status `decomposed` before splitting into child feature requests. Child builds reuse the existing `enqueue_feature_build` path so deliverable gate, capsule fail-fast, and human escalation remain unchanged. Duplicate decompositions are detected through the `(feature_id, run_hash)` unique constraint, avoiding repeated child creation.
-- The new admin route `POST /api/v1/feature-requests/{id}/split` (admin-only + dry-run capable) exposes the splitting logic for manual recovery, and agents drop a `NEEDS_USER_GUIDANCE` signal when RLM is disabled but the spec spans ≥3 layers, ≥4 files, or both migration+code/backends+prompt updates.
+- The admin route `POST /api/v1/feature-requests/{id}/split` (admin-only + dry-run capable) exposes the splitting logic for manual recovery, and agents drop a `NEEDS_USER_GUIDANCE` signal when RLM is disabled but the spec spans ≥3 layers, ≥4 files, or both migration+code/backends+prompt updates.
+
+## Isolated Feature Workspaces
+
+- Feature builds create ephemeral workspaces under `FEATURE_ISOLATION_TMP_PREFIX` (default `/tmp/jarvis-feature-*`) and persist workspace metadata on each `feature_request_build_runs` row.
+- Validation runs inside the clean clone before implementation (`uv sync --frozen`) and blocks execution if dependency snapshots drift.
+- Build execution is dispatched as `feature_builder`, and isolated workspace write access is reserved for `feature_builder` only.
+- Validation evidence (`validation_status`, log path, error summary, dependency snapshot digest) is persisted and optionally posted to synced GitHub feature issues.
 
 ## Agent Run Reliability Flow
 

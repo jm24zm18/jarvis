@@ -1800,6 +1800,13 @@ def create_feature_build_run(
     created_by: str,
     trace_id: str = "",
     thread_id: str = "",
+    workspace_path: str = "",
+    workspace_created_at: str = "",
+    workspace_expires_at: str = "",
+    dependency_snapshot_json: str = "{}",
+    validation_status: str = "pending",
+    validation_log_path: str = "",
+    validation_error: str = "",
 ) -> str:
     """Insert a new build run row in 'queued' state and return its id."""
     run_id = new_id("fbr")
@@ -1809,8 +1816,11 @@ def create_feature_build_run(
             "INSERT INTO feature_request_build_runs"
             "(id, feature_id, trace_id, thread_id, status, summary, attempt_count, max_attempts, "
             "retry_state, next_retry_at, last_failure_reason, active_attempt, last_progress_at, "
-            "last_event_type, last_trace_id, terminal_reason, created_by, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            "last_event_type, last_trace_id, terminal_reason, workspace_path, "
+            "workspace_created_at, workspace_expires_at, dependency_snapshot_json, "
+            "validation_status, validation_log_path, validation_error, created_by, "
+            "created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         ),
         (
             run_id,
@@ -1829,6 +1839,13 @@ def create_feature_build_run(
             "",
             "",
             "",
+            workspace_path,
+            workspace_created_at,
+            workspace_expires_at,
+            dependency_snapshot_json,
+            validation_status,
+            validation_log_path,
+            validation_error,
             created_by,
             ts,
             ts,
@@ -1855,6 +1872,13 @@ def update_feature_build_run(
     last_event_type: str | None = None,
     last_trace_id: str | None = None,
     terminal_reason: str | None = None,
+    workspace_path: str | None = None,
+    workspace_created_at: str | None = None,
+    workspace_expires_at: str | None = None,
+    dependency_snapshot_json: str | None = None,
+    validation_status: str | None = None,
+    validation_log_path: str | None = None,
+    validation_error: str | None = None,
 ) -> None:
     """Partial update for a feature build run row."""
     updates: list[str] = []
@@ -1906,6 +1930,27 @@ def update_feature_build_run(
     if terminal_reason is not None:
         updates.append("terminal_reason=?")
         params.append(str(terminal_reason)[:160])
+    if workspace_path is not None:
+        updates.append("workspace_path=?")
+        params.append(str(workspace_path))
+    if workspace_created_at is not None:
+        updates.append("workspace_created_at=?")
+        params.append(str(workspace_created_at))
+    if workspace_expires_at is not None:
+        updates.append("workspace_expires_at=?")
+        params.append(str(workspace_expires_at))
+    if dependency_snapshot_json is not None:
+        updates.append("dependency_snapshot_json=?")
+        params.append(str(dependency_snapshot_json))
+    if validation_status is not None:
+        updates.append("validation_status=?")
+        params.append(str(validation_status)[:40])
+    if validation_log_path is not None:
+        updates.append("validation_log_path=?")
+        params.append(str(validation_log_path))
+    if validation_error is not None:
+        updates.append("validation_error=?")
+        params.append(str(validation_error)[:500])
     if not updates:
         return
     updates.append("updated_at=?")
@@ -2063,6 +2108,8 @@ def list_feature_build_runs(
             "SELECT id, feature_id, trace_id, thread_id, status, summary, "
             "attempt_count, max_attempts, retry_state, next_retry_at, last_failure_reason, "
             "active_attempt, last_progress_at, last_event_type, last_trace_id, terminal_reason, "
+            "workspace_path, workspace_created_at, workspace_expires_at, "
+            "dependency_snapshot_json, validation_status, validation_log_path, validation_error, "
             "created_by, created_at, updated_at "
             "FROM feature_request_build_runs WHERE feature_id=? "
             "ORDER BY created_at DESC LIMIT ?"
@@ -2081,7 +2128,10 @@ def get_latest_feature_build_run_for_thread(
             "SELECT r.id, r.feature_id, r.trace_id, r.thread_id, r.status, r.summary, "
             "r.attempt_count, r.max_attempts, r.retry_state, r.next_retry_at, "
             "r.last_failure_reason, r.active_attempt, r.last_progress_at, "
-            "r.last_event_type, r.last_trace_id, r.terminal_reason, r.created_by, "
+            "r.last_event_type, r.last_trace_id, r.terminal_reason, "
+            "r.workspace_path, r.workspace_created_at, r.workspace_expires_at, "
+            "r.dependency_snapshot_json, r.validation_status, r.validation_log_path, "
+            "r.validation_error, r.created_by, "
             "r.created_at, r.updated_at, b.title AS feature_title, b.approval_status "
             "FROM feature_request_build_runs r "
             "JOIN bug_reports b ON b.id=r.feature_id "

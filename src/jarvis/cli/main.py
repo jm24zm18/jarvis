@@ -15,10 +15,11 @@ from jarvis.cli.chat import (
     resolve_thread,
     send_and_wait,
 )
-from jarvis.cli.ralph import ralph_group
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
+from jarvis.db.queries import update_feature_build_run
 from jarvis.memory.skills import SkillsService
+from jarvis.tools.feature_isolate import WorkspaceContext, validate_workspace
 
 
 @click.group()
@@ -320,9 +321,6 @@ def test_gates(fail_fast: bool, json_output: bool) -> None:
     run_test_gates(fail_fast=fail_fast, json_output=json_output)
 
 
-cli.add_command(ralph_group)
-
-
 @cli.group("skill")
 def skill_group() -> None:
     """Managed skill package commands."""
@@ -564,6 +562,58 @@ def maintenance_enqueue() -> None:
         queue="agent_default",
     )
     click.echo("maintenance task queued" if ok else "failed to queue maintenance task")
+
+
+@cli.group("feature")
+def feature_group() -> None:
+    """Feature build utilities."""
+
+
+@feature_group.command("validate")
+@click.option("--id", "feature_id", required=True, help="Feature request ID.")
+def feature_validate(feature_id: str) -> None:
+    """Validate the latest isolated workspace for a feature request."""
+    settings = get_settings()
+    with get_conn() as conn:
+        row = conn.execute(
+            (
+                "SELECT id, workspace_path, workspace_created_at, workspace_expires_at, "
+                "dependency_snapshot_json FROM feature_request_build_runs "
+                "WHERE feature_id=? ORDER BY created_at DESC LIMIT 1"
+            ),
+            (feature_id,),
+        ).fetchone()
+        if row is None:
+            raise click.ClickException(f"no build run found for feature: {feature_id}")
+        workspace = str(row["workspace_path"] or "").strip()
+        if not workspace:
+            raise click.ClickException(
+                f"latest run {row['id']} has no workspace metadata; isolation may be disabled"
+            )
+        raw_snapshot = str(row["dependency_snapshot_json"] or "{}").strip() or "{}"
+        try:
+            snapshot = json.loads(raw_snapshot)
+        except json.JSONDecodeError:
+            snapshot = {}
+        ctx = WorkspaceContext(
+            feature_id=feature_id,
+            workspace_path=Path(workspace),
+            created_at=str(row["workspace_created_at"] or ""),
+            expires_at=str(row["workspace_expires_at"] or ""),
+            dependency_snapshot=snapshot if isinstance(snapshot, dict) else {},
+        )
+        result = validate_workspace(ctx, min_free_gb=int(settings.feature_isolation_min_disk_gb))
+        update_feature_build_run(
+            conn,
+            str(row["id"]),
+            validation_status="passed" if result.ok else "failed",
+            validation_log_path=result.log_path,
+            validation_error=result.error,
+        )
+    if result.ok:
+        click.echo(f"validation passed (log: {result.log_path})")
+    else:
+        click.echo(f"validation failed: {result.error} (log: {result.log_path})")
 
 
 @cli.group("memory")

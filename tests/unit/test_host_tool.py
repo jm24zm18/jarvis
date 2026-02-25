@@ -207,3 +207,24 @@ def test_exec_host_sqlite_preflight_hints_unknown_table(tmp_path: Path) -> None:
         assert "feature_requests -> bug_reports" in str(result["stderr"])
     finally:
         get_settings.cache_clear()
+
+
+def test_exec_host_workspace_write_denied_for_non_feature_builder(tmp_path: Path) -> None:
+    os.environ["EXEC_HOST_ALLOWED_CWD_PREFIXES"] = str(tmp_path)
+    os.environ["FEATURE_ISOLATION_TMP_PREFIX"] = "/tmp/jarvis-feature"
+    get_settings.cache_clear()
+    workspace_dir = Path("/tmp/jarvis-feature-bug_test-123")
+    try:
+        with get_conn() as conn:
+            ensure_system_state(conn)
+            result = execute_host_command(
+                conn,
+                command=f"touch {workspace_dir}/new.txt",
+                cwd=str(tmp_path),
+                trace_id="trc_host_workspace_guard",
+                caller_id="coder",
+            )
+        assert result["exit_code"] == 126
+        assert "workspace write denied" in str(result["stderr"])
+    finally:
+        get_settings.cache_clear()

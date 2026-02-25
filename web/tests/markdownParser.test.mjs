@@ -209,3 +209,14 @@ test("preserves composed emoji graphemes in parsed text", () => {
   assert.match(blocks[0].text, /👨‍👩‍👧‍👦/);
   assert.match(blocks[0].text, /👩🏽‍💻/);
 });
+
+test("strips harmful control markers while preserving flags and keycaps", () => {
+  const content = "hello <|analysis|>\u202E flag 🇺🇸 keycap 1️⃣";
+  const blocks = parseBlocks(content);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].type, "paragraph");
+  assert.doesNotMatch(blocks[0].text, /<\|analysis\|>/);
+  assert.doesNotMatch(blocks[0].text, /\u202E/);
+  assert.match(blocks[0].text, /🇺🇸/);
+  assert.match(blocks[0].text, /1️⃣/);
+});

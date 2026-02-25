@@ -1,6 +1,6 @@
-# WhatsApp Channel (Evolution API)
+# WhatsApp Channel (Baileys Sidecar)
 
-Jarvis uses Evolution API (Baileys) as the preferred WhatsApp transport when `EVOLUTION_API_URL` is configured.
+Jarvis uses a local Baileys sidecar as the preferred WhatsApp transport when `BAILEYS_API_URL` is configured.
 
 ## Runtime
 
@@ -16,13 +16,13 @@ Jarvis uses Evolution API (Baileys) as the preferred WhatsApp transport when `EV
 
 ## Env
 
-- `EVOLUTION_API_URL`
-- `EVOLUTION_API_KEY`
-- `EVOLUTION_WEBHOOK_URL`
-- `EVOLUTION_WEBHOOK_BY_EVENTS`
-- `EVOLUTION_WEBHOOK_EVENTS`
+- `BAILEYS_API_URL`
+- `BAILEYS_WEBHOOK_URL`
+- `BAILEYS_WEBHOOK_BY_EVENTS`
+- `BAILEYS_WEBHOOK_EVENTS`
+- `BAILEYS_WEBHOOK_SECRET_HEADER`
 - `WHATSAPP_INSTANCE`
-- `WHATSAPP_AUTO_CREATE_ON_STARTUP`
+- `BAILEYS_AUTO_CREATE_ON_STARTUP`
 - `WHATSAPP_WEBHOOK_SECRET`
 - `WHATSAPP_MEDIA_DIR`
 - `WHATSAPP_MEDIA_MAX_BYTES`
@@ -38,7 +38,7 @@ Jarvis uses Evolution API (Baileys) as the preferred WhatsApp transport when `EV
 - `WHATSAPP_REVIEW_MODE`
 - `WHATSAPP_ALLOWED_SENDERS`
 
-If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path for text outbound.
+If `BAILEYS_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path for text outbound.
 
 ## Security
 
@@ -47,7 +47,7 @@ If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path f
 - Pairing and lifecycle APIs are admin-only and rate-limited.
 - Sender review queue APIs are admin-only and enforce explicit allow/deny decisions.
 - QR payloads and pairing codes are redacted in event payloads/logs (`qrcode`, `qr_code`, `pairing_code`, `code` keys).
-- Keep Evolution webhook payload compatibility tests for `messages.upsert` variants (text, extended text, reaction, media, group context).
+- Keep Baileys webhook payload compatibility tests for `messages.upsert` variants (text, extended text, reaction, media, group context).
 - Media URL policy is HTTPS-only and supports optional host allowlisting (`WHATSAPP_MEDIA_ALLOWED_HOSTS`).
 - Inbound media enforces MIME and size gates (`WHATSAPP_MEDIA_ALLOWED_MIME_PREFIXES`, `WHATSAPP_MEDIA_MAX_BYTES`).
 - On blocked/failed media safety checks, inbound remains accepted but degraded, with marker messages (`[media blocked]` / `[voice note unavailable]`) and `channel.inbound.degraded` reason codes.
@@ -62,7 +62,7 @@ If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path f
 
 ## Callback Contract
 
-- Jarvis can auto-configure Evolution callback settings via `EVOLUTION_WEBHOOK_*` vars.
+- Jarvis stores callback metadata from `BAILEYS_WEBHOOK_*` vars and expects webhook forwarding to be managed by the sidecar.
 - `/api/v1/channels/whatsapp/status` includes callback health state (`enabled`, `configured`, `events`, and last status/error).
 - `/api/v1/channels/whatsapp/status` also includes normalized connector status and diagnostics:
   - `status`: current sidecar state (`open`, `qr`, `connecting`, `close`, ...)
@@ -87,7 +87,7 @@ If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path f
 ## Troubleshooting Decision Tree
 
 1. `GET /api/v1/channels/whatsapp/status` fails or returns disabled:
-   - set `EVOLUTION_API_URL` and `EVOLUTION_API_KEY`.
+   - set `BAILEYS_API_URL`.
    - restart API process.
 2. Pairing/QR actions fail:
    - verify instance exists (`POST /api/v1/channels/whatsapp/create` if needed).
@@ -98,7 +98,7 @@ If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path f
      `diagnostics.relink_required=true`, use Admin UI `Force Re-pair`, or manual re-pair via
      `POST /api/v1/channels/whatsapp/reset`.
 3. Webhook receives `401 invalid_webhook_secret`:
-   - ensure Evolution sends `X-WhatsApp-Secret` matching `WHATSAPP_WEBHOOK_SECRET`.
+   - ensure Baileys sidecar sends `X-WhatsApp-Secret` (or configured header) matching `WHATSAPP_WEBHOOK_SECRET`.
 4. Inbound appears accepted but no thread message created:
    - check sender review mode (`WHATSAPP_REVIEW_MODE`, `WHATSAPP_ALLOWED_SENDERS`).
    - resolve queue item via review-queue APIs.
@@ -112,7 +112,7 @@ If `EVOLUTION_API_URL` is unset, Jarvis falls back to WhatsApp Cloud send path f
 
 ## Rollback
 
-1. Disable sidecar usage quickly by clearing `EVOLUTION_API_URL` and restarting API.
+1. Disable sidecar usage quickly by clearing `BAILEYS_API_URL` and restarting API.
 2. Keep webhook endpoint active to avoid hard failures while sidecar is unavailable.
 3. Use admin disconnect endpoint:
    - `POST /api/v1/channels/whatsapp/disconnect`

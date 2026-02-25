@@ -81,6 +81,11 @@ Source of truth: `src/jarvis/config.py`.
 | `FEATURE_BUILD_DELIVERABLE_GATE_ENABLED` | int | `1` | When `1`, feature-build runs require deliverable evidence (diff/no-op blockers + safety checks) before success finalization. |
 | `FEATURE_BUILD_LOOP_CAP_THRESHOLD` | int | `8` | Max repeated identical tool-call signature count per build attempt before forcing terminal synthesis fallback. |
 | `FEATURE_BUILD_USE_RLM` | int | `0` | When `1`, enable pre-build RLM decomposition (requires `RLM_ENABLED=1`). |
+| `FEATURE_ISOLATION_ENABLED` | int | `1` | When `1`, feature-build runs use isolated `/tmp` workspaces and enforce validation before execution. |
+| `FEATURE_ISOLATION_TMP_PREFIX` | str | `/tmp/jarvis-feature` | Prefix used for per-feature ephemeral workspace paths. |
+| `FEATURE_ISOLATION_MIN_DISK_GB` | int | `10` | Minimum required free disk in workspace volume before validation/build starts. |
+| `FEATURE_ISOLATION_TTL_HOURS` | int | `24` | Workspace retention TTL before cleanup. |
+| `FEATURE_ISOLATION_CLONE_REF` | str | `origin/dev` | Source ref metadata used for isolated clone provenance. |
 | `RLM_ENABLED` | int | `0` | Toggles the RLM decomposition runtime (must match `FEATURE_BUILD_USE_RLM` to activate). |
 | `RLM_CONTEXT_FILES_LIMIT` | int | `8` | Max number of source files injected as context for decomposition prompts. |
 | `RLM_CONTEXT_TOKEN_LIMIT` | int | `4000` | Token budget for context injection (4 chars/token approximation). |
@@ -112,8 +117,8 @@ Source of truth: `src/jarvis/config.py`.
 | `WHATSAPP_VERIFY_TOKEN` | str | `dev-verify-token` | WhatsApp webhook verification token. |
 | `WHATSAPP_ACCESS_TOKEN` | str | `` | WhatsApp API access token. |
 | `WHATSAPP_PHONE_NUMBER_ID` | str | `` | WhatsApp phone number ID. |
-| `WHATSAPP_INSTANCE` | str | `personal` | Evolution instance name. |
-| `WHATSAPP_AUTO_CREATE_ON_STARTUP` | int | `0` | Auto-create Evolution instance on API startup. |
+| `WHATSAPP_INSTANCE` | str | `personal` | Baileys sidecar instance name. |
+| `BAILEYS_AUTO_CREATE_ON_STARTUP` | int | `0` | Auto-create Baileys connection on API startup. |
 | `WHATSAPP_WEBHOOK_SECRET` | str | `` | Shared secret header required by WhatsApp webhook route when set. |
 | `WHATSAPP_MEDIA_DIR` | str | `/tmp/jarvis/whatsapp-media` | Local media staging directory for inbound WhatsApp media/voice notes. |
 | `WHATSAPP_MEDIA_MAX_BYTES` | int | `10485760` | Max bytes accepted per inbound media download; oversized payloads are blocked. |
@@ -131,11 +136,11 @@ Source of truth: `src/jarvis/config.py`.
 | `WHATSAPP_REVIEW_MODE` | str | `unknown_only` | Sender review policy mode (`off`, `unknown_only`, `strict`) for WhatsApp ingress gating. |
 | `WHATSAPP_ALLOWED_SENDERS` | str | `` | Comma-separated sender allowlist for strict sender review mode. |
 | `WHATSAPP_TYPING_TTL_SECONDS` | int | `20` | TTL for stale WhatsApp typing markers before periodic auto-clear emits `paused`. |
-| `EVOLUTION_API_URL` | str | `` | Evolution API base URL for Baileys sidecar. |
-| `EVOLUTION_API_KEY` | str | `` | Evolution API key header value. |
-| `EVOLUTION_WEBHOOK_URL` | str | `` | Callback URL Evolution should post inbound events to (usually `/webhooks/whatsapp`). |
-| `EVOLUTION_WEBHOOK_BY_EVENTS` | int | `1` | When `1`, Evolution filters callback delivery to configured events only. |
-| `EVOLUTION_WEBHOOK_EVENTS` | str | `messages.upsert` | Comma-separated Evolution event names allowed for callback delivery. |
+| `BAILEYS_API_URL` | str | `http://127.0.0.1:8081` | Baileys sidecar API base URL. |
+| `BAILEYS_WEBHOOK_URL` | str | `` | Callback URL sidecar forwards inbound events to (usually `/webhooks/whatsapp`). |
+| `BAILEYS_WEBHOOK_BY_EVENTS` | int | `1` | Callback metadata flag for event-filtered delivery mode. |
+| `BAILEYS_WEBHOOK_EVENTS` | str | `messages.upsert` | Comma-separated webhook event names expected from sidecar forwarding. |
+| `BAILEYS_WEBHOOK_SECRET_HEADER` | str | `X-WhatsApp-Secret` | Header name sidecar uses to send webhook secret. |
 | `PRIMARY_PROVIDER` | str | `openrouter` | Primary chat provider (`openrouter` or `sglang`). |
 | `OPENROUTER_API_KEY` | str | `` | OpenRouter API key. |
 | `OPENROUTER_MODEL` | str | `google/gemini-2.5-flash` | OpenRouter model name. |

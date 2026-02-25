@@ -104,6 +104,12 @@ _WRITE_COMMAND_MARKERS = (
     " rm ",
 )
 _GIT_DIFF_TIMEOUT_S = 30
+_FEATURE_BUILD_NEVER_EDIT_PATHS = (
+    "src/jarvis/selfupdate/pipeline.py",
+    "agents/feature_builder/identity.md",
+    "src/jarvis/policy/",
+    "src/jarvis/auth/",
+)
 
 
 def _split_csv(raw: str) -> list[str]:
@@ -477,7 +483,7 @@ def _evaluate_feature_build_deliverable_gate(
     settings,
 ) -> tuple[bool, str | None, dict[str, object]]:
     checks: dict[str, object] = {}
-    never_edit_paths = _split_csv(settings.ralph_never_edit_paths)
+    never_edit_paths = list(_FEATURE_BUILD_NEVER_EDIT_PATHS)
     protected_hits = _trace_attempted_protected_edits(
         conn,
         trace_id=trace_id,
@@ -1723,6 +1729,26 @@ def _build_registry(
             return {"exit_code": 2, "stdout": "", "stderr": "command is required"}
         raw_cwd = args.get("cwd")
         cwd = str(raw_cwd) if isinstance(raw_cwd, str) else None
+        if actor_id == "feature_builder":
+            run = get_feature_build_run_by_trace(conn, trace_id)
+            if run is None and thread_id:
+                run = get_latest_feature_build_run_for_thread(conn, thread_id)
+            workspace = str(run.get("workspace_path", "")).strip() if run else ""
+            if workspace:
+                workspace_path = Path(workspace).expanduser().resolve()
+                if cwd is None:
+                    cwd = str(workspace_path)
+                else:
+                    requested = Path(cwd).expanduser().resolve()
+                    if requested != workspace_path and workspace_path not in requested.parents:
+                        return {
+                            "exit_code": 2,
+                            "stdout": "",
+                            "stderr": (
+                                "cwd outside isolated feature workspace; "
+                                f"expected under {workspace_path}"
+                            ),
+                        }
         has_explicit_timeout = "timeout_s" in args
         raw_timeout = args.get("timeout_s", _DEFAULT_EXEC_HOST_TIMEOUT_S)
         try:

@@ -84,3 +84,50 @@ def test_non_upsert_event_ignored() -> None:
     payload = {"event": "connection.update", "data": {"type": "notify", "messages": []}}
     result = adapter.parse_inbound(payload)
     assert result == []
+
+
+def test_fromme_pending_message_is_ignored() -> None:
+    adapter = WhatsAppAdapter()
+    payload = {
+        "event": "messages.upsert",
+        "data": {
+            "type": "notify",
+            "messages": [
+                {
+                    "key": {
+                        "id": "msg_pending",
+                        "remoteJid": "15551234567@s.whatsapp.net",
+                        "fromMe": True,
+                    },
+                    "message": {"conversation": "outbound echo"},
+                    "status": "PENDING",
+                }
+            ],
+        },
+    }
+    assert adapter.parse_inbound(payload) == []
+
+
+def test_fromme_received_message_is_kept() -> None:
+    adapter = WhatsAppAdapter()
+    payload = {
+        "event": "messages.upsert",
+        "data": {
+            "type": "notify",
+            "messages": [
+                {
+                    "key": {
+                        "id": "msg_received",
+                        "remoteJid": "15551234567@s.whatsapp.net",
+                        "fromMe": True,
+                    },
+                    "message": {"conversation": "real inbound"},
+                    "status": "RECEIVED",
+                }
+            ],
+        },
+    }
+    result = adapter.parse_inbound(payload)
+    assert len(result) == 1
+    assert result[0].external_msg_id == "msg_received"
+    assert result[0].text == "real inbound"

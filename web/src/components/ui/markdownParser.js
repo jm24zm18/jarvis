@@ -1,3 +1,5 @@
+import { sanitizeForDisplay } from "./textSanitizer.js";
+
 /**
  * @typedef {{
  *  type: "heading";
@@ -35,12 +37,12 @@ const HEADING = /^(#{1,6})(?:\s+(.*)|\s*$|(.*))$/;
 const HR_RULE = /^\s*([-*_])\s*\1\s*\1[\s\-*_]*$/;
 
 function normalizeMarkdown(markdown) {
-  let text = markdown.replace(/\u202f/g, " ");
+  let text = sanitizeForDisplay(markdown);
   text = text.replace(/([^\n])\s+(---|\*\*\*|___)\s+(#{1,6}\s+)/g, "$1\n$2\n$3");
   text = text.replace(/:\s+(#{1,6}\s+)/g, ":\n$1");
   text = text.replace(/:\s+\*\s+/g, ":\n* ");
   text = text.replace(/\n[ \t]*\n([ \t]*`[^`]+`\*?\s*[–-]\s+)/g, "\n$1");
-  text = text.replace(/:\s{2,}(`[^`]+`)\*?\s*[–-]\s+/g, ":\n- $1 - ");
+  text = text.replace(/:\s+(`[^`]+`)\*?\s*[–-]\s+/g, ":\n- $1 - ");
   text = text.replace(/^(\s*)(`[^`]+`)\*?\s*[–-]\s+/gm, "$1- $2 - ");
   text = text.replace(/:\s+(\d+\.\s+\*\*[^*\n]+\*\*)/g, ":\n$1");
   text = text.replace(/\s+\*\s+(\d+\.\s+\*\*[^*\n]+\*\*)/g, "\n$1");

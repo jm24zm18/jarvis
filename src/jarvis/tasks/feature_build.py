@@ -8,6 +8,7 @@ import json
 import logging
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
@@ -27,6 +28,14 @@ from jarvis.rlm.config import build_rlm_config
 from jarvis.rlm.decomposer import compute_run_hash, context_reasons, select_context_files
 from jarvis.rlm.service import AsyncRLMService
 from jarvis.services.feature_requests import enqueue_feature_build, split_feature_request
+from jarvis.tasks.github import github_feature_validation_comment
+from jarvis.tools.feature_isolate import (
+    IsolationError,
+    WorkspaceContext,
+    cleanup_expired_workspaces,
+    create_workspace,
+    validate_workspace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +329,11 @@ def run_feature_build(
 
     try:
         settings = get_settings()
+        if int(settings.feature_isolation_enabled) == 1:
+            _ = cleanup_expired_workspaces(
+                tmp_prefix=str(settings.feature_isolation_tmp_prefix),
+                ttl_hours=int(settings.feature_isolation_ttl_hours),
+            )
         rlm_config = build_rlm_config(settings)
         rlm_result = _decompose_and_split(
             run_id=run_id,
@@ -335,6 +349,106 @@ def run_feature_build(
             run_row = get_feature_build_run(conn, run_id)
             if run_row is None:
                 raise RuntimeError(f"feature build run not found: {run_id}")
+            if int(settings.feature_isolation_enabled) == 1:
+                workspace_path = str(run_row.get("workspace_path") or "").strip()
+                if not workspace_path:
+                    _emit_build_event(
+                        conn=conn,
+                        trace_id=trace_id,
+                        thread_id=None,
+                        event_type="feature.isolation.workspace.creating",
+                        payload={"run_id": run_id, "feature_id": feature_id},
+                    )
+                    ctx = create_workspace(
+                        feature_id,
+                        repo_root=Path.cwd(),
+                        tmp_prefix=str(settings.feature_isolation_tmp_prefix),
+                        clone_ref=str(settings.feature_isolation_clone_ref),
+                        ttl_hours=int(settings.feature_isolation_ttl_hours),
+                        min_free_gb=int(settings.feature_isolation_min_disk_gb),
+                    )
+                else:
+                    raw_snapshot = (
+                        str(run_row.get("dependency_snapshot_json") or "{}").strip() or "{}"
+                    )
+                    try:
+                        parsed_snapshot = json.loads(raw_snapshot)
+                    except json.JSONDecodeError:
+                        parsed_snapshot = {}
+                    ctx = WorkspaceContext(
+                        feature_id=feature_id,
+                        workspace_path=Path(workspace_path),
+                        created_at=str(run_row.get("workspace_created_at") or ""),
+                        expires_at=str(run_row.get("workspace_expires_at") or ""),
+                        dependency_snapshot=(
+                            parsed_snapshot
+                            if isinstance(parsed_snapshot, dict)
+                            else {}
+                        ),
+                    )
+                validation = validate_workspace(
+                    ctx, min_free_gb=int(settings.feature_isolation_min_disk_gb)
+                )
+                update_feature_build_run(
+                    conn,
+                    run_id,
+                    workspace_path=str(ctx.workspace_path),
+                    workspace_created_at=ctx.created_at,
+                    workspace_expires_at=ctx.expires_at,
+                    dependency_snapshot_json=json.dumps(ctx.dependency_snapshot),
+                    validation_status="passed" if validation.ok else "failed",
+                    validation_log_path=validation.log_path,
+                    validation_error=validation.error,
+                )
+                _emit_build_event(
+                    conn=conn,
+                    trace_id=trace_id,
+                    thread_id=None,
+                    event_type=(
+                        "feature.isolation.validation.passed"
+                        if validation.ok
+                        else "feature.isolation.validation.failed"
+                    ),
+                    payload={
+                        "run_id": run_id,
+                        "feature_id": feature_id,
+                        "workspace_path": str(ctx.workspace_path),
+                        "validation_log_path": validation.log_path,
+                        "error": validation.error,
+                    },
+                )
+                try:
+                    _ = github_feature_validation_comment(
+                        feature_id=feature_id,
+                        run_id=run_id,
+                        validation_status="passed" if validation.ok else "failed",
+                        validation_log_path=validation.log_path,
+                        dependency_snapshot_json=json.dumps(ctx.dependency_snapshot),
+                        error=validation.error,
+                    )
+                except Exception:
+                    logger.exception(
+                        "failed to post feature validation comment: run_id=%s feature_id=%s",
+                        run_id,
+                        feature_id,
+                    )
+                if not validation.ok:
+                    update_feature_build_run(
+                        conn,
+                        run_id,
+                        status="failed",
+                        summary=f"Isolation validation failed: {validation.error}"[:500],
+                        terminal_reason="isolation_validation_failed",
+                        last_event_type="feature.isolation.validation.failed",
+                    )
+                    return {
+                        "run_id": run_id,
+                        "feature_id": feature_id,
+                        "trace_id": trace_id,
+                        "status": "failed",
+                        "error": f"isolation validation failed: {validation.error}",
+                    }
+
             attempt_count = max(1, int(run_row.get("attempt_count", 1)))
             max_attempts = max(attempt_count, int(run_row.get("max_attempts", attempt_count)))
             update_feature_build_run(
@@ -407,7 +521,11 @@ def run_feature_build(
                 "1) summarize completed code changes with file references,\n"
                 "2) report test/lint/typecheck commands and outcomes,\n"
                 "3) include PR details if opened,\n"
-                "4) if blocked and human help is needed, explicitly call request_human_escalation."
+                "4) if blocked, explicitly report blockers and missing prerequisites.\n\n"
+                "Isolation requirements:\n"
+                "- Execute all build/test commands from the isolated workspace "
+                "configured for this run.\n"
+                "- Do not run write operations against the primary repository checkout."
             )
             conn.execute(
                 (
@@ -432,7 +550,7 @@ def run_feature_build(
         runner = get_task_runner()
         queued = runner.send_task(
             "jarvis.tasks.agent.agent_step",
-            kwargs={"thread_id": thread_id, "trace_id": trace_id},
+            kwargs={"thread_id": thread_id, "trace_id": trace_id, "actor_id": "feature_builder"},
             queue="default",
         )
 
@@ -469,6 +587,24 @@ def run_feature_build(
             "status": "running",
         }
     except Exception as exc:
+        if isinstance(exc, IsolationError):
+            with get_conn() as conn:
+                update_feature_build_run(
+                    conn,
+                    run_id,
+                    status="failed",
+                    summary=f"Isolation setup failed: {exc}"[:500],
+                    validation_status="failed",
+                    validation_error=str(exc),
+                    terminal_reason="isolation_setup_failed",
+                )
+            return {
+                "run_id": run_id,
+                "feature_id": feature_id,
+                "trace_id": trace_id,
+                "status": "failed",
+                "error": f"isolation setup failed: {exc}",
+            }
         logger.exception("feature build run failed before enqueue: run_id=%s", run_id)
         summary = f"feature build task crashed: {exc.__class__.__name__}: {exc}"
         with get_conn() as conn:

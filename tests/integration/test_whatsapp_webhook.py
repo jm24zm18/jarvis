@@ -743,6 +743,96 @@ def test_inbound_voice_note_uses_faster_whisper_backend(monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_inbound_multi_audio_uses_matching_record_mimetype(monkeypatch) -> None:
+    from jarvis.channels.whatsapp import router as whatsapp_router
+    from jarvis.channels.whatsapp.baileys_client import BaileysClient
+
+    old_transcribe = os.environ.get("WHATSAPP_VOICE_TRANSCRIBE_ENABLED")
+    old_baileys_api_url = os.environ.get("BAILEYS_API_URL")
+    try:
+        os.environ["WHATSAPP_VOICE_TRANSCRIBE_ENABLED"] = "0"
+        os.environ["BAILEYS_API_URL"] = "http://127.0.0.1:8081"
+        get_settings.cache_clear()
+
+        payload = {
+            "event": "messages.upsert",
+            "data": {
+                "type": "notify",
+                "messages": [
+                    {
+                        "key": {
+                            "id": "BAE5AUDIO001",
+                            "remoteJid": "15555550877@s.whatsapp.net",
+                            "participant": "15555550877@s.whatsapp.net",
+                        },
+                        "message": {
+                            "audioMessage": {
+                                "seconds": 2,
+                                "url": "https://cdn.example/a1.ogg",
+                                "mimetype": "audio/ogg; codecs=opus",
+                            }
+                        },
+                    },
+                    {
+                        "key": {
+                            "id": "BAE5AUDIO002",
+                            "remoteJid": "15555550877@s.whatsapp.net",
+                            "participant": "15555550877@s.whatsapp.net",
+                        },
+                        "message": {
+                            "audioMessage": {
+                                "seconds": 2,
+                                "url": "https://cdn.example/a2.mp4",
+                                "mimetype": "audio/mp4",
+                            }
+                        },
+                    },
+                ],
+            },
+        }
+
+        class _Runner:
+            def send_task(self, *_args, **_kwargs) -> bool:
+                return True
+
+        async def _fake_download_media(self, message, target_path):  # type: ignore[no-untyped-def]
+            del self, message
+            path = os.fspath(target_path)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as handle:
+                handle.write(b"audio")
+            return 5
+
+        monkeypatch.setattr(whatsapp_router, "get_task_runner", lambda: _Runner())
+        monkeypatch.setattr(BaileysClient, "download_media", _fake_download_media)
+
+        client = TestClient(app)
+        response = client.post("/webhooks/whatsapp", json=payload)
+        assert response.status_code in {200, 202}
+        assert response.json().get("accepted") is True
+
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT mime_type FROM whatsapp_media "
+                "WHERE message_id IN ("
+                "  SELECT id FROM messages WHERE role='user' ORDER BY created_at DESC LIMIT 2"
+                ")"
+            ).fetchall()
+        mime_types = {str(row["mime_type"]) for row in rows}
+        assert "audio/ogg; codecs=opus" in mime_types
+        assert "audio/mp4" in mime_types
+    finally:
+        if old_transcribe is None:
+            os.environ.pop("WHATSAPP_VOICE_TRANSCRIBE_ENABLED", None)
+        else:
+            os.environ["WHATSAPP_VOICE_TRANSCRIBE_ENABLED"] = old_transcribe
+        if old_baileys_api_url is None:
+            os.environ.pop("BAILEYS_API_URL", None)
+        else:
+            os.environ["BAILEYS_API_URL"] = old_baileys_api_url
+        get_settings.cache_clear()
+
+
 def test_inbound_ignores_non_upsert_evolution_event() -> None:
     payload = {
         "event": "connection.update",

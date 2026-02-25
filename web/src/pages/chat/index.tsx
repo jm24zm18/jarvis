@@ -19,6 +19,7 @@ import { useChatStore } from "../../stores/chat";
 import Button from "../../components/ui/Button";
 import MarkdownLite from "../../components/ui/MarkdownLite";
 import ThinkingPanel from "../../components/ui/ThinkingPanel";
+import { sanitizeForInlinePreview } from "../../components/ui/textSanitizer";
 
 const EMPTY_TRACE_EVENTS: Array<{ event_type: string; payload: Record<string, unknown>; created_at: string }> = [];
 
@@ -41,10 +42,7 @@ const COMMANDS: Array<{ value: string; help: string }> = [
 
 function toThreadPreview(content?: string | null): string {
   if (!content) return "No messages yet";
-  let text = content;
-  // Preserve joiners so composed emojis (for example family/skin-tone variants) stay intact.
-  text = text.replace(/\u200B|\uFEFF/g, "");
-  text = text.replace(/\u202f/g, " ");
+  let text = sanitizeForInlinePreview(content);
   text = text.replace(/```[\s\S]*?```/g, " [code] ");
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1");
@@ -538,7 +536,10 @@ export default function ChatPage() {
               <div className="text-sm font-medium text-[var(--text-primary)] truncate">
                 {toThreadName(thread)}
               </div>
-              <div className="mt-0.5 text-[11px] text-[var(--text-muted)] truncate">
+              <div
+                className="mt-0.5 overflow-hidden text-[11px] text-[var(--text-muted)]"
+                style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}
+              >
                 {toThreadPreview(thread.last_message)}
               </div>
               <div className="mt-0.5 text-[10px] text-[var(--text-muted)]">
@@ -584,13 +585,13 @@ export default function ChatPage() {
           <div className="flex min-h-0 flex-1 flex-col">
             <div ref={listRef} className="min-h-0 flex-1 space-y-1 overflow-y-auto p-4">
               {groupedMessages.map((group, gIdx) => (
-                <div key={gIdx} className={`flex gap-2.5 ${group.role === "user" ? "justify-end" : ""}`}>
+                <div key={gIdx} className={`flex min-w-0 gap-2.5 ${group.role === "user" ? "justify-end" : ""}`}>
                   {group.role !== "user" && (
                     <div className={`mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white ${agentColor(group.speaker)}`}>
                       {agentInitial(group.speaker)}
                     </div>
                   )}
-                  <div className={`max-w-[75%] space-y-1 ${group.role === "user" ? "items-end" : ""}`}>
+                  <div className={`min-w-0 max-w-[85%] space-y-1 ${group.role === "user" ? "items-end" : ""}`}>
                     <div className="mb-0.5 text-[11px] font-medium text-[var(--text-muted)]">
                       {group.speaker}
                     </div>
@@ -601,8 +602,9 @@ export default function ChatPage() {
                             ? "bg-[#13293d] text-white dark:bg-slate-200 dark:text-slate-900"
                             : "bg-mist text-[var(--text-primary)]"
                           }`}
+                        style={{ maxWidth: "78ch" }}
                       >
-                        <div className="max-h-[32rem] overflow-x-auto break-words">
+                        <div className="min-w-0 max-h-[32rem] overflow-x-auto break-words [overflow-wrap:anywhere]">
                           <MarkdownLite content={msg.content} />
                         </div>
                         {msg.media && msg.media.length > 0 && (

@@ -25,7 +25,6 @@ def _register_tasks(runner: TaskRunner) -> None:
         maintenance,
         memory,
         onboarding,
-        ralph,
         release_candidate,
         scheduler,
         selfupdate,
@@ -119,11 +118,6 @@ def _register_tasks(runner: TaskRunner) -> None:
         "jarvis.tasks.human_escalation.dispatch_pending_human_escalations",
         human_escalation.dispatch_pending_human_escalations,
     )
-    runner.register(
-        "jarvis.tasks.ralph.run_ralph_iteration",
-        ralph.run_ralph_iteration,
-    )
-
 
 def get_task_runner() -> TaskRunner:
     global _periodic_scheduler, _task_runner

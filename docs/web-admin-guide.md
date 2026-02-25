@@ -112,6 +112,25 @@ Empty/error states:
 - `Build has not produced messages yet` when thread history is still empty.
 - Retry action on message fetch error.
 
+## Chat Readability and Emoji-Safe Sanitization
+
+Chat route (`/chat` and `/chat/:threadId`) now applies a shared frontend sanitization path before markdown rendering and thread-preview extraction:
+
+- Removes harmful control content:
+  - model marker fragments (for example `<|analysis|>`)
+  - non-printable controls
+  - bidi override/isolation controls
+- Preserves emoji composition and grapheme behavior:
+  - zero-width joiner sequences (for family/profession emoji)
+  - variation selectors
+  - skin-tone modifiers
+  - regional-indicator pairs (flags)
+
+Rendering guardrails:
+- Chat bubbles use min-width and character-based width constraints to avoid horizontal bleed on dense responses.
+- Markdown tables use fixed layout and cell wrapping defaults.
+- Prose and table cells use overflow-wrap safeguards to keep long tokens inside bubble bounds.
+
 ## Related Docs
 
 - `docs/api-usage-guide.md`
