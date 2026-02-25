@@ -61,11 +61,11 @@ def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
     disconnect_reason = str(payload.get("last_disconnect_reason") or "").strip()
     last_error_at = str(payload.get("last_error_at") or "").strip()
     autoheal_attempted = bool(payload.get("autoheal_attempted"))
-    recoverable = not (
-        evo_state == "close"
-        and disconnect_code == status.HTTP_401_UNAUTHORIZED
-        and autoheal_attempted
-    )
+    relink_required = bool(payload.get("relink_required"))
+    can_reconnect = bool(payload.get("can_reconnect", True))
+    if disconnect_code == status.HTTP_401_UNAUTHORIZED and "loggedout" in disconnect_reason.lower():
+        relink_required = True
+    recoverable = not relink_required and can_reconnect
     callback_status_code: int | None = None
     callback_payload: dict[str, object] = {}
     callback_ok = False
@@ -107,6 +107,8 @@ def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
             "disconnect_reason": disconnect_reason,
             "last_error_at": last_error_at,
             "autoheal_attempted": autoheal_attempted,
+            "relink_required": relink_required,
+            "can_reconnect": can_reconnect,
             "recoverable": recoverable,
         },
         "callback": {
@@ -275,6 +277,24 @@ def whatsapp_reset(
             callback_last_error="reset_requested",
         )
     return {"ok": status_code < 400, "status_code": status_code, "payload": payload}
+
+
+@router.post("/whatsapp/restart")
+@_limiter.limit("3/minute")
+def whatsapp_restart(
+    request: Request,
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    """Restart the Baileys Node process. Docker restart:always revives it automatically."""
+    del request, ctx
+    client = BaileysClient()
+    if not client.enabled:
+        raise HTTPException(status_code=503, detail="Baileys not configured")
+    try:
+        asyncio.run(client.restart_server())
+    except Exception:
+        pass  # Process exits before returning — that's expected
+    return {"ok": True, "message": "Baileys process restarting"}
 
 
 @router.post("/whatsapp/disconnect")

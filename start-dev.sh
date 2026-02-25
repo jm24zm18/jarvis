@@ -8,7 +8,8 @@ echo "=========================================="
 # Ensure we're in the project root
 cd "$(dirname "$0")"
 
-echo "[1/3] Starting Docker dependencies (including Baileys WhatsApp service)..."
+echo "[1/3] Restarting Docker dependencies (including Baileys WhatsApp service)..."
+docker compose stop jarvis-baileys >/dev/null 2>&1 || true
 docker compose up -d jarvis-baileys
 
 echo ""

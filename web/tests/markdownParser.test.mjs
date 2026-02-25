@@ -177,3 +177,35 @@ test("multiple list items with inline markdown are separate items", () => {
   assert.equal(blocks[0].items[1], "**Second** item");
   assert.equal(blocks[0].items[2], "**Third** item");
 });
+
+test("recovers malformed inline hr + heading + ordered steps with emojis", () => {
+  const content = [
+    "The **Cross-Agent Collaboration Hub** would transform Jarvis architecture: --- ### 🧠 **Core Workflow** (User → Jarvis → Unified Answer)",
+    "1. **User triggers collaboration** Use `/jarvis collaborate ...` *(or via CLI: `jarvis collaborate ...`)* 2. **Orchestrator identifies relevant agents** Parse keywords and select experts.",
+    "3. **Parallel agent execution** Agents run concurrently. 4. **Result aggregation & synthesis** Weighted answer synthesis.",
+    "5. **User-facing polish** - The final answer includes **agent attribution**. - You can drill into raw analysis with `/jarvis show <agent>`.",
+    "Final verification ✅ then ship 🚀.",
+  ].join("\n");
+
+  const blocks = parseBlocks(content);
+  assert.equal(blocks[0].type, "paragraph");
+  assert.equal(blocks[1].type, "hr");
+  assert.equal(blocks[2].type, "heading");
+  assert.equal(blocks[2].text, "🧠 **Core Workflow** (User → Jarvis → Unified Answer)");
+  assert.equal(blocks[3].type, "ol");
+  assert.equal(blocks[3].items.length, 5);
+  assert.equal(blocks[4].type, "ul");
+  assert.equal(blocks[4].items.length, 2);
+  assert.equal(blocks[5].type, "paragraph");
+  assert.match(blocks[5].text, /✅/);
+  assert.match(blocks[5].text, /🚀/);
+});
+
+test("preserves composed emoji graphemes in parsed text", () => {
+  const content = "Family 👨‍👩‍👧‍👦 and coder 👩🏽‍💻 stay intact.";
+  const blocks = parseBlocks(content);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].type, "paragraph");
+  assert.match(blocks[0].text, /👨‍👩‍👧‍👦/);
+  assert.match(blocks[0].text, /👩🏽‍💻/);
+});

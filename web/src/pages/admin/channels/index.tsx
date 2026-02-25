@@ -11,6 +11,7 @@ import {
   whatsappPairingCode,
   whatsappQrCode,
   whatsappReset,
+  whatsappRestart,
   whatsappStatus,
   telegramStatus,
 } from "../../../api/endpoints";
@@ -28,9 +29,10 @@ export default function AdminChannelsPage() {
   const diagnostics = (statusQuery.data?.diagnostics as Record<string, unknown> | undefined) ?? {};
   const disconnectCode = typeof diagnostics.disconnect_code === "number" ? diagnostics.disconnect_code : null;
   const disconnectReason = String(diagnostics.disconnect_reason ?? "");
-  const autohealAttempted = Boolean(diagnostics.autoheal_attempted);
+  const relinkRequired = Boolean(diagnostics.relink_required);
+  const canReconnect = diagnostics.can_reconnect !== false;
   const recoverable = diagnostics.recoverable !== false;
-  const isLoggedOut = disconnectCode === 401 || /loggedout/i.test(disconnectReason);
+  const pairingRequired = relinkRequired || !recoverable || !canReconnect;
 
   const qrQuery = useQuery({
     queryKey: ["whatsapp-qr"],
@@ -60,9 +62,21 @@ export default function AdminChannelsPage() {
       void qrQuery.refetch();
     },
   });
+  const restartMutation = useMutation({
+    mutationFn: whatsappRestart,
+    onSuccess: () => {
+      // Poll for container to come back up (takes ~3-5s with Docker)
+      setTimeout(() => void statusQuery.refetch(), 4000);
+    },
+  });
   const pairMutation = useMutation({ mutationFn: () => whatsappPairingCode(pairNumber) });
   const qr = String(qrQuery.data?.qrcode ?? "");
   const canGeneratePairingCode = status === "qr" && pairNumber.trim().length > 0;
+  const lifecycleBusy =
+    createMutation.isPending ||
+    resetMutation.isPending ||
+    disconnectMutation.isPending ||
+    restartMutation.isPending;
 
   const tgEnabled = Boolean(tgQuery.data?.enabled);
   const tgToken = Boolean(tgQuery.data?.token_configured);
@@ -96,22 +110,57 @@ export default function AdminChannelsPage() {
           <Badge variant={status === "open" || status === "connected" ? "success" : "warning"}>
             {status}
           </Badge>
-          <Button onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
+          <Button
+            onClick={() => {
+              createMutation.mutate();
+            }}
+            disabled={lifecycleBusy}
+          >
             Initialize Connection
           </Button>
-          <Button variant="secondary" onClick={() => void qrQuery.refetch()}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              void qrQuery.refetch();
+            }}
+            disabled={lifecycleBusy}
+          >
             Load QR
           </Button>
-          <Button variant="secondary" onClick={() => resetMutation.mutate()} disabled={resetMutation.isPending}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              resetMutation.mutate();
+            }}
+            disabled={lifecycleBusy}
+          >
             Force Re-pair
           </Button>
-          <Button variant="secondary" onClick={() => disconnectMutation.mutate()} disabled={disconnectMutation.isPending}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              disconnectMutation.mutate();
+            }}
+            disabled={lifecycleBusy}
+          >
             Disconnect
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => restartMutation.mutate()}
+            disabled={lifecycleBusy}
+          >
+            {restartMutation.isPending ? "Restarting..." : "Restart Server"}
           </Button>
         </div>
         {status !== "open" && (disconnectCode !== null || disconnectReason) ? (
           <p className="mt-3 text-sm text-[var(--text-secondary)]">
-            Last disconnect: {disconnectCode !== null ? `HTTP ${disconnectCode}` : "unknown"}{disconnectReason ? ` (${disconnectReason})` : ""}{!recoverable ? ". Re-pair required." : "."}
+            Last disconnect: {disconnectCode !== null ? `HTTP ${disconnectCode}` : "unknown"}{disconnectReason ? ` (${disconnectReason})` : ""}{pairingRequired ? ". Re-pair required." : "."}
+          </p>
+        ) : null}
+        {pairingRequired ? (
+          <p className="mt-2 text-sm text-[var(--text-secondary)]">
+            Session logged out; run Force Re-pair and scan a new QR code.
           </p>
         ) : null}
       </Card>
@@ -136,8 +185,8 @@ export default function AdminChannelsPage() {
                 : pairMutation.isError
                   ? `Error: ${String((pairMutation.error as Error)?.message ?? "unknown")}`
                   : status !== "qr"
-                    ? isLoggedOut && autohealAttempted
-                      ? `QR not ready (state: ${status}). Session logged out (401); automatic recovery already attempted. Use Force Re-pair, then Load QR.`
+                    ? pairingRequired
+                      ? `QR not ready (state: ${status}). Session logged out; use Force Re-pair, then wait for QR.`
                       : `QR not ready (state: ${status}). Initialize connection and wait for QR.`
                   : String(pairMutation.data?.code ?? "-")}
             </div>

@@ -14,6 +14,7 @@ test("admin channels page contains pairing and lifecycle controls", () => {
   assert.match(source, /Force Re-pair/);
   assert.match(source, /Load QR/);
   assert.match(source, /Disconnect/);
+  assert.match(source, /Restart Server/);
   assert.match(source, /Generate/);
   assert.match(source, /placeholder="15555550123"/);
 });
@@ -26,5 +27,6 @@ test("admin channels page includes QR rendering path", () => {
 
 test("admin channels page includes disconnect diagnostics and logged-out guidance", () => {
   assert.match(source, /Last disconnect:/);
-  assert.match(source, /Session logged out \(401\); automatic recovery already attempted\./);
+  assert.match(source, /Session logged out; run Force Re-pair and scan a new QR code\./);
+  assert.match(source, /Session logged out; use Force Re-pair, then wait for QR\./);
 });

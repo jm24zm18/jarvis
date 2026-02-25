@@ -255,7 +255,9 @@ def test_whatsapp_status_reports_callback_health(monkeypatch) -> None:
                 "last_disconnect_code": 401,
                 "last_disconnect_reason": "loggedOut",
                 "last_error_at": "2026-02-22T14:00:00Z",
-                "autoheal_attempted": True,
+                "autoheal_attempted": False,
+                "relink_required": True,
+                "can_reconnect": False,
             }
 
         async def configure_webhook(self) -> tuple[int, dict[str, object]]:
@@ -273,7 +275,9 @@ def test_whatsapp_status_reports_callback_health(monkeypatch) -> None:
     assert payload["callback"]["events"] == ["messages.upsert"]
     assert payload["diagnostics"]["disconnect_code"] == 401
     assert payload["diagnostics"]["disconnect_reason"] == "loggedOut"
-    assert payload["diagnostics"]["autoheal_attempted"] is True
+    assert payload["diagnostics"]["autoheal_attempted"] is False
+    assert payload["diagnostics"]["relink_required"] is True
+    assert payload["diagnostics"]["can_reconnect"] is False
     assert payload["diagnostics"]["recoverable"] is False
 
 

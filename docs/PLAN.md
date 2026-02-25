@@ -82,6 +82,32 @@
   - Added feature-build events `feature.build.retry.manual_requested` and `feature.build.retry.manual_enqueued` for traceability.
   - Added unit coverage for enqueue and non-enqueue paths in `tests/unit/test_agent_recovery.py`.
 
+## Execution Update (2026-02-24, Chat Emoji + Markdown Rendering Recovery)
+
+- Discovered missing task from live chat evidence:
+  - Assistant replies containing malformed inline markdown (for example inline `---` + `###` + collapsed numbered sections) rendered as unreadable paragraphs in chat bubbles.
+  - User-reported emoji rendering regressions in the same chat-bubble path required explicit regression coverage.
+
+- Completed:
+  - Hardened markdown normalization in `web/src/components/ui/markdownParser.js` to recover malformed inline structures into proper blocks:
+    - inline horizontal-rule + heading transitions,
+    - inline ordered-step boundaries,
+    - numbered-step to bullet-list transitions.
+  - Preserved emoji/codepoint integrity by avoiding any joiner/variation-selector stripping in parser normalization.
+  - Added explicit emoji-safe markdown styling in `web/src/styles.css` (`.markdown-lite` and code/pre fallback stack).
+  - Added parser regressions in `web/tests/markdownParser.test.mjs` for:
+    - malformed "Cross-Agent Collaboration Hub"-style content recovery,
+    - composed emoji grapheme preservation (`👨‍👩‍👧‍👦`, `👩🏽‍💻`).
+
+- Missing tasks discovered during implementation:
+  - Add a chat-page contract test for thread-preview emoji handling parity vs chat bubble rendering.
+
+- Remaining tasks before handoff:
+  - Run web parser + renderer tests and full quality gates (`make lint`, `make typecheck`, `make test-gates`, `make docs-check`).
+
+- Follow-up completed:
+  - Added renderer-level integration tests in `web/tests/markdownLiteRender.test.mjs` that transpile and render `MarkdownLite.tsx` to static DOM and assert malformed markdown recovery plus emoji preservation.
+
 ## Mission and Operating Model
 
 Deliver a self-improving Jarvis that combines deterministic governance with agentic execution across self-update, memory, and WhatsApp channels.
@@ -1321,3 +1347,69 @@ Rollback policy:
 5. Remaining tasks discovered during implementation:
    - Consider exposing new build diagnostics fields (`active_attempt`, `last_progress_at`,
      `last_event_type`, `last_trace_id`, `terminal_reason`) in admin API/UI follow-up pass.
+
+## Execution Update (2026-02-24, WhatsApp One-Click Recovery UX for 401 loggedOut)
+
+- Completed:
+  - Added one-click Admin UI recovery action `Recover Session` for non-recoverable
+    `close + 401 loggedOut + autoheal_attempted=true` connector state.
+  - Implemented deterministic frontend recovery sequence:
+    - `POST /api/v1/channels/whatsapp/reset`
+    - poll `GET /api/v1/channels/whatsapp/status` (1s interval, 30s timeout) until `qr` or `open`
+    - `GET /api/v1/channels/whatsapp/qrcode` and render QR
+  - Added in-card progress/failure operator feedback:
+    - `Resetting session...`
+    - `Waiting for QR state...`
+    - `Loading QR...`
+    - `Recovery failed: ...`
+  - Updated pairing guidance copy to direct logged-out recovery through `Recover Session`.
+  - Updated docs:
+    - `docs/channels/whatsapp-ui.md`
+    - `docs/channels/whatsapp.md`
+  - Extended web contract coverage in `web/tests/adminChannelsContracts.test.mjs` to assert:
+    - recovery control presence
+    - logged-out guidance copy update
+    - recovery progress/failure copy contracts
+- Remaining tasks before handoff:
+  - Run full gate sweep (`make test-gates`) before release promotion.
+
+## Execution Update (2026-02-25, WhatsApp 401 loggedOut Manual Relink Policy)
+
+- Completed:
+  - Replaced automatic `loggedOut` recovery loop in Baileys sidecar with terminal diagnostics.
+  - On `DisconnectReason.loggedOut`, sidecar now:
+    - stops reconnect scheduling
+    - does not auto-clear auth
+    - marks relink-required state for explicit operator action.
+  - Extended sidecar `/status` payload with:
+    - `relink_required`
+    - `can_reconnect`
+    while retaining `autoheal_attempted` for compatibility.
+  - Updated `/api/v1/channels/whatsapp/status` diagnostics normalization to drive
+    `recoverable` from `relink_required/can_reconnect` (with 401+loggedOut fallback).
+  - Simplified Admin Channels UI to manual relink workflow:
+    - removed one-click `Recover Session` flow/progress states
+    - retained explicit lifecycle actions (`Initialize Connection`, `Force Re-pair`, `Load QR`,
+      `Disconnect`, `Restart Server`)
+    - updated copy to direct operators to `Force Re-pair` for logged-out states.
+  - Updated docs:
+    - `docs/channels/whatsapp.md`
+    - `docs/channels/whatsapp-ui.md`
+    - `docs/local-development.md`
+  - Updated tests:
+    - `tests/integration/test_admin_api.py`
+    - `web/tests/adminChannelsContracts.test.mjs`
+- Remaining tasks before handoff:
+  - Run targeted checks (`tests/integration/test_admin_api.py`, `web/tests/adminChannelsContracts.test.mjs`).
+  - Run full gate sweep (`make test-gates`) before release promotion.
+
+## Execution Update (2026-02-25, Startup fix for missing orchestrator registry import)
+
+- Completed:
+  - Resolved FastAPI startup crash caused by dangling import in `src/jarvis/orchestrator/step.py`:
+    - removed accidental `from jarvis.orchestrator.registry import registry`
+    - removed orphan `fan_out_to_agents(...)` helper that depended on nonexistent module.
+  - Added regression test `tests/unit/test_orchestrator_step_import.py` to assert
+    `jarvis.orchestrator.step` remains importable.
+- Remaining tasks before handoff:
+  - Run full gate sweep (`make test-gates`) before release promotion.

@@ -155,6 +155,17 @@ class BaileysClient:
             response = await client.post(url, headers=self._headers())
         return response.status_code, self._safe_json(response)
 
+    async def restart_server(self) -> tuple[int, dict[str, Any]]:
+        """Restart the Baileys Node process; Docker restart: always will revive it."""
+        url = f"{self._base_url}/restart"
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                response = await client.post(url, headers=self._headers())
+            return response.status_code, self._safe_json(response)
+        except Exception:
+            # Expected: the process exits before it can send a response
+            return 200, {"ok": True, "message": "restarting"}
+
     async def configure_webhook(self) -> tuple[int, dict[str, Any]]:
         # Mock successful webhook config as the Node service handles this natively
         return 200, {"success": True, "message": "Handled internally by Baileys service"}

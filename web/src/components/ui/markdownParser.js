@@ -36,10 +36,17 @@ const HR_RULE = /^\s*([-*_])\s*\1\s*\1[\s\-*_]*$/;
 
 function normalizeMarkdown(markdown) {
   let text = markdown.replace(/\u202f/g, " ");
+  text = text.replace(/([^\n])\s+(---|\*\*\*|___)\s+(#{1,6}\s+)/g, "$1\n$2\n$3");
+  text = text.replace(/:\s+(#{1,6}\s+)/g, ":\n$1");
   text = text.replace(/:\s+\*\s+/g, ":\n* ");
   text = text.replace(/\n[ \t]*\n([ \t]*`[^`]+`\*?\s*[–-]\s+)/g, "\n$1");
   text = text.replace(/:\s{2,}(`[^`]+`)\*?\s*[–-]\s+/g, ":\n- $1 - ");
   text = text.replace(/^(\s*)(`[^`]+`)\*?\s*[–-]\s+/gm, "$1- $2 - ");
+  text = text.replace(/:\s+(\d+\.\s+\*\*[^*\n]+\*\*)/g, ":\n$1");
+  text = text.replace(/\s+\*\s+(\d+\.\s+\*\*[^*\n]+\*\*)/g, "\n$1");
+  text = text.replace(/([^\n])\s+(\d+\.\s+\*\*[^*\n]+\*\*)/g, "$1\n$2");
+  text = text.replace(/(\d+\.\s+\*\*[^*\n]+\*\*)\s+(-\s+[A-Z])/g, "$1\n$2");
+  text = text.replace(/([.!?])\s+(-\s+[A-Z])/g, "$1\n$2");
   text = text.replace(/([^\n])\s+(#{1,6}\s+)/g, "$1\n$2");
   text = text.replace(/^(#{1,6}\s+[^\n#]*?)\s+(-\s+)/gm, "$1\n$2");
   text = text.replace(/([^\n])\s+(-\s+(?=(?:\*\*[^*\n]+:\*\*|[A-Z][^:\n]{0,40}:)))/g, "$1\n$2");

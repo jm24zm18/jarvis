@@ -447,6 +447,12 @@ export const whatsappReset = () =>
     body: "{}",
   });
 
+export const whatsappRestart = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/restart", {
+    method: "POST",
+    body: "{}",
+  });
+
 export const telegramStatus = () =>
   apiFetch<Record<string, unknown>>("/api/v1/channels/telegram/status");
 

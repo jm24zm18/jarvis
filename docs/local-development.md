@@ -17,6 +17,7 @@ make api
 make web-dev
 make setup-smoke
 make setup-smoke-running
+./start-dev.sh
 ```
 
 - API reloads with `uvicorn --reload`.
@@ -27,6 +28,10 @@ make setup-smoke-running
   and web dependency install.
 - `make setup-smoke-running` is the same smoke path but skips the dev port preflight.
   Use it when local dependency services are intentionally already running.
+- `./start-dev.sh` restarts `jarvis-baileys` on each run (`docker compose stop` then
+  `docker compose up -d`) before launching API + web dev servers, which is useful when
+  recovering from stale WhatsApp auth/session state. For `401 loggedOut`, run
+  `Force Re-pair` in Admin UI (or `POST /api/v1/channels/whatsapp/reset`) to relink.
 
 ## Common Workflows
 

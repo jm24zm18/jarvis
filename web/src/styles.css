@@ -91,3 +91,24 @@ body {
 .pulse-glow {
   animation: pulse-glow 2s ease-in-out infinite;
 }
+
+.markdown-lite {
+  font-family: inherit;
+  font-variant-emoji: emoji;
+}
+
+.markdown-lite code,
+.markdown-lite pre {
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Noto Color Emoji",
+    monospace;
+}
