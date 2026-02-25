@@ -15,17 +15,15 @@ logger = logging.getLogger(__name__)
 class BaileysClient:
     def __init__(self) -> None:
         settings = get_settings()
-        # Fallback to local container if env var strictly not found
-        self._base_url = (getattr(settings, "baileys_api_url", None) or "http://127.0.0.1:8081").rstrip("/")
+        self._base_url = settings.baileys_api_url.strip().rstrip("/")
         self._instance = settings.whatsapp_instance.strip() or "personal"
-        
-        # Webhook is hardcoded/configured in the node container via environment,
-        # but we maintain the properties so channels.py doesn't break
-        self._webhook_url = settings.evolution_webhook_url.strip()
-        self._webhook_by_events = int(settings.evolution_webhook_by_events) == 1
+
+        # Webhook is configured in the Baileys sidecar container environment.
+        self._webhook_url = settings.baileys_webhook_url.strip()
+        self._webhook_by_events = int(settings.baileys_webhook_by_events) == 1
         self._webhook_events = [
             item.strip()
-            for item in settings.evolution_webhook_events.split(",")
+            for item in settings.baileys_webhook_events.split(",")
             if item.strip()
         ]
 
@@ -167,8 +165,8 @@ class BaileysClient:
             return 200, {"ok": True, "message": "restarting"}
 
     async def configure_webhook(self) -> tuple[int, dict[str, Any]]:
-        # Mock successful webhook config as the Node service handles this natively
-        return 200, {"success": True, "message": "Handled internally by Baileys service"}
+        # Sidecar handles webhook forwarding; nothing to configure over HTTP.
+        return 200, {"success": True, "mode": "managed_by_sidecar"}
 
     @staticmethod
     def _safe_json(response: httpx.Response) -> dict[str, Any]:

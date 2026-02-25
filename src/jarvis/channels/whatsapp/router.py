@@ -481,15 +481,36 @@ async def inbound(
                 # (handles decryption of encrypted WhatsApp CDN media)
                 baileys_downloaded = False
                 if msg.message_type == "audio" and isinstance(msg.raw, dict):
-                    raw_data = msg.raw.get("data", msg.raw)
-                    raw_messages = []
-                    if isinstance(raw_data, dict):
-                        raw_messages = raw_data.get("messages", [])
-                    # Find the matching message in the raw payload
-                    raw_message_obj = None
-                    for rm in raw_messages:
-                        if isinstance(rm, dict) and isinstance(rm.get("message"), dict):
-                            raw_message_obj = rm.get("message")
+                    raw_record = msg.raw.get("record")
+                    raw_envelope = msg.raw.get("envelope")
+                    raw_message_obj: dict[str, Any] | None = None
+                    if isinstance(raw_record, dict):
+                        record_message = raw_record.get("message")
+                        if isinstance(record_message, dict):
+                            raw_message_obj = record_message
+                    if raw_message_obj is None:
+                        raw_data = (
+                            raw_envelope.get("data")
+                            if isinstance(raw_envelope, dict)
+                            else msg.raw.get("data", msg.raw)
+                        )
+                        raw_messages = (
+                            raw_data.get("messages", []) if isinstance(raw_data, dict) else []
+                        )
+                        for rm in raw_messages:
+                            if not isinstance(rm, dict):
+                                continue
+                            rm_key_obj = rm.get("key")
+                            rm_key_id = (
+                                str(rm_key_obj.get("id") or "")
+                                if isinstance(rm_key_obj, dict)
+                                else ""
+                            )
+                            rm_id = rm_key_id or str(rm.get("id") or "")
+                            if rm_id != msg.external_msg_id:
+                                continue
+                            if isinstance(rm.get("message"), dict):
+                                raw_message_obj = rm.get("message")
                             break
                     if raw_message_obj and "audioMessage" in raw_message_obj:
                         from jarvis.channels.whatsapp.baileys_client import BaileysClient

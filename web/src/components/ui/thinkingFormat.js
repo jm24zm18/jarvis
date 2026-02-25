@@ -1,9 +1,11 @@
+import { sanitizeForInlinePreview } from "./textSanitizer.js";
+
 function isObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeText(value) {
-  return String(value ?? "").trim();
+  return sanitizeForInlinePreview(String(value ?? ""));
 }
 
 export function truncateText(value, max = 180) {

@@ -10,6 +10,7 @@ import ts from "typescript";
 
 const markdownLitePath = path.resolve("src/components/ui/MarkdownLite.tsx");
 const markdownParserPath = path.resolve("src/components/ui/markdownParser.js");
+const textSanitizerPath = path.resolve("src/components/ui/textSanitizer.js");
 let markdownLiteModulePromise = null;
 
 async function loadMarkdownLite() {
@@ -25,9 +26,12 @@ async function loadMarkdownLite() {
       fileName: "MarkdownLite.tsx",
     }).outputText;
     const parserUrl = pathToFileURL(markdownParserPath).href;
+    const sanitizerUrl = pathToFileURL(textSanitizerPath).href;
     const rewritten = transpiled
       .replace(/"\.\/markdownParser"/g, `"${parserUrl}"`)
-      .replace(/'\.\/markdownParser'/g, `'${parserUrl}'`);
+      .replace(/'\.\/markdownParser'/g, `'${parserUrl}'`)
+      .replace(/"\.\/textSanitizer"/g, `"${sanitizerUrl}"`)
+      .replace(/'\.\/textSanitizer'/g, `'${sanitizerUrl}'`);
     const tempRoot = path.resolve(".tmp");
     await fs.mkdir(tempRoot, { recursive: true });
     const tempDir = await fs.mkdtemp(path.join(tempRoot, "markdown-lite-test-"));
@@ -69,4 +73,13 @@ test("MarkdownLite preserves composed emoji graphemes in rendered HTML", async (
   const html = renderToStaticMarkup(React.createElement(MarkdownLite, { content }));
   assert.match(html, /👨‍👩‍👧‍👦/);
   assert.match(html, /👩🏽‍💻/);
+});
+
+test("MarkdownLite strips harmful control markers without breaking emoji", async () => {
+  const MarkdownLite = await loadMarkdownLite();
+  const content = "Status <|analysis|> ok\u202E family 👨‍👩‍👧‍👦";
+  const html = renderToStaticMarkup(React.createElement(MarkdownLite, { content }));
+  assert.doesNotMatch(html, /<\|analysis\|>/);
+  assert.doesNotMatch(html, /\u202E/);
+  assert.match(html, /👨‍👩‍👧‍👦/);
 });

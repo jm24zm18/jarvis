@@ -1,5 +1,8 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
+from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
     create_feature_build_run,
@@ -15,6 +18,12 @@ from jarvis.tasks.feature_build import (
     run_feature_build,
     save_capsule,
 )
+
+
+@pytest.fixture(autouse=True)
+def _disable_isolation_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FEATURE_ISOLATION_ENABLED", "0")
+    get_settings.cache_clear()
 
 
 def test_run_feature_build_uses_current_thread_channel_schema(monkeypatch) -> None:
@@ -43,6 +52,7 @@ def test_run_feature_build_uses_current_thread_channel_schema(monkeypatch) -> No
     assert result["status"] == "running"
     assert queued
     assert queued[0][0] == "jarvis.tasks.agent.agent_step"
+    assert queued[0][1]["actor_id"] == "feature_builder"
 
     with get_conn() as conn:
         row = conn.execute(

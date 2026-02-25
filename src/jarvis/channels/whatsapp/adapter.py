@@ -1,4 +1,4 @@
-"""WhatsApp channel adapter implementation (Evolution-first, Cloud fallback)."""
+"""WhatsApp channel adapter implementation (Baileys-first, Cloud fallback)."""
 
 from __future__ import annotations
 
@@ -100,11 +100,13 @@ class WhatsAppAdapter:
     ) -> InboundMessage | None:
         key = data.get("key", {}) if isinstance(data.get("key"), dict) else {}
 
-        # Skip messages sent via the API (bot's own outgoing messages echoed back).
-        # In personal WhatsApp mode, ALL user messages arrive with fromMe=true
-        # because the Baileys session IS the user's phone (linked device).
-        # We distinguish bot-sent msgs by status="PENDING" (set by Baileys sendMessage API).
-        if key.get("fromMe") is True and str(data.get("status", "")).upper() == "PENDING":
+        # Skip outbound API echoes created by sendMessage calls.
+        # Personal WhatsApp sessions can mark inbound contact messages as fromMe=true,
+        # so direction is determined with a narrow outbound-status filter.
+        if key.get("fromMe") is True and str(data.get("status", "")).upper() in {
+            "PENDING",
+            "SERVER_ACK",
+        }:
             return None
 
         # Skip protocol messages (history sync, key distribution, etc.)
@@ -157,7 +159,7 @@ class WhatsAppAdapter:
                 mentions=mentions,
                 group_context=group_context,
                 thread_key=thread_key,
-                raw=payload,
+                raw={"envelope": payload, "record": data},
             )
 
         extended = message.get("extendedTextMessage")
@@ -171,7 +173,7 @@ class WhatsAppAdapter:
                 mentions=mentions,
                 group_context=group_context,
                 thread_key=thread_key,
-                raw=payload,
+                raw={"envelope": payload, "record": data},
             )
 
         reaction = message.get("reactionMessage")
@@ -189,7 +191,7 @@ class WhatsAppAdapter:
                 mentions=mentions,
                 group_context=group_context,
                 thread_key=thread_key,
-                raw=payload,
+                raw={"envelope": payload, "record": data},
             )
 
         media_candidates: list[tuple[str, str]] = [
@@ -220,7 +222,7 @@ class WhatsAppAdapter:
                 mentions=mentions,
                 group_context=group_context,
                 thread_key=thread_key,
-                raw=payload,
+                raw={"envelope": payload, "record": data},
             )
 
         return InboundMessage(
@@ -231,7 +233,7 @@ class WhatsAppAdapter:
             mentions=mentions,
             group_context=group_context,
             thread_key=thread_key,
-            raw=payload,
+            raw={"envelope": payload, "record": data},
         )
 
     @staticmethod

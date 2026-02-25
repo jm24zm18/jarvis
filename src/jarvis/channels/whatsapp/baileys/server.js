@@ -10,6 +10,8 @@ app.use(express.json());
 
 const AUTH_DIR = "/tmp/auth";
 const WEBHOOK_URL = process.env.WEBHOOK_URL || "http://host.docker.internal:8000/webhooks/whatsapp";
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
+const WEBHOOK_SECRET_HEADER = process.env.WEBHOOK_SECRET_HEADER || "X-WhatsApp-Secret";
 const PORT = process.env.PORT || 8081;
 
 if (!fs.existsSync(AUTH_DIR)) {
@@ -40,9 +42,19 @@ process.on('unhandledRejection', (reason, promise) => {
 
 function forceClearAuth() {
     try {
-        if (fs.existsSync(AUTH_DIR)) {
-            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        if (!fs.existsSync(AUTH_DIR)) {
+            fs.mkdirSync(AUTH_DIR, { recursive: true });
+            return;
         }
+        for (const entry of fs.readdirSync(AUTH_DIR)) {
+            const fullPath = path.join(AUTH_DIR, entry);
+            try {
+                fs.rmSync(fullPath, { recursive: true, force: true });
+            } catch (_e) {
+                // Keep clearing best-effort.
+            }
+        }
+        fs.mkdirSync(AUTH_DIR, { recursive: true });
     } catch (e) {
         // Ignore
     }
@@ -103,6 +115,9 @@ async function connectToWhatsApp() {
             version,
             logger: pino({ level: 'silent' }),
             printQRInTerminal: false,
+            browser: ["jarvis", "baileys-sidecar", "1.0"],
+            syncFullHistory: false,
+            markOnlineOnConnect: false,
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, logger),
@@ -174,7 +189,10 @@ async function connectToWhatsApp() {
             try {
                 const resp = await fetch(WEBHOOK_URL, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: {
+                        "Content-Type": "application/json",
+                        ...(WEBHOOK_SECRET ? { [WEBHOOK_SECRET_HEADER]: WEBHOOK_SECRET } : {}),
+                    },
                     body: JSON.stringify({
                         event: "messages.upsert",
                         data: m
@@ -254,7 +272,8 @@ app.post("/reset", async (req, res) => {
     currentPairingCode = null;
     clearConnectionDiagnostics();
     forceClearAuth();
-    connectToWhatsApp();
+    // Give ws/file handles a moment to settle before reconnecting.
+    setTimeout(() => connectToWhatsApp(), 250);
     res.json({ state: "connecting" });
 });
 

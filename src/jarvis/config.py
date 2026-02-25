@@ -133,6 +133,26 @@ class Settings(BaseSettings):
         alias="FEATURE_BUILD_REQUIRE_TEST_GATES",
         default=1,
     )
+    feature_isolation_enabled: int = Field(
+        alias="FEATURE_ISOLATION_ENABLED",
+        default=1,
+    )
+    feature_isolation_tmp_prefix: str = Field(
+        alias="FEATURE_ISOLATION_TMP_PREFIX",
+        default="/tmp/jarvis-feature",
+    )
+    feature_isolation_min_disk_gb: int = Field(
+        alias="FEATURE_ISOLATION_MIN_DISK_GB",
+        default=10,
+    )
+    feature_isolation_ttl_hours: int = Field(
+        alias="FEATURE_ISOLATION_TTL_HOURS",
+        default=24,
+    )
+    feature_isolation_clone_ref: str = Field(
+        alias="FEATURE_ISOLATION_CLONE_REF",
+        default="origin/dev",
+    )
     orchestrator_max_tool_iterations: int = Field(
         alias="ORCHESTRATOR_MAX_TOOL_ITERATIONS",
         default=8,
@@ -190,7 +210,7 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = Field(alias="WHATSAPP_PHONE_NUMBER_ID", default="")
     whatsapp_instance: str = Field(alias="WHATSAPP_INSTANCE", default="personal")
     whatsapp_auto_create_on_startup: int = Field(
-        alias="WHATSAPP_AUTO_CREATE_ON_STARTUP", default=0
+        alias="BAILEYS_AUTO_CREATE_ON_STARTUP", default=0
     )
     whatsapp_webhook_secret: str = Field(alias="WHATSAPP_WEBHOOK_SECRET", default="")
     whatsapp_media_dir: str = Field(
@@ -234,13 +254,16 @@ class Settings(BaseSettings):
     whatsapp_review_mode: str = Field(alias="WHATSAPP_REVIEW_MODE", default="unknown_only")
     whatsapp_allowed_senders: str = Field(alias="WHATSAPP_ALLOWED_SENDERS", default="")
     whatsapp_typing_ttl_seconds: int = Field(alias="WHATSAPP_TYPING_TTL_SECONDS", default=20)
-    evolution_api_url: str = Field(alias="EVOLUTION_API_URL", default="")
-    evolution_api_key: str = Field(alias="EVOLUTION_API_KEY", default="")
-    evolution_webhook_url: str = Field(alias="EVOLUTION_WEBHOOK_URL", default="")
-    evolution_webhook_by_events: int = Field(alias="EVOLUTION_WEBHOOK_BY_EVENTS", default=1)
-    evolution_webhook_events: str = Field(
-        alias="EVOLUTION_WEBHOOK_EVENTS",
+    baileys_api_url: str = Field(alias="BAILEYS_API_URL", default="http://127.0.0.1:8081")
+    baileys_webhook_url: str = Field(alias="BAILEYS_WEBHOOK_URL", default="")
+    baileys_webhook_by_events: int = Field(alias="BAILEYS_WEBHOOK_BY_EVENTS", default=1)
+    baileys_webhook_events: str = Field(
+        alias="BAILEYS_WEBHOOK_EVENTS",
         default="messages.upsert",
+    )
+    baileys_webhook_secret_header: str = Field(
+        alias="BAILEYS_WEBHOOK_SECRET_HEADER",
+        default="X-WhatsApp-Secret",
     )
 
     # Telegram
@@ -443,21 +466,6 @@ class Settings(BaseSettings):
     )
     selfupdate_sandbox_timeout_seconds: int = Field(
         alias="SELFUPDATE_SANDBOX_TIMEOUT_SECONDS", default=300
-    )
-
-    # Ralph autonomous improvement loop
-    ralph_max_iterations: int = Field(alias="RALPH_MAX_ITERATIONS", default=50)
-    ralph_max_failures: int = Field(alias="RALPH_MAX_FAILURES", default=5)
-    ralph_max_runtime_seconds: int = Field(alias="RALPH_MAX_RUNTIME_SECONDS", default=3600)
-    ralph_never_edit_paths: str = Field(
-        alias="RALPH_NEVER_EDIT_PATHS",
-        default=(
-            "src/jarvis/selfupdate/pipeline.py,"
-            "src/jarvis/selfupdate/ralph_plan.py,"
-            "agents/feature_builder/identity.md,"
-            "src/jarvis/policy/,"
-            "src/jarvis/auth/"
-        ),
     )
 
     # Media storage

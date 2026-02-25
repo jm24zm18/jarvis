@@ -232,12 +232,12 @@ Periodic health visibility:
 
 1. If admin status endpoint fails:
    - check `GET /api/v1/channels/whatsapp/status`
-   - if `evolution_api_disabled`, set `EVOLUTION_API_URL` and restart API.
+   - if `baileys_api_disabled`, set `BAILEYS_API_URL` and restart API.
 2. If webhook calls return `401`:
    - verify `X-WhatsApp-Secret` equals `WHATSAPP_WEBHOOK_SECRET`.
 3. If no inbound messages appear:
    - confirm callback contract from status payload (`callback.enabled`, `callback.configured`, `callback.events`).
-   - validate Evolution is sending `messages.upsert`.
+   - validate Baileys sidecar is forwarding `messages.upsert`.
 4. If inbound is accepted but no message persisted:
    - inspect sender review mode (`WHATSAPP_REVIEW_MODE`, `WHATSAPP_ALLOWED_SENDERS`).
    - check review queue APIs and resolve pending sender decisions.
@@ -251,7 +251,7 @@ Periodic health visibility:
 6. If pairing appears stuck:
    - recreate/disconnect instance from admin channel APIs
    - regenerate QR / pairing code
-   - confirm sidecar reachability and credentials (`EVOLUTION_API_URL`, `EVOLUTION_API_KEY`)
+   - confirm sidecar reachability and config (`BAILEYS_API_URL`, `BAILEYS_WEBHOOK_URL`)
 7. If WhatsApp is stuck showing "typing..." for extended periods or messages are missing (loop stalls):
    - Check the `/metrics` endpoint for mismatched `whatsapp_typing_active_threads_set` and `_clear` counters.
    - Confirm the `jarvis.tasks.channel.cleanup_stale_typing` periodic TTL task is running in-process. 

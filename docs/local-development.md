@@ -82,6 +82,13 @@ make setup-smoke-running
    - `POST /api/v1/feature-requests` with body field `"sync_to_github": true`
 5. Confirm `github_issue_number`/`github_issue_url` are populated in `GET /api/v1/bugs`.
 
+### Validate isolated feature workspace (optional)
+
+1. Trigger a feature build run through the feature-request API flow.
+2. Validate the latest workspace snapshot for that feature:
+   - `uv run jarvis feature validate --id <feature_id>`
+3. The command updates build-run validation fields and prints the validation log path.
+
 ### Enable local maintenance loop (optional)
 
 1. In `.env`, set `MAINTENANCE_ENABLED=1` and `MAINTENANCE_INTERVAL_SECONDS` (for example `3600`).

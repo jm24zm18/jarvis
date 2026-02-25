@@ -18,6 +18,38 @@
 - [ ] Implement RLM decomposition + child build pipeline for large feature scopes
       Accept: new `rlm` package + migration 077, `feature_request_build_runs` gains `decomposed` status, RLM config/docs updated, admin `/split` route implemented, and unit tests (`test_rlm_*`, `test_feature_split`, `test_feature_build_rlm_routing`) cover the new behavior.
 
+## Execution Update (2026-02-25, Chat UI Readability + Emoji Integrity Hardening)
+
+- Completed:
+  - Added shared frontend text sanitizer in `web/src/components/ui/textSanitizer.js` with emoji-safe behavior.
+  - Wired sanitizer into:
+    - chat thread previews (`web/src/pages/chat/index.tsx`)
+    - markdown rendering (`web/src/components/ui/MarkdownLite.tsx`)
+    - markdown parser normalization (`web/src/components/ui/markdownParser.js`)
+    - thinking event normalization (`web/src/components/ui/thinkingFormat.js`)
+  - Hardened chat layout against overflow:
+    - message-group/bubble min-width constraints
+    - bubble max width by readable character limit
+    - preview clamp for long thread snippets
+  - Added markdown wrapping/table guardrails in `web/src/styles.css` for dense content.
+  - Added/updated frontend tests:
+    - `web/tests/textSanitizer.test.mjs`
+    - `web/tests/chatContracts.test.mjs`
+    - `web/tests/markdownParser.test.mjs`
+    - `web/tests/markdownLiteRender.test.mjs`
+  - Updated docs coverage in `docs/web-admin-guide.md`.
+
+- Missing tasks discovered during implementation:
+  - Add a browser-level visual regression or Playwright smoke suite for chat rendering to catch CSS regressions that contract tests cannot detect.
+  - Add explicit mobile chat snapshot checks for long-table content and mixed RTL/LTR text.
+
+- Remaining tasks before handoff:
+  - Run and confirm all required quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
 ## Execution Update (2026-02-24, Provider Config Runtime Precedence + OpenRouter Key Admin UX)
 
 - Completed:
@@ -1395,6 +1427,32 @@ Rollback policy:
   - Updated docs:
     - `docs/channels/whatsapp.md`
     - `docs/channels/whatsapp-ui.md`
+
+## Execution Update (2026-02-25, Baileys Hard-Cutover Contract Alignment)
+
+- Discovered operational drift: WhatsApp runtime was Baileys-first but config/env/docs/error
+  contracts still used Evolution naming, causing recurring operator misconfiguration and
+  webhook secret mismatches in Docker Compose deployments.
+- Completed hard cutover to Baileys config and runtime contract:
+  - Config/env contract switched to:
+    - `BAILEYS_API_URL`
+    - `BAILEYS_AUTO_CREATE_ON_STARTUP`
+    - `BAILEYS_WEBHOOK_URL`
+    - `BAILEYS_WEBHOOK_BY_EVENTS`
+    - `BAILEYS_WEBHOOK_EVENTS`
+    - `BAILEYS_WEBHOOK_SECRET_HEADER`
+  - Admin channel API errors normalized from `evolution_api_*` to `baileys_api_*`.
+  - Baileys sidecar webhook forwarding now includes configurable secret header.
+  - Inbound audio media extraction fixed to bind by matching external message id (not first audio in batch).
+- Documentation updated for operator/runtime consistency:
+  - `.env.example`
+  - `docs/configuration.md`
+  - `docs/channels/whatsapp.md`
+  - `docs/channels/whatsapp-ui.md`
+  - `docs/runbook.md`
+- Remaining follow-up tasks:
+  - Watch staging/production for regressions in one release cycle and confirm no external automation
+    still writes legacy `EVOLUTION_*` keys.
     - `docs/local-development.md`
   - Updated tests:
     - `tests/integration/test_admin_api.py`
@@ -1413,3 +1471,12 @@ Rollback policy:
     `jarvis.orchestrator.step` remains importable.
 - Remaining tasks before handoff:
   - Run full gate sweep (`make test-gates`) before release promotion.
+
+## Execution Update (2026-02-25, Startup fix gate verification)
+
+- Completed:
+  - Ran `make test-gates` after the startup-regression fix; all gates passed.
+  - Verified task-runner startup import path with:
+    - `uv run python -c "from jarvis.tasks import get_task_runner; get_task_runner(); print('task-runner-ok')"`
+- Remaining tasks before handoff:
+  - None for this startup fix.

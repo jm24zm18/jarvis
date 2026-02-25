@@ -37,6 +37,19 @@ DENY_PATTERNS = (
     re.compile(r"\bmkfs(\.|$)"),
     re.compile(r":\(\)\s*\{"),  # fork bomb
 )
+WRITE_COMMAND_MARKERS = (
+    ">>",
+    " > ",
+    " touch ",
+    " mkdir ",
+    "cat <<",
+    " apply_patch",
+    " sed -i",
+    " perl -pi",
+    " mv ",
+    " cp ",
+    " rm ",
+)
 PRIVILEGED_CLASSES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("host.exec.sudo", re.compile(r"(^|\s)sudo(\s|$)")),
     ("host.exec.systemctl", re.compile(r"(^|\s)systemctl(\s|$)")),
@@ -141,6 +154,49 @@ def _validate_caller_paths(
         if any(_is_subpath(target, prefix) for prefix in prefixes):
             continue
         return f"path outside caller governance allowlist: {target}"
+    return None
+
+
+def _command_may_write(command: str) -> bool:
+    lowered = f" {command.lower()} "
+    return any(marker in lowered for marker in WRITE_COMMAND_MARKERS)
+
+
+def _violates_workspace_guard(
+    *,
+    command: str,
+    cwd: Path | None,
+    caller_id: str,
+    workspace_prefix: str,
+) -> str | None:
+    if caller_id == "feature_builder":
+        return None
+    if not _command_may_write(command):
+        return None
+    prefix = str(Path(workspace_prefix).expanduser().resolve())
+
+    def _matches_workspace_path(path: Path) -> bool:
+        text = str(path.resolve())
+        return text == prefix or text.startswith(prefix + "-") or f"/{Path(prefix).name}-" in text
+
+    if cwd is not None and _matches_workspace_path(cwd):
+        return f"workspace write denied for caller {caller_id}"
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    for token in tokens:
+        if token == ".." or "/../" in token:
+            if workspace_prefix in command:
+                return "workspace path traversal denied"
+        if workspace_prefix not in token:
+            continue
+        target = Path(token).expanduser()
+        if not target.is_absolute():
+            continue
+        resolved = target.resolve()
+        if _matches_workspace_path(resolved):
+            return f"workspace write denied for caller {caller_id}"
     return None
 
 
@@ -474,6 +530,25 @@ def execute_host_command(
             _emit_lockdown_triggered(conn, trace_id, thread_id, caller_id, "exec_host_failure_rate")
         _ = _emit(conn, trace_id, thread_id, "host.exec.end", end_payload)
         return {"exit_code": 2, "stdout": "", "stderr": cwd_error}
+
+    workspace_guard_error = _violates_workspace_guard(
+        command=command,
+        cwd=resolved_cwd,
+        caller_id=caller_id,
+        workspace_prefix=str(settings.feature_isolation_tmp_prefix),
+    )
+    if workspace_guard_error is not None:
+        end_payload = {
+            "start_event_id": start_event_id,
+            "exit_code": 126,
+            "stdout": "",
+            "stderr": workspace_guard_error,
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+            "log_path": "",
+        }
+        _ = _emit(conn, trace_id, thread_id, "host.exec.end", end_payload)
+        return {"exit_code": 126, "stdout": "", "stderr": workspace_guard_error}
     caller_path_error = _validate_caller_paths(conn, caller_id, command, resolved_cwd)
     if caller_path_error is not None:
         end_payload = {

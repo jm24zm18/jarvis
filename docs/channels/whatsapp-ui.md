@@ -19,8 +19,8 @@ Path: `/admin/channels`
 
 ## Troubleshooting
 
-- `evolution_api_disabled`: set `EVOLUTION_API_URL` in `.env` and restart API.
-- Empty QR: ensure the instance exists and Evolution sidecar is reachable.
+- `baileys_api_disabled`: set `BAILEYS_API_URL` in `.env` and restart API.
+- Empty QR: ensure the instance exists and Baileys sidecar is reachable.
 - Pairing-code `503 qr_not_ready`: wait until status badge becomes `qr`, then retry generate.
 - Status `close` with disconnect `401 (loggedOut)`: session auth was invalidated; use
   `Force Re-pair`, then scan a fresh QR.

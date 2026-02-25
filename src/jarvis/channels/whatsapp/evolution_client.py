@@ -1,4 +1,4 @@
-"""Evolution API client for WhatsApp personal account integration."""
+"""Deprecated compatibility wrapper for legacy WhatsApp client imports."""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ from jarvis.config import get_settings
 class EvolutionClient:
     def __init__(self) -> None:
         settings = get_settings()
-        self._base_url = settings.evolution_api_url.rstrip("/")
-        self._api_key = settings.evolution_api_key.strip()
+        self._base_url = settings.baileys_api_url.rstrip("/")
+        self._api_key = ""
         self._instance = settings.whatsapp_instance.strip() or "personal"
-        self._webhook_url = settings.evolution_webhook_url.strip()
-        self._webhook_by_events = int(settings.evolution_webhook_by_events) == 1
+        self._webhook_url = settings.baileys_webhook_url.strip()
+        self._webhook_by_events = int(settings.baileys_webhook_by_events) == 1
         self._webhook_events = [
             item.strip()
-            for item in settings.evolution_webhook_events.split(",")
+            for item in settings.baileys_webhook_events.split(",")
             if item.strip()
         ]
 

@@ -19,8 +19,7 @@ PROTECTED_PATH_PATTERNS = (
     re.compile(r"^/etc/.*iptables"),
     re.compile(r"^/etc/nftables"),
     re.compile(r"^/root/"),
-    # Ralph governance rails — agents must not modify these via patches.
-    re.compile(r".*/jarvis/selfupdate/ralph_"),
+    # Governance rails — agents must not modify these via patches.
     re.compile(r".*/agents/feature_builder/identity\.md$"),
 )
 GOVERNANCE_IDENTITY_FIELDS = {

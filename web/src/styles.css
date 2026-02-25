@@ -95,6 +95,9 @@ body {
 .markdown-lite {
   font-family: inherit;
   font-variant-emoji: emoji;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown-lite code,
@@ -111,4 +114,16 @@ body {
     "Segoe UI Emoji",
     "Noto Color Emoji",
     monospace;
+}
+
+.markdown-lite-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.markdown-lite th,
+.markdown-lite td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }

@@ -28,8 +28,9 @@ services:
     volumes:
       - jarvis-baileys-auth:/tmp/auth
     environment:
-      - API_KEY=${EVOLUTION_API_KEY}
-      - WEBHOOK_URL=http://host.docker.internal:8000/webhooks/whatsapp
+      - WEBHOOK_URL=${BAILEYS_WEBHOOK_URL:-http://host.docker.internal:8000/webhooks/whatsapp}
+      - WEBHOOK_SECRET=${WHATSAPP_WEBHOOK_SECRET}
+      - WEBHOOK_SECRET_HEADER=${BAILEYS_WEBHOOK_SECRET_HEADER:-X-WhatsApp-Secret}
 
 volumes:
   jarvis-baileys-auth:

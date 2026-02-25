@@ -60,15 +60,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     baileys = BaileysClient()
     if baileys.enabled and int(settings.whatsapp_auto_create_on_startup) == 1:
         status_code, payload = await baileys.create_instance()
-        callback_status_code: int | None = None
-        callback_payload: dict[str, object] = {}
-        callback_ok = False
-        callback_error = ""
-        if baileys.webhook_enabled:
-            callback_status_code, callback_payload = await baileys.configure_webhook()
-            callback_ok = callback_status_code < 400
-            if not callback_ok:
-                callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
+        callback_status_code: int | None = 200 if baileys.webhook_enabled else None
+        callback_payload: dict[str, object] = (
+            {"success": True, "mode": "managed_by_sidecar"} if baileys.webhook_enabled else {}
+        )
+        callback_ok = baileys.webhook_enabled
+        callback_error = "" if callback_ok else "webhook_url_not_configured"
         with get_conn() as conn:
             evo_state = str(
                 payload.get("instance", {}).get("state")

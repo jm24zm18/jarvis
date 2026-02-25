@@ -48,14 +48,16 @@ def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
     try:
         status_code, payload = asyncio.run(client.status())
     except Exception as exc:
-        logger.warning("Evolution API unreachable: %s", exc)
+        logger.warning("Baileys API unreachable: %s", exc)
         return {
             "enabled": True,
             "instance": client.instance,
             "status": "unreachable",
             "error": str(exc),
         }
-    evo_state = str(payload.get("instance", {}).get("state") or payload.get("state") or "unknown")
+    connector_state = str(
+        payload.get("instance", {}).get("state") or payload.get("state") or "unknown"
+    )
     raw_disconnect_code = payload.get("last_disconnect_code")
     disconnect_code = raw_disconnect_code if isinstance(raw_disconnect_code, int) else None
     disconnect_reason = str(payload.get("last_disconnect_reason") or "").strip()
@@ -66,23 +68,17 @@ def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
     if disconnect_code == status.HTTP_401_UNAUTHORIZED and "loggedout" in disconnect_reason.lower():
         relink_required = True
     recoverable = not relink_required and can_reconnect
-    callback_status_code: int | None = None
-    callback_payload: dict[str, object] = {}
-    callback_ok = False
-    callback_error = ""
-    if client.webhook_enabled:
-        try:
-            callback_status_code, callback_payload = asyncio.run(client.configure_webhook())
-            callback_ok = callback_status_code < 400
-            if not callback_ok:
-                callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
-        except Exception as exc:
-            callback_error = f"webhook_unreachable: {exc}"
+    callback_status_code: int | None = 200 if client.webhook_enabled else None
+    callback_payload: dict[str, object] = (
+        {"success": True, "mode": "managed_by_sidecar"} if client.webhook_enabled else {}
+    )
+    callback_ok = client.webhook_enabled
+    callback_error = "" if callback_ok else "webhook_url_not_configured"
     with get_conn() as conn:
         upsert_whatsapp_instance(
             conn,
             instance=client.instance,
-            status=evo_state,
+            status=connector_state,
             metadata={
                 "status_code": status_code,
                 "payload": payload,
@@ -99,7 +95,7 @@ def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
     return {
         "enabled": True,
         "instance": client.instance,
-        "status": evo_state,
+        "status": connector_state,
         "status_code": status_code,
         "payload": payload,
         "diagnostics": {
@@ -133,30 +129,26 @@ def whatsapp_create(
     del request, ctx
     client = BaileysClient()
     if not client.enabled:
-        return {"ok": False, "error": "evolution_api_disabled"}
+        return {"ok": False, "error": "baileys_api_disabled"}
     try:
         status_code, payload = asyncio.run(client.create_instance())
     except Exception as exc:
-        logger.warning("Evolution API unreachable on create: %s", exc)
-        return {"ok": False, "error": f"evolution_api_unreachable: {exc}"}
-    callback_status_code: int | None = None
-    callback_payload: dict[str, object] = {}
-    callback_ok = False
-    callback_error = ""
-    if client.webhook_enabled:
-        try:
-            callback_status_code, callback_payload = asyncio.run(client.configure_webhook())
-            callback_ok = callback_status_code < 400
-            if not callback_ok:
-                callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
-        except Exception as exc:
-            callback_error = f"webhook_unreachable: {exc}"
-    evo_state = str(payload.get("instance", {}).get("state") or payload.get("state") or "created")
+        logger.warning("Baileys API unreachable on create: %s", exc)
+        return {"ok": False, "error": f"baileys_api_unreachable: {exc}"}
+    callback_status_code: int | None = 200 if client.webhook_enabled else None
+    callback_payload: dict[str, object] = (
+        {"success": True, "mode": "managed_by_sidecar"} if client.webhook_enabled else {}
+    )
+    callback_ok = client.webhook_enabled
+    callback_error = "" if callback_ok else "webhook_url_not_configured"
+    connector_state = str(
+        payload.get("instance", {}).get("state") or payload.get("state") or "created"
+    )
     with get_conn() as conn:
         upsert_whatsapp_instance(
             conn,
             instance=client.instance,
-            status=evo_state,
+            status=connector_state,
             metadata={
                 "status_code": status_code,
                 "payload": payload,
@@ -187,12 +179,12 @@ def whatsapp_qrcode(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
     del ctx
     client = BaileysClient()
     if not client.enabled:
-        return {"ok": False, "error": "evolution_api_disabled"}
+        return {"ok": False, "error": "baileys_api_disabled"}
     try:
         status_code, payload = asyncio.run(client.qrcode())
     except Exception as exc:
-        logger.warning("Evolution API unreachable on qrcode: %s", exc)
-        return {"ok": False, "error": f"evolution_api_unreachable: {exc}"}
+        logger.warning("Baileys API unreachable on qrcode: %s", exc)
+        return {"ok": False, "error": f"baileys_api_unreachable: {exc}"}
     return {
         "ok": status_code < 400,
         "status_code": status_code,
@@ -213,15 +205,15 @@ def whatsapp_pairing_code(
     if not client.enabled:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="evolution_api_disabled",
+            detail="baileys_api_disabled",
         )
     try:
         status_code, payload = asyncio.run(client.pairing_code(input_data.number))
     except Exception as exc:
-        logger.warning("Evolution API unreachable on pairing-code: %s", exc)
+        logger.warning("Baileys API unreachable on pairing-code: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"evolution_api_unreachable: {exc}",
+            detail=f"baileys_api_unreachable: {exc}",
         ) from exc
     if status_code >= 400:
         error_detail = str(
@@ -258,12 +250,12 @@ def whatsapp_reset(
     del request, ctx
     client = BaileysClient()
     if not client.enabled:
-        return {"ok": False, "error": "evolution_api_disabled"}
+        return {"ok": False, "error": "baileys_api_disabled"}
     try:
         status_code, payload = asyncio.run(client.reset_instance())
     except Exception as exc:
-        logger.warning("Evolution API unreachable on reset: %s", exc)
-        return {"ok": False, "error": f"evolution_api_unreachable: {exc}"}
+        logger.warning("Baileys API unreachable on reset: %s", exc)
+        return {"ok": False, "error": f"baileys_api_unreachable: {exc}"}
     with get_conn() as conn:
         upsert_whatsapp_instance(
             conn,
@@ -304,12 +296,12 @@ def whatsapp_disconnect(
     del ctx
     client = BaileysClient()
     if not client.enabled:
-        return {"ok": False, "error": "evolution_api_disabled"}
+        return {"ok": False, "error": "baileys_api_disabled"}
     try:
         status_code, payload = asyncio.run(client.disconnect())
     except Exception as exc:
-        logger.warning("Evolution API unreachable on disconnect: %s", exc)
-        return {"ok": False, "error": f"evolution_api_unreachable: {exc}"}
+        logger.warning("Baileys API unreachable on disconnect: %s", exc)
+        return {"ok": False, "error": f"baileys_api_unreachable: {exc}"}
     with get_conn() as conn:
         upsert_whatsapp_instance(
             conn,
