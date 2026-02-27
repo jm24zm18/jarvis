@@ -18,6 +18,12 @@ test("sanitizeForDisplay strips model markers and harmful controls", () => {
   assert.equal(output, "ok done");
 });
 
+test("sanitizeForDisplay strips think wrappers", () => {
+  const input = "Visible <think>hidden</think> text <thinking>also hidden</thinking> end";
+  const output = sanitizeForDisplay(input);
+  assert.equal(output, "Visible text end");
+});
+
 test("sanitizeForInlinePreview collapses whitespace", () => {
   const input = "Hello\n\nthere   world";
   const output = sanitizeForInlinePreview(input);

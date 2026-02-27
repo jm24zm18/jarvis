@@ -22,6 +22,7 @@ from jarvis.db.queries import (  # noqa: E402
     create_feature_request,
     finalize_feature_build_run_by_trace,
     get_attempt_initial_dirty_files,
+    get_channel_outbound,
     get_feature_build_run_by_trace,
     get_latest_feature_build_run_for_thread,
     insert_message,
@@ -38,6 +39,7 @@ from jarvis.plugins.loader import get_loaded_plugins  # noqa: E402
 from jarvis.providers.factory import build_fallback_provider, build_primary_provider  # noqa: E402
 from jarvis.providers.router import ProviderRouter  # noqa: E402
 from jarvis.selfupdate.pipeline import PROTECTED_PATH_PATTERNS  # noqa: E402
+from jarvis.services.channel_reply_approval import check_or_request_approval  # noqa: E402
 from jarvis.tasks.agent_attempts import (  # noqa: E402
     active_running_attempt,
     classify_failure,
@@ -1433,7 +1435,6 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                             str(channel_row["channel_type"]) if channel_row is not None else ""
                         )
                         if channel_type and channel_type != "web":
-
                             def _emit(evt_type: str, evt_payload: dict[str, object]) -> None:
                                 emit_event(
                                     conn,
@@ -1450,6 +1451,36 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                                         payload_redacted_json=json.dumps(redact_payload(evt_payload)),
                                     ),
                                 )
+
+                            outbound = get_channel_outbound(
+                                conn, thread_id, message_id, channel_type
+                            )
+                            recipient = (
+                                str(outbound.get("recipient")).strip()
+                                if isinstance(outbound, dict) and outbound.get("recipient")
+                                else ""
+                            )
+                            if recipient:
+                                allowed, request_id = check_or_request_approval(
+                                    conn,
+                                    source_thread_id=thread_id,
+                                    source_message_id=message_id,
+                                    trace_id=trace_id,
+                                    channel_type=channel_type,
+                                    recipient=recipient,
+                                )
+                                if not allowed:
+                                    _emit(
+                                        "channel.reply.dispatch.blocked",
+                                        {
+                                            "message_id": message_id,
+                                            "channel_type": channel_type,
+                                            "recipient": recipient,
+                                            "reason": "R10: channel_reply_approval_required",
+                                            "request_id": request_id,
+                                        },
+                                    )
+                                    return message_id
 
                             _emit(
                                 "channel.dispatch.enqueue.start",

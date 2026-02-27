@@ -16,6 +16,11 @@ Auth levels:
 | `GET` | `/api/v1/approvals` | `admin` | `list_approvals_endpoint_api_v1_approvals_get` | `-` | `200, 422` |
 | `POST` | `/api/v1/approvals` | `admin` | `create_approval_endpoint_api_v1_approvals_post` | `application/json` | `200, 422` |
 | `POST` | `/api/v1/approvals/{approval_id}/revoke` | `admin` | `revoke_approval_endpoint_api_v1_approvals__approval_id__revoke_post` | `-` | `200, 422` |
+| `GET` | `/api/v1/channel-reply-approvals` | `admin` | `list_channel_reply_approvals_api_v1_channel_reply_approvals_get` | `-` | `200, 422` |
+| `POST` | `/api/v1/channel-reply-approvals/{request_id}/approve` | `admin` | `approve_channel_reply_api_v1_channel_reply_approvals__request_id__approve_post` | `application/json` | `200, 422` |
+| `POST` | `/api/v1/channel-reply-approvals/{request_id}/reject` | `admin` | `reject_channel_reply_api_v1_channel_reply_approvals__request_id__reject_post` | `application/json` | `200, 422` |
+| `GET` | `/api/v1/channel-reply-permissions` | `admin` | `list_channel_reply_permissions_api_v1_channel_reply_permissions_get` | `-` | `200, 422` |
+| `POST` | `/api/v1/channel-reply-permissions/revoke` | `admin` | `revoke_channel_reply_permission_api_v1_channel_reply_permissions_revoke_post` | `application/json` | `200, 422` |
 | `POST` | `/api/v1/auth/login` | `public` | `login_api_v1_auth_login_post` | `application/json` | `200, 422` |
 | `POST` | `/api/v1/auth/logout` | `auth` | `logout_api_v1_auth_logout_post` | `-` | `200, 422` |
 | `GET` | `/api/v1/auth/me` | `auth` | `me_api_v1_auth_me_get` | `-` | `200, 422` |

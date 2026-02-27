@@ -28,6 +28,7 @@
 - Assistant must not claim roadmap/feature-request mutation success unless an in-step verified write result exists; unverified claims must be blocked and logged (`agent.response.claim_blocked`).
 - Feature-request create path must be idempotent for retry scenarios when `trace_id` is supplied.
 - Follow-up heartbeat checks must remain opt-in per thread with ownership enforcement on management APIs; `no_reply` outcomes must not emit user-visible outbound messages.
+- Non-web outbound assistant replies must respect approval gating when enabled (`NON_WEB_REPLY_APPROVAL_REQUIRED=1`): no channel dispatch before approval unless sender+channel allow rule is active.
 - Feature-build runs must reject terminal success when deliverable evidence is missing (no allowed-scope diff and no explicit no-op blockers) and emit `feature.build.deliverable_gate.failed`.
 - When deliverable evidence is missing, feature-build runs must emit a corrective system message and `feature.build.output.corrected` before retry/exhaustion so unverifiable completion claims are not left unqualified.
 - Feature-build runs must fail fast on repeated consecutive `placeholder_response_after_tool_loop` outcomes (`feature.build.retry.denied`) to avoid deterministic retry churn.

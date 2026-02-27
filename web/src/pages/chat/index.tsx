@@ -16,6 +16,7 @@ import {
 import type { MediaAttachment, MessageItem, OnboardingStatus } from "../../types";
 import { useWebSocket } from "../../hooks/useWebSocket";
 import { useChatStore } from "../../stores/chat";
+import { useAuthStore } from "../../stores/auth";
 import Button from "../../components/ui/Button";
 import MarkdownLite from "../../components/ui/MarkdownLite";
 import ThinkingPanel from "../../components/ui/ThinkingPanel";
@@ -36,6 +37,12 @@ const COMMANDS: Array<{ value: string; help: string }> = [
   { value: "/kb search <query>", help: "Search knowledge base docs." },
   { value: "/kb get <id-or-title>", help: "Read a knowledge base document." },
   { value: "/kb add <title> :: <content>", help: "Save text into the knowledge base." },
+  { value: "/channel-approve-list", help: "List pending non-web reply approvals." },
+  { value: "/channel-approve <id> once", help: "Approve one pending non-web reply." },
+  { value: "/channel-approve <id> always", help: "Approve and always allow sender+channel." },
+  { value: "/channel-deny <id> [reason]", help: "Reject a pending non-web reply." },
+  { value: "/channel-allow-list", help: "List active sender+channel allow rules." },
+  { value: "/channel-allow-revoke <channel> <recipient>", help: "Revoke allow rule." },
   { value: "/onboarding reset", help: "Force onboarding flow to run again." },
   { value: "/new", help: "Close this thread and create a new one." },
 ];
@@ -87,7 +94,6 @@ export default function ChatPage() {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
   const [showThinking, setShowThinking] = useState(false);
-  const [showAllThreads, setShowAllThreads] = useState(false);
   const [panelTraceId, setPanelTraceId] = useState("");
   const [threadFilter, setThreadFilter] = useState("");
   const panelTraceIdRef = useRef(panelTraceId);
@@ -113,11 +119,13 @@ export default function ChatPage() {
     () => (panelTraceId ? traceEventsByTrace[panelTraceId] ?? EMPTY_TRACE_EVENTS : EMPTY_TRACE_EVENTS),
     [panelTraceId, traceEventsByTrace],
   );
+  const role = useAuthStore((s) => s.role);
+  const isAdmin = role === "admin";
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const threads = useQuery({
-    queryKey: ["threads", showAllThreads],
-    queryFn: () => listThreads(showAllThreads),
+    queryKey: ["threads", isAdmin],
+    queryFn: () => listThreads(isAdmin),
   });
   const messages = useQuery({
     queryKey: ["messages", threadId],
@@ -504,16 +512,6 @@ export default function ChatPage() {
               />
             </div>
             <div className="flex items-center gap-1 shrink-0">
-              <button
-                onClick={() => setShowAllThreads((v) => !v)}
-                title="Toggle All Threads (Admin)"
-                className={`rounded-lg p-1.5 transition-colors ${showAllThreads
-                    ? "bg-ember text-white"
-                    : "bg-[var(--bg-mist)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-                  }`}
-              >
-                <Eye size={16} />
-              </button>
               <button
                 onClick={() => createThreadMutation.mutate()}
                 className="rounded-lg bg-[#13293d] p-1.5 text-white hover:bg-[#13293d]/90 dark:bg-slate-200 dark:text-slate-900"

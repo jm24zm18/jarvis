@@ -124,6 +124,7 @@
     "src/jarvis/routes/api/approvals.py",
     "src/jarvis/routes/api/auth.py",
     "src/jarvis/routes/api/bugs.py",
+    "src/jarvis/routes/api/channel_reply_approvals.py",
     "src/jarvis/routes/api/channels.py",
     "src/jarvis/routes/api/events.py",
     "src/jarvis/routes/api/followups.py",
@@ -310,7 +311,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-25T12:41:51.037123+00:00",
+  "generated_at": "2026-02-27T23:50:24.403377+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -622,6 +623,10 @@
     {
       "file": "src/jarvis/db/migrations/080_feature_build_run_routing_mode.sql",
       "number": 80
+    },
+    {
+      "file": "src/jarvis/db/migrations/081_channel_reply_approvals.sql",
+      "number": 81
     }
   ],
   "protected_modules": [

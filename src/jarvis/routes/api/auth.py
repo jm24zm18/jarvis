@@ -20,10 +20,11 @@ from jarvis.auth.service import (
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import ensure_user
+from jarvis.providers.factory import resolve_fallback_provider_name, resolve_primary_provider_name
 from jarvis.tasks.system import enqueue_settings_reload
 
 router = APIRouter(prefix="/auth", tags=["api-auth"])
-_ALLOWED_PRIMARY_PROVIDERS = {"openrouter", "sglang"}
+_ALLOWED_PRIMARY_PROVIDERS = {"openrouter", "sglang", "lmstudio"}
 _MAX_EXTERNAL_ID_LENGTH = 256
 
 
@@ -90,29 +91,37 @@ def _parse_bool(value: object) -> bool:
     return False
 
 
-async def _load_sglang_models() -> list[str]:
-    settings = get_settings()
-    endpoint = f"{settings.sglang_base_url.rstrip('/')}/models"
+async def _load_models_catalog(base_url: str, api_key: str = "") -> list[str]:
+    endpoint = f"{base_url.rstrip('/')}/models"
     try:
+        headers: dict[str, str] = {}
+        if api_key.strip():
+            headers["Authorization"] = f"Bearer {api_key.strip()}"
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(endpoint)
+            response = await client.get(endpoint, headers=headers)
         if response.status_code >= 400:
             return []
         payload = response.json()
-        if not isinstance(payload, dict):
-            return []
-        rows = payload.get("data")
-        if not isinstance(rows, list):
+        rows: list[object]
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            rows = data if isinstance(data, list) else []
+        elif isinstance(payload, list):
+            rows = payload
+        else:
             return []
         models: list[str] = []
         seen: set[str] = set()
         for row in rows:
-            if not isinstance(row, dict):
-                continue
-            model_id = row.get("id")
-            if not isinstance(model_id, str):
-                continue
-            item = model_id.strip()
+            item = ""
+            if isinstance(row, str):
+                item = row.strip()
+            elif isinstance(row, dict):
+                model_id = row.get("id")
+                if isinstance(model_id, str):
+                    item = model_id.strip()
+                elif isinstance(row.get("model"), str):
+                    item = str(row.get("model", "")).strip()
             if not item or item in seen:
                 continue
             seen.add(item)
@@ -120,6 +129,18 @@ async def _load_sglang_models() -> list[str]:
         return sorted(models)
     except Exception:
         return []
+
+
+def _normalize_primary_provider(value: str) -> str:
+    item = value.strip().lower()
+    if item in _ALLOWED_PRIMARY_PROVIDERS:
+        return item
+    return "openrouter"
+
+
+def _resolve_fallback_provider(primary_provider: str) -> str:
+    settings = get_settings()
+    return resolve_fallback_provider_name(settings, primary_provider)
 
 
 @router.post("/login")
@@ -197,17 +218,23 @@ def providers_config(
 ) -> dict[str, object]:
     del ctx
     settings = get_settings()
-    primary_provider = settings.primary_provider.strip().lower()
-    if primary_provider not in _ALLOWED_PRIMARY_PROVIDERS:
-        primary_provider = "openrouter"
+    primary_provider = resolve_primary_provider_name(settings)
+    fallback_provider = resolve_fallback_provider_name(settings, primary_provider)
     openrouter_api_key = settings.openrouter_api_key.strip()
+    lmstudio_api_key = settings.lmstudio_api_key.strip()
     return {
         "primary_provider": primary_provider,
+        "fallback_provider": fallback_provider,
         "openrouter_model": settings.openrouter_model,
         "sglang_model": settings.sglang_model,
+        "lmstudio_model": settings.lmstudio_model,
+        "lmstudio_base_url": settings.lmstudio_base_url,
         "openrouter_api_key_set": bool(openrouter_api_key),
         "openrouter_api_key_masked": _mask_secret(openrouter_api_key),
+        "lmstudio_api_key_set": bool(lmstudio_api_key),
+        "lmstudio_api_key_masked": _mask_secret(lmstudio_api_key),
         "available_primary_providers": sorted(_ALLOWED_PRIMARY_PROVIDERS),
+        "available_fallback_providers": sorted(_ALLOWED_PRIMARY_PROVIDERS),
     }
 
 
@@ -217,12 +244,20 @@ async def providers_models(
 ) -> dict[str, object]:
     del ctx
     settings = get_settings()
-    sglang_models = await _load_sglang_models()
+    sglang_models = await _load_models_catalog(settings.sglang_base_url)
+    lmstudio_models = await _load_models_catalog(
+        settings.lmstudio_base_url,
+        settings.lmstudio_api_key,
+    )
     if settings.sglang_model and settings.sglang_model not in sglang_models:
         sglang_models = [settings.sglang_model, *sglang_models]
+    if settings.lmstudio_model and settings.lmstudio_model not in lmstudio_models:
+        lmstudio_models = [settings.lmstudio_model, *lmstudio_models]
     return {
         "sglang_models": sglang_models,
+        "lmstudio_models": lmstudio_models,
         "sglang_source": "sglang-/models",
+        "lmstudio_source": "lmstudio-/models",
     }
 
 
@@ -232,7 +267,9 @@ def update_providers_config(
     ctx: UserContext = Depends(require_admin),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
+    settings = get_settings()
     updates: dict[str, str] = {}
+    next_primary_provider = resolve_primary_provider_name(settings)
     if "primary_provider" in payload:
         primary_provider = str(payload.get("primary_provider", "")).strip().lower()
         if primary_provider not in _ALLOWED_PRIMARY_PROVIDERS:
@@ -241,7 +278,29 @@ def update_providers_config(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"primary_provider must be one of: {allowed}",
             )
+        next_primary_provider = primary_provider
         updates["PRIMARY_PROVIDER"] = primary_provider
+    if "fallback_provider" in payload:
+        fallback_provider = str(payload.get("fallback_provider", "")).strip().lower()
+        if fallback_provider not in _ALLOWED_PRIMARY_PROVIDERS:
+            allowed = ", ".join(sorted(_ALLOWED_PRIMARY_PROVIDERS))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"fallback_provider must be one of: {allowed}",
+            )
+        if fallback_provider == next_primary_provider:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="fallback_provider must be different from primary_provider",
+            )
+        updates["FALLBACK_PROVIDER"] = fallback_provider
+    elif "primary_provider" in payload:
+        existing_fallback = settings.fallback_provider.strip().lower()
+        if (
+            existing_fallback not in _ALLOWED_PRIMARY_PROVIDERS
+            or existing_fallback == next_primary_provider
+        ):
+            updates["FALLBACK_PROVIDER"] = _resolve_fallback_provider(next_primary_provider)
     if "openrouter_model" in payload:
         openrouter_model = str(payload.get("openrouter_model", "")).strip()
         if not openrouter_model:
@@ -258,6 +317,22 @@ def update_providers_config(
                 detail="sglang_model is required",
             )
         updates["SGLANG_MODEL"] = sglang_model
+    if "lmstudio_model" in payload:
+        lmstudio_model = str(payload.get("lmstudio_model", "")).strip()
+        if not lmstudio_model:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="lmstudio_model is required",
+            )
+        updates["LMSTUDIO_MODEL"] = lmstudio_model
+    if "lmstudio_base_url" in payload:
+        lmstudio_base_url = str(payload.get("lmstudio_base_url", "")).strip()
+        if not lmstudio_base_url:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="lmstudio_base_url is required",
+            )
+        updates["LMSTUDIO_BASE_URL"] = lmstudio_base_url
     clear_openrouter_api_key = _parse_bool(payload.get("clear_openrouter_api_key"))
     if clear_openrouter_api_key:
         updates["OPENROUTER_API_KEY"] = ""
@@ -265,23 +340,35 @@ def update_providers_config(
         openrouter_api_key = str(payload.get("openrouter_api_key", "")).strip()
         if openrouter_api_key:
             updates["OPENROUTER_API_KEY"] = openrouter_api_key
+    clear_lmstudio_api_key = _parse_bool(payload.get("clear_lmstudio_api_key"))
+    if clear_lmstudio_api_key:
+        updates["LMSTUDIO_API_KEY"] = ""
+    elif "lmstudio_api_key" in payload:
+        lmstudio_api_key = str(payload.get("lmstudio_api_key", "")).strip()
+        if lmstudio_api_key:
+            updates["LMSTUDIO_API_KEY"] = lmstudio_api_key
 
     if updates:
         _save_env_values(updates)
         _apply_runtime_env_values(updates)
     runtime = _refresh_settings_runtime()
     settings = get_settings()
-    primary_provider = settings.primary_provider.strip().lower()
-    if primary_provider not in _ALLOWED_PRIMARY_PROVIDERS:
-        primary_provider = "openrouter"
+    primary_provider = _normalize_primary_provider(settings.primary_provider)
+    fallback_provider = resolve_fallback_provider_name(settings, primary_provider)
     openrouter_api_key = settings.openrouter_api_key.strip()
+    lmstudio_api_key = settings.lmstudio_api_key.strip()
     return {
         "ok": True,
         "updated": sorted(updates.keys()),
         "primary_provider": primary_provider,
+        "fallback_provider": fallback_provider,
         "openrouter_model": settings.openrouter_model,
         "sglang_model": settings.sglang_model,
+        "lmstudio_model": settings.lmstudio_model,
+        "lmstudio_base_url": settings.lmstudio_base_url,
         "openrouter_api_key_set": bool(openrouter_api_key),
         "openrouter_api_key_masked": _mask_secret(openrouter_api_key),
+        "lmstudio_api_key_set": bool(lmstudio_api_key),
+        "lmstudio_api_key_masked": _mask_secret(lmstudio_api_key),
         **runtime,
     }

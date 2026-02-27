@@ -36,3 +36,13 @@ def test_end_token_plus_marker():
 
 def test_empty_string():
     assert _strip_control_tokens("") == ""
+
+
+def test_strips_think_block():
+    text = "Answer <think>internal reasoning</think> done"
+    assert _strip_control_tokens(text) == "Answer done"
+
+
+def test_strips_thinking_block_and_orphan_tag():
+    text = "Intro <thinking>scratchpad</thinking> outro </thinking>"
+    assert _strip_control_tokens(text) == "Intro outro"

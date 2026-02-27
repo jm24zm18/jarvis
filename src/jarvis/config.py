@@ -269,6 +269,10 @@ class Settings(BaseSettings):
     )
     whatsapp_review_mode: str = Field(alias="WHATSAPP_REVIEW_MODE", default="unknown_only")
     whatsapp_allowed_senders: str = Field(alias="WHATSAPP_ALLOWED_SENDERS", default="")
+    non_web_reply_approval_required: int = Field(
+        alias="NON_WEB_REPLY_APPROVAL_REQUIRED",
+        default=1,
+    )
     whatsapp_typing_ttl_seconds: int = Field(alias="WHATSAPP_TYPING_TTL_SECONDS", default=20)
     baileys_api_url: str = Field(alias="BAILEYS_API_URL", default="http://127.0.0.1:8081")
     baileys_webhook_url: str = Field(alias="BAILEYS_WEBHOOK_URL", default="")
@@ -289,6 +293,7 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = Field(alias="GOOGLE_OAUTH_CLIENT_ID", default="")
     google_oauth_client_secret: str = Field(alias="GOOGLE_OAUTH_CLIENT_SECRET", default="")
     primary_provider: str = Field(alias="PRIMARY_PROVIDER", default="openrouter")
+    fallback_provider: str = Field(alias="FALLBACK_PROVIDER", default="")
     openrouter_api_key: str = Field(alias="OPENROUTER_API_KEY", default="")
     openrouter_model: str = Field(alias="OPENROUTER_MODEL", default="google/gemini-2.5-flash")
     openrouter_base_url: str = Field(
@@ -303,6 +308,12 @@ class Settings(BaseSettings):
     sglang_tool_choice: str = Field(alias="SGLANG_TOOL_CHOICE", default="auto")
     openrouter_tool_choice: str = Field(alias="OPENROUTER_TOOL_CHOICE", default="auto")
     openrouter_parallel_tool_calls: int = Field(alias="OPENROUTER_PARALLEL_TOOL_CALLS", default=1)
+    lmstudio_base_url: str = Field(alias="LMSTUDIO_BASE_URL", default="http://127.0.0.1:1234/v1")
+    lmstudio_model: str = Field(alias="LMSTUDIO_MODEL", default="local-model")
+    lmstudio_api_key: str = Field(alias="LMSTUDIO_API_KEY", default="")
+    lmstudio_timeout_seconds: int = Field(alias="LMSTUDIO_TIMEOUT_SECONDS", default=600)
+    lmstudio_tool_choice: str = Field(alias="LMSTUDIO_TOOL_CHOICE", default="auto")
+    lmstudio_parallel_tool_calls: int = Field(alias="LMSTUDIO_PARALLEL_TOOL_CALLS", default=0)
 
     ollama_base_url: str = Field(alias="OLLAMA_BASE_URL", default="http://localhost:11434")
     ollama_embed_model: str = Field(alias="OLLAMA_EMBED_MODEL", default="nomic-embed-text")
@@ -515,6 +526,8 @@ def validate_settings_for_env(settings: Settings) -> None:
         "OPENROUTER_MODEL": settings.openrouter_model,
         "SGLANG_BASE_URL": settings.sglang_base_url,
         "SGLANG_MODEL": settings.sglang_model,
+        "LMSTUDIO_BASE_URL": settings.lmstudio_base_url,
+        "LMSTUDIO_MODEL": settings.lmstudio_model,
         "OLLAMA_BASE_URL": settings.ollama_base_url,
         "OLLAMA_EMBED_MODEL": settings.ollama_embed_model,
         "SEARXNG_BASE_URL": settings.searxng_base_url,

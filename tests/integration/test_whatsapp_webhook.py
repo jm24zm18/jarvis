@@ -9,7 +9,6 @@ from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.main import app
 from jarvis.tasks.agent import agent_step
-from jarvis.tasks.channel import send_whatsapp_message
 
 PAYLOAD = {
     "entry": [
@@ -381,26 +380,20 @@ def test_webhook_to_outbound_flow_emits_events(monkeypatch) -> None:
         )
         and item["queue"] == "tools_io"
     ]
-    assert len(outbound_calls) == 1
-    outbound_kwargs = outbound_calls[0]["kwargs"]
-    assert isinstance(outbound_kwargs, dict)
-    assert outbound_kwargs["thread_id"] == thread_id
-    assert outbound_kwargs["message_id"] == message_id
-
-    outbound_result = send_whatsapp_message(thread_id=thread_id, message_id=message_id)
-    assert outbound_result["status"] == "sent"
+    assert len(outbound_calls) == 0
 
     with get_conn() as conn:
-        outbound_events = conn.execute(
+        approval_row = conn.execute(
             (
-                "SELECT event_type FROM events "
-                "WHERE thread_id=? AND event_type='channel.outbound' "
-                "ORDER BY created_at ASC"
+                "SELECT status, source_thread_id, source_message_id FROM "
+                "channel_reply_approval_requests WHERE source_message_id=? LIMIT 1"
             ),
-            (thread_id,),
+            (message_id,),
         ).fetchall()
-
-    assert len(outbound_events) >= 2
+    assert len(approval_row) == 1
+    assert str(approval_row[0]["status"]) == "pending"
+    assert str(approval_row[0]["source_thread_id"]) == thread_id
+    assert str(approval_row[0]["source_message_id"]) == message_id
 
 
 def test_inbound_rejects_invalid_secret(monkeypatch) -> None:

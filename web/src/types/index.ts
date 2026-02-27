@@ -186,27 +186,40 @@ export interface PermissionGroup {
 }
 
 export interface ProviderConfig {
-  primary_provider: "openrouter" | "sglang" | string;
+  primary_provider: "openrouter" | "sglang" | "lmstudio" | string;
+  fallback_provider: "openrouter" | "sglang" | "lmstudio" | string;
   openrouter_model: string;
   sglang_model: string;
+  lmstudio_model: string;
+  lmstudio_base_url: string;
   openrouter_api_key_set: boolean;
   openrouter_api_key_masked: string;
+  lmstudio_api_key_set: boolean;
+  lmstudio_api_key_masked: string;
   available_primary_providers: string[];
+  available_fallback_providers: string[];
 }
 
 export interface ProviderModelsCatalog {
   sglang_models: string[];
+  lmstudio_models: string[];
   sglang_source: string;
+  lmstudio_source: string;
 }
 
 export interface ProviderConfigUpdateResult {
   ok: boolean;
   updated: string[];
-  primary_provider: "openrouter" | "sglang" | string;
+  primary_provider: "openrouter" | "sglang" | "lmstudio" | string;
+  fallback_provider: "openrouter" | "sglang" | "lmstudio" | string;
   openrouter_model: string;
   sglang_model: string;
+  lmstudio_model: string;
+  lmstudio_base_url: string;
   openrouter_api_key_set: boolean;
   openrouter_api_key_masked: string;
+  lmstudio_api_key_set: boolean;
+  lmstudio_api_key_masked: string;
   api_reloaded: boolean;
   worker_reload_enqueued: boolean;
 }
@@ -260,6 +273,36 @@ export interface ApprovalRecord {
   expires_at: string | null;
   consumed_by_trace_id: string;
   created_at: string;
+}
+
+export interface ChannelReplyApprovalRequest {
+  id: string;
+  source_thread_id: string;
+  source_message_id: string;
+  trace_id: string;
+  channel_type: string;
+  recipient: string;
+  status: string;
+  decision_mode: string;
+  reason: string;
+  admin_thread_id: string;
+  decided_by: string;
+  decided_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChannelReplyPermission {
+  id: string;
+  channel_type: string;
+  recipient: string;
+  status: string;
+  granted_by: string;
+  revoked_by: string;
+  revoked_reason: string;
+  created_at: string;
+  updated_at: string;
+  revoked_at?: string | null;
 }
 
 export interface RepoStatus {

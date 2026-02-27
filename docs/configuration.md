@@ -139,13 +139,15 @@ Source of truth: `src/jarvis/config.py`.
 | `WHATSAPP_VOICE_LANGUAGE` | str | `` | Optional fixed language code for transcription; empty enables auto-detect. |
 | `WHATSAPP_REVIEW_MODE` | str | `unknown_only` | Sender review policy mode (`off`, `unknown_only`, `strict`) for WhatsApp ingress gating. |
 | `WHATSAPP_ALLOWED_SENDERS` | str | `` | Comma-separated sender allowlist for strict sender review mode. |
+| `NON_WEB_REPLY_APPROVAL_REQUIRED` | int | `1` | When `1`, assistant replies on non-web channels require explicit approval unless sender+channel is already allowed. |
 | `WHATSAPP_TYPING_TTL_SECONDS` | int | `20` | TTL for stale WhatsApp typing markers before periodic auto-clear emits `paused`. |
 | `BAILEYS_API_URL` | str | `http://127.0.0.1:8081` | Baileys sidecar API base URL. |
 | `BAILEYS_WEBHOOK_URL` | str | `` | Callback URL sidecar forwards inbound events to (usually `/webhooks/whatsapp`). |
 | `BAILEYS_WEBHOOK_BY_EVENTS` | int | `1` | Callback metadata flag for event-filtered delivery mode. |
 | `BAILEYS_WEBHOOK_EVENTS` | str | `messages.upsert` | Comma-separated webhook event names expected from sidecar forwarding. |
 | `BAILEYS_WEBHOOK_SECRET_HEADER` | str | `X-WhatsApp-Secret` | Header name sidecar uses to send webhook secret. |
-| `PRIMARY_PROVIDER` | str | `openrouter` | Primary chat provider (`openrouter` or `sglang`). |
+| `PRIMARY_PROVIDER` | str | `openrouter` | Primary chat provider (`openrouter`, `sglang`, or `lmstudio`). |
+| `FALLBACK_PROVIDER` | str | `` | Optional explicit fallback provider (`openrouter`, `sglang`, or `lmstudio`); when unset, fallback is derived from primary. |
 | `OPENROUTER_API_KEY` | str | `` | OpenRouter API key. |
 | `OPENROUTER_MODEL` | str | `google/gemini-2.5-flash` | OpenRouter model name. |
 | `OPENROUTER_BASE_URL` | str | `https://openrouter.ai/api/v1` | OpenRouter API base URL. |
@@ -157,10 +159,16 @@ Source of truth: `src/jarvis/config.py`.
 | `SGLANG_TOOL_CHOICE` | str | `auto` | Tool choice mode for SGLang provider (`auto`, `none`, or a specific function). |
 | `OPENROUTER_TOOL_CHOICE` | str | `auto` | Tool choice mode for OpenRouter provider (`auto`, `none`, or a specific function). |
 | `OPENROUTER_PARALLEL_TOOL_CALLS` | int | `1` | When `1` (default), allows parallel tool calls for OpenRouter/frontier models. Set to `0` to disable. |
+| `LMSTUDIO_BASE_URL` | str | `http://127.0.0.1:1234/v1` | LM Studio OpenAI-compatible endpoint. |
+| `LMSTUDIO_MODEL` | str | `local-model` | LM Studio model name. |
+| `LMSTUDIO_API_KEY` | str | `` | Optional LM Studio API key. |
+| `LMSTUDIO_TIMEOUT_SECONDS` | int | `600` | LM Studio request timeout. |
+| `LMSTUDIO_TOOL_CHOICE` | str | `auto` | Tool choice mode for LM Studio provider (`auto`, `none`, or a specific function). |
+| `LMSTUDIO_PARALLEL_TOOL_CALLS` | int | `0` | Parallel tool call flag for LM Studio provider. |
 
 Provider admin runtime note:
-- Saving provider settings from the admin API/UI updates `.env` and applies provider keys (`PRIMARY_PROVIDER`, `OPENROUTER_MODEL`, `SGLANG_MODEL`, `OPENROUTER_API_KEY`) to the live API runtime immediately.
-- OpenRouter API key reads are masked in API responses; raw key retrieval is not supported.
+- Saving provider settings from the admin API/UI updates `.env` and applies provider keys (`PRIMARY_PROVIDER`, `FALLBACK_PROVIDER`, `OPENROUTER_MODEL`, `SGLANG_MODEL`, `LMSTUDIO_MODEL`, `LMSTUDIO_BASE_URL`, `OPENROUTER_API_KEY`, `LMSTUDIO_API_KEY`) to the live API runtime immediately.
+- OpenRouter and LM Studio API key reads are masked in API responses; raw key retrieval is not supported.
 
 ### Memory and Search
 

@@ -414,7 +414,8 @@ def test_conversation_history_persists(tmp_path: Path) -> None:
 
 def test_conversation_strips_control_tokens_from_model_output(tmp_path: Path) -> None:
     noisy = (
-        "Got it, Justin! What should I call your assistant?<|end|><|start|>"
+        "Got it, Justin! <think>hidden chain-of-thought</think> "
+        "What should I call your assistant?<|end|><|start|>"
         "assistant<|channel|>analysis<|message|>hidden"
     )
     router = _FakeRouter([ModelResponse(text=noisy, tool_calls=[])])

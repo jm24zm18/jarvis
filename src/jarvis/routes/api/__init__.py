@@ -7,6 +7,7 @@ from jarvis.routes.api import (
     approvals,
     auth,
     bugs,
+    channel_reply_approvals,
     channels,
     events,
     followups,
@@ -38,6 +39,7 @@ router.include_router(schedules.router)
 router.include_router(selfupdate.router)
 router.include_router(permissions.router)
 router.include_router(approvals.router)
+router.include_router(channel_reply_approvals.router)
 router.include_router(bugs.router)
 router.include_router(channels.router)
 router.include_router(webhooks.router)

@@ -78,6 +78,8 @@ _ROADMAP_SUCCESS_PATTERNS = (
     re.compile(r"\bcreated\b.{0,40}\bfeature request\b", re.IGNORECASE),
     re.compile(r"\bI(?:'ve| have)\s+added\b", re.IGNORECASE),
 )
+_THINK_BLOCK_RE = re.compile(r"<\s*(think|thinking)\s*>[\s\S]*?<\s*/\s*\1\s*>", re.IGNORECASE)
+_THINK_TAG_RE = re.compile(r"<\s*/?\s*(think|thinking)\s*>", re.IGNORECASE)
 
 
 def _strip_control_tokens(text: str) -> str:
@@ -91,6 +93,10 @@ def _strip_control_tokens(text: str) -> str:
         first_marker = idx if first_marker is None else min(first_marker, idx)
     if first_marker is not None:
         cleaned = cleaned[:first_marker].strip()
+    # Some local reasoning models leak internal wrappers in user-facing text.
+    cleaned = _THINK_BLOCK_RE.sub(" ", cleaned)
+    cleaned = _THINK_TAG_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned
 
 
@@ -743,11 +749,9 @@ async def run_agent_step(
         agent_context = f"{agent_context}\n\n{repo_idx}"
 
     primary_provider = resolve_primary_provider_name(settings)
-    token_budget = (
-        settings.prompt_budget_openrouter_tokens
-        if primary_provider == "openrouter"
-        else settings.prompt_budget_sglang_tokens
-    )
+    token_budget = settings.prompt_budget_sglang_tokens
+    if primary_provider == "openrouter":
+        token_budget = settings.prompt_budget_openrouter_tokens
 
     prompt_mode = "full" if actor_id == "main" else "minimal"
     tool_schemas = runtime.registry.schemas()

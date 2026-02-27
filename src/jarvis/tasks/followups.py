@@ -9,12 +9,13 @@ from datetime import UTC, datetime
 
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
-from jarvis.db.queries import insert_message, now_iso
+from jarvis.db.queries import get_channel_outbound, insert_message, now_iso
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
 from jarvis.providers.factory import build_fallback_provider, build_primary_provider
 from jarvis.providers.router import ProviderRouter
+from jarvis.services.channel_reply_approval import check_or_request_approval
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,36 @@ def _dispatch_channel_message(*, thread_id: str, message_id: str, trace_id: str)
         channel_type = str(row["channel_type"])
         if not channel_type or channel_type == "web":
             return True
+        outbound = get_channel_outbound(conn, thread_id, message_id, channel_type)
+        recipient = (
+            str(outbound.get("recipient")).strip()
+            if isinstance(outbound, dict) and outbound.get("recipient")
+            else ""
+        )
+        if recipient:
+            allowed, request_id = check_or_request_approval(
+                conn,
+                source_thread_id=thread_id,
+                source_message_id=message_id,
+                trace_id=trace_id,
+                channel_type=channel_type,
+                recipient=recipient,
+            )
+            if not allowed:
+                _emit(
+                    "channel.reply.dispatch.blocked",
+                    {
+                        "message_id": message_id,
+                        "channel_type": channel_type,
+                        "recipient": recipient,
+                        "reason": "R10: channel_reply_approval_required",
+                        "request_id": request_id,
+                        "source": "followup",
+                    },
+                    thread_id=thread_id,
+                    trace_id=trace_id,
+                )
+                return False
         _emit(
             "channel.dispatch.enqueue.start",
             {"message_id": message_id, "channel_type": channel_type, "source": "followup"},

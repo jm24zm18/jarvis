@@ -13,6 +13,7 @@ from jarvis.db.queries import ensure_system_state, get_system_state, now_iso
 from jarvis.providers.factory import (
     build_fallback_provider,
     build_primary_provider,
+    resolve_fallback_provider_name,
     resolve_primary_provider_name,
 )
 from jarvis.providers.router import ProviderRouter
@@ -76,7 +77,7 @@ async def system_status(ctx: UserContext = Depends(require_auth)) -> dict[str, o
     del ctx
     settings = get_settings()
     primary_provider_name = resolve_primary_provider_name(settings)
-    fallback_provider_name = "openrouter" if primary_provider_name == "sglang" else "sglang"
+    fallback_provider_name = resolve_fallback_provider_name(settings, primary_provider_name)
     provider_status = await ProviderRouter(
         build_primary_provider(settings),
         build_fallback_provider(settings),

@@ -18,6 +18,73 @@
 - [ ] Implement RLM decomposition + child build pipeline for large feature scopes
       Accept: new `rlm` package + migration 077, `feature_request_build_runs` gains `decomposed` status, RLM config/docs updated, admin `/split` route implemented, and unit tests (`test_rlm_*`, `test_feature_split`, `test_feature_build_rlm_routing`) cover the new behavior.
 
+## Execution Update (2026-02-27, Think-Tag Sanitization Hardening)
+
+- Completed:
+  - Hardened backend response sanitization to strip leaked reasoning wrappers:
+    - `<think>...</think>`
+    - `<thinking>...</thinking>`
+    - orphan `think/thinking` tags
+  - Applied sanitization in:
+    - orchestrator user-facing response strip path (`src/jarvis/orchestrator/step.py`)
+    - onboarding assistant text sanitizer (`src/jarvis/onboarding/service.py`)
+  - Added frontend safety-net sanitization in `web/src/components/ui/textSanitizer.js` so legacy/stored payloads with think tags do not render in chat UI.
+  - Added/updated tests:
+    - `tests/unit/test_strip_control_tokens.py`
+    - `tests/unit/test_onboarding_service.py`
+    - `web/tests/textSanitizer.test.mjs`
+
+- Missing tasks discovered during implementation:
+  - Consider extending sanitization coverage to additional provider-specific wrapper variants if observed in production traces.
+
+- Remaining tasks before handoff:
+  - Run targeted + required quality checks:
+    - `uv run pytest tests/unit/test_strip_control_tokens.py tests/unit/test_onboarding_service.py -q`
+    - `npm --prefix web run test`
+    - `make lint`
+    - `make typecheck`
+    - `make docs-check`
+
+## Execution Update (2026-02-27, LM Studio Provider + Explicit Fallback Routing)
+
+- Completed:
+  - Added first-class LM Studio provider adapter:
+    - `src/jarvis/providers/lmstudio.py`
+    - OpenAI-compatible `/chat/completions` + `/models` handling
+    - optional bearer auth support via `LMSTUDIO_API_KEY`
+  - Extended provider factory routing:
+    - `PRIMARY_PROVIDER` now supports `lmstudio`
+    - added explicit `FALLBACK_PROVIDER` support
+    - fallback resolution now supports all providers (`openrouter`, `sglang`, `lmstudio`) with compatibility-safe defaults.
+  - Extended provider config/admin API contract:
+    - `GET /api/v1/auth/providers/config` now returns `fallback_provider`, `lmstudio_model`, `lmstudio_base_url`, `lmstudio_api_key_set`, `lmstudio_api_key_masked`
+    - `POST /api/v1/auth/providers/config` now accepts `fallback_provider`, `lmstudio_model`, `lmstudio_base_url`, `lmstudio_api_key`, `clear_lmstudio_api_key`
+    - `GET /api/v1/auth/providers/models` now returns `lmstudio_models` and `lmstudio_source`
+  - Updated `/admin/providers` web UI:
+    - LM Studio primary/fallback selection
+    - LM Studio model catalog selection
+    - LM Studio base URL input
+    - LM Studio API key set/clear flow with masked preview
+  - Added/updated tests:
+    - `tests/unit/test_lmstudio_provider.py`
+    - `tests/unit/test_providers.py`
+    - `tests/integration/test_web_api.py`
+  - Updated docs/config defaults:
+    - `.env.example`
+    - provider config docs and local development notes.
+
+- Missing tasks discovered during implementation:
+  - Consider introducing a dedicated `PROMPT_BUDGET_LMSTUDIO_TOKENS` to decouple local-LM prompt budget tuning from SGLang defaults.
+  - Add UI affordances that warn when selected fallback is currently unreachable based on provider health.
+
+- Remaining tasks before handoff:
+  - Run targeted and full quality gates:
+    - `uv run pytest tests/unit/test_lmstudio_provider.py tests/unit/test_providers.py tests/integration/test_web_api.py -k "provider" -v`
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
 ## Execution Update (2026-02-25, Auto-Decompose Fallback + Build Thread Routing + Attempt Finalization)
 
 - Completed:
@@ -1519,3 +1586,42 @@ Rollback policy:
     - `uv run python -c "from jarvis.tasks import get_task_runner; get_task_runner(); print('task-runner-ok')"`
 - Remaining tasks before handoff:
   - None for this startup fix.
+
+## Execution Update (2026-02-27, Non-Web Reply Approval Gate + Admin Chat Visibility)
+
+- Discovered issue:
+  - Admin `/chat` required manual toggle (`all=true`) to see non-owned/channel threads.
+  - Non-web outbound replies (WhatsApp) auto-dispatched without explicit approval checkpoint.
+- Completed:
+  - Added migration `081_channel_reply_approvals.sql`:
+    - `channel_reply_approval_requests`
+    - `channel_reply_permissions`
+  - Added non-web approval gate service:
+    - `src/jarvis/services/channel_reply_approval.py`
+    - blocks non-web outbound until approved, unless sender+channel allow rule exists
+    - emits `channel.reply.approval.*` and `channel.reply.dispatch.blocked` events
+  - Applied gate in both outbound paths:
+    - `src/jarvis/tasks/agent.py`
+    - `src/jarvis/tasks/followups.py`
+  - Added admin API surfaces:
+    - `GET /api/v1/channel-reply-approvals`
+    - `POST /api/v1/channel-reply-approvals/{id}/approve`
+    - `POST /api/v1/channel-reply-approvals/{id}/reject`
+    - `GET /api/v1/channel-reply-permissions`
+    - `POST /api/v1/channel-reply-permissions/revoke`
+  - Added chat command controls:
+    - `/channel-approve-list`
+    - `/channel-approve <id> once|always`
+    - `/channel-deny <id> [reason]`
+    - `/channel-allow-list`
+    - `/channel-allow-revoke <channel> <recipient> [reason]`
+  - Admin chat visibility fix:
+    - `/chat` now requests all threads automatically for `role=admin` (no Eye toggle dependency).
+    - Auth store now tracks role from `/api/v1/auth/me`.
+- Verification run:
+  - `uv run pytest tests/integration/test_task_flow.py::test_scheduler_tick_and_agent_step_flow -q`
+  - `uv run pytest tests/integration/test_whatsapp_webhook.py::test_webhook_to_outbound_flow_emits_events -q`
+  - `cd web && npm test -- --runInBand adminChannelsContracts.test.mjs`
+- Remaining tasks before handoff:
+  - Run full gate sweep: `make test-gates`
+  - Add dedicated integration coverage for the new `/api/v1/channel-reply-approvals*` and `/api/v1/channel-reply-permissions*` endpoints.

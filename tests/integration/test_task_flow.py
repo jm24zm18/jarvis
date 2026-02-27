@@ -77,6 +77,16 @@ def test_scheduler_tick_and_agent_step_flow(monkeypatch) -> None:
     payload = enqueued_from_scheduler[0]
     message_id = agent_step(trace_id=payload["trace_id"], thread_id=payload["thread_id"])
     assert message_id.startswith("msg_")
-    assert len(enqueued_from_agent) == 1
-    assert enqueued_from_agent[0]["thread_id"] == payload["thread_id"]
-    assert enqueued_from_agent[0]["message_id"] == message_id
+    assert len(enqueued_from_agent) == 0
+    with get_conn() as conn:
+        req_row = conn.execute(
+            (
+                "SELECT status, source_thread_id, source_message_id FROM "
+                "channel_reply_approval_requests WHERE source_message_id=? LIMIT 1"
+            ),
+            (message_id,),
+        ).fetchone()
+    assert req_row is not None
+    assert str(req_row["status"]) == "pending"
+    assert str(req_row["source_thread_id"]) == str(payload["thread_id"])
+    assert str(req_row["source_message_id"]) == message_id

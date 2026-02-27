@@ -3,6 +3,8 @@ import type {
   AgentDetail,
   AgentSummary,
   ApprovalRecord,
+  ChannelReplyApprovalRequest,
+  ChannelReplyPermission,
   BugReport,
   DispatchItem,
   EventItem,
@@ -41,7 +43,7 @@ export const login = (password: string) =>
     body: JSON.stringify({ password }),
   });
 
-export const me = () => apiFetch<{ user_id: string }>("/api/v1/auth/me");
+export const me = () => apiFetch<{ user_id: string; role: string }>("/api/v1/auth/me");
 export const logout = () => apiFetch<{ ok: boolean }>("/api/v1/auth/logout", { method: "POST" });
 
 export const listThreads = (all = false) =>
@@ -221,11 +223,16 @@ export const getProviderModelsCatalog = () =>
   apiFetch<ProviderModelsCatalog>("/api/v1/auth/providers/models");
 
 export const updateProviderConfig = (payload: {
-  primary_provider?: "openrouter" | "sglang" | string;
+  primary_provider?: "openrouter" | "sglang" | "lmstudio" | string;
+  fallback_provider?: "openrouter" | "sglang" | "lmstudio" | string;
   openrouter_model?: string;
   sglang_model?: string;
+  lmstudio_model?: string;
+  lmstudio_base_url?: string;
   openrouter_api_key?: string;
   clear_openrouter_api_key?: boolean;
+  lmstudio_api_key?: string;
+  clear_lmstudio_api_key?: boolean;
 }) =>
   apiFetch<ProviderConfigUpdateResult>("/api/v1/auth/providers/config", {
     method: "POST",
@@ -532,6 +539,49 @@ export const revokeApproval = (approvalId: string) =>
     method: "POST",
     body: "{}",
   });
+
+export const listChannelReplyApprovals = (params?: {
+  status?: string;
+  limit?: number;
+  offset?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  if (typeof params?.offset === "number") qs.set("offset", String(params.offset));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ items: ChannelReplyApprovalRequest[] }>(`/api/v1/channel-reply-approvals${suffix}`);
+};
+
+export const approveChannelReply = (requestId: string, mode: "once" | "always") =>
+  apiFetch<{ ok: boolean; request_id: string; mode: string; status: string; dispatched: boolean }>(
+    `/api/v1/channel-reply-approvals/${requestId}/approve`,
+    { method: "POST", body: JSON.stringify({ mode }) },
+  );
+
+export const rejectChannelReply = (requestId: string, reason = "") =>
+  apiFetch<{ ok: boolean; request_id: string; status: string }>(
+    `/api/v1/channel-reply-approvals/${requestId}/reject`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+
+export const listChannelReplyPermissions = (status = "active") =>
+  apiFetch<{ items: ChannelReplyPermission[] }>(
+    `/api/v1/channel-reply-permissions?status=${encodeURIComponent(status)}`,
+  );
+
+export const revokeChannelReplyPermission = (
+  channelType: string,
+  recipient: string,
+  reason = "manual_revoke",
+) =>
+  apiFetch<{ ok: boolean; permission_id: string; status: string }>(
+    "/api/v1/channel-reply-permissions/revoke",
+    {
+      method: "POST",
+      body: JSON.stringify({ channel_type: channelType, recipient, reason }),
+    },
+  );
 
 export const repoCheckout = (payload: { branch?: string; create_branch?: string }) =>
   apiFetch<{ status: string }>("/api/v1/repo/checkout", {

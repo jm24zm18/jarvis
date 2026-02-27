@@ -6,6 +6,7 @@ import pytest
 from jarvis.config import get_settings
 from jarvis.providers.compat import ProviderCompat
 from jarvis.providers.factory import build_fallback_provider, build_primary_provider
+from jarvis.providers.lmstudio import LMStudioProvider
 from jarvis.providers.openrouter import OpenRouterProvider
 from jarvis.providers.sglang import SGLangProvider
 
@@ -252,3 +253,37 @@ def test_provider_factory_supports_switching_primary_provider(
         get_settings.cache_clear()
     assert isinstance(primary, SGLangProvider)
     assert isinstance(fallback, OpenRouterProvider)
+
+
+def test_provider_factory_supports_lmstudio_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PRIMARY_PROVIDER", "lmstudio")
+    monkeypatch.setenv("LMSTUDIO_MODEL", "qwen2.5-coder-7b-instruct")
+    monkeypatch.setenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+    monkeypatch.setenv("SGLANG_MODEL", "openai/gpt-oss-120b")
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        primary = build_primary_provider(settings)
+        fallback = build_fallback_provider(settings)
+    finally:
+        get_settings.cache_clear()
+    assert isinstance(primary, LMStudioProvider)
+    assert isinstance(fallback, OpenRouterProvider)
+
+
+def test_provider_factory_supports_explicit_fallback_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PRIMARY_PROVIDER", "openrouter")
+    monkeypatch.setenv("FALLBACK_PROVIDER", "lmstudio")
+    monkeypatch.setenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+    monkeypatch.setenv("LMSTUDIO_MODEL", "qwen2.5-coder-7b-instruct")
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        fallback = build_fallback_provider(settings)
+    finally:
+        get_settings.cache_clear()
+    assert isinstance(fallback, LMStudioProvider)

@@ -7,6 +7,7 @@
 - Ollama: `11434`
 - SearXNG: `8080`
 - SGLang: `30000`
+- LM Studio (optional, external app): `1234`
 - `make dev` runs a host-port preflight first and fails early with remediation hints if
   any of these ports are occupied.
 
@@ -145,6 +146,7 @@ services:
 - When using alternate ports, update `.env` accordingly:
   - `OLLAMA_BASE_URL=http://localhost:21434`
   - `SGLANG_BASE_URL=http://localhost:31000/v1`
+  - `LMSTUDIO_BASE_URL=http://localhost:1234/v1` (or your custom LM Studio server URL)
   - `SEARXNG_BASE_URL=http://localhost:18080`
 
 ### Secret Hygiene Quick Checks

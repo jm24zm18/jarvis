@@ -37,6 +37,14 @@ Unknown routes redirect to `/chat` after auth.
 - Admin pages depend on admin-only API endpoints (`permissions`, `selfupdate`, `channels`, governance surfaces).
 - Non-admin users are ownership-scoped for thread/message/event/memory reads.
 - WebSocket subscriptions enforce thread ownership unless role is `admin`.
+- Admin chat thread list loads all threads by default (no extra toggle required).
+
+## Non-Web Reply Approvals
+
+- When non-web reply gating is enabled, pending approvals are created for outbound assistant replies in WhatsApp/Telegram threads unless sender+channel is already allowed.
+- Approvals can be managed from:
+  - API: `/api/v1/channel-reply-approvals*`, `/api/v1/channel-reply-permissions*`
+  - Chat commands in an admin thread: `/channel-approve*`, `/channel-deny`, `/channel-allow-list`, `/channel-allow-revoke`
 
 ## Provider Admin Page
 
@@ -46,11 +54,16 @@ Unknown routes redirect to `/chat` after auth.
 - `GET /api/v1/auth/providers/models`
 
 Behavior:
-- Primary provider and model updates apply immediately to API runtime after save.
+- Primary/fallback provider and model updates apply immediately to API runtime after save.
 - OpenRouter API key is write-only from UI:
   - UI receives `openrouter_api_key_set` and `openrouter_api_key_masked`.
   - UI never receives the raw key value.
   - Clearing requires explicit `clear_openrouter_api_key=true`.
+- LM Studio API key is write-only from UI:
+  - UI receives `lmstudio_api_key_set` and `lmstudio_api_key_masked`.
+  - UI never receives the raw key value.
+  - Clearing requires explicit `clear_lmstudio_api_key=true`.
+- Chat rendering sanitizes leaked model wrappers (for example `<|analysis|>` and `<think>...</think>`) before display.
 
 ## WebSocket Model
 

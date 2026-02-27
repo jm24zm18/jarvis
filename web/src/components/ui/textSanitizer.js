@@ -1,4 +1,6 @@
 const MODEL_CONTROL_MARKER = /<\|[^|>]+?\|>/g;
+const THINK_BLOCK_RE = /<\s*(think|thinking)\s*>[\s\S]*?<\s*\/\s*\1\s*>/gi;
+const THINK_TAG_RE = /<\s*\/?\s*(think|thinking)\s*>/gi;
 const NORMALIZE_SPACE_RE = /[\u00A0\u2007\u202F]/g;
 const HARMFUL_BIDI_RE = /[\u202A-\u202E\u2066-\u2069]/g;
 
@@ -22,6 +24,8 @@ function baseSanitize(text) {
   let cleaned = String(text ?? "");
   cleaned = cleaned.replace(/\r\n?/g, "\n");
   cleaned = cleaned.replace(MODEL_CONTROL_MARKER, "");
+  cleaned = cleaned.replace(THINK_BLOCK_RE, " ");
+  cleaned = cleaned.replace(THINK_TAG_RE, " ");
   cleaned = cleaned.replace(NORMALIZE_SPACE_RE, " ");
   cleaned = stripUnsafeControls(cleaned);
   cleaned = cleaned.replace(HARMFUL_BIDI_RE, "");

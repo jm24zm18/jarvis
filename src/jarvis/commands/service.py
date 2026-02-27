@@ -29,6 +29,13 @@ from jarvis.onboarding.service import reset_onboarding_state, start_onboarding_p
 from jarvis.providers.router import ProviderRouter
 from jarvis.scheduler.service import estimate_schedule_backlog
 from jarvis.selfupdate.pipeline import read_artifact, read_state
+from jarvis.services.channel_reply_approval import (
+    approve_request,
+    list_approval_requests,
+    list_permissions,
+    reject_request,
+    revoke_permission,
+)
 from jarvis.tasks import get_task_runner
 from jarvis.tasks.system import enqueue_restart
 
@@ -42,6 +49,32 @@ def _send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
 
 def _is_admin(admin_ids: set[str], actor_external_id: str | None) -> bool:
     return actor_external_id is not None and actor_external_id in admin_ids
+
+
+def _is_admin_actor(
+    conn: sqlite3.Connection, admin_ids: set[str], actor_external_id: str | None
+) -> bool:
+    if _is_admin(admin_ids, actor_external_id):
+        return True
+    if not actor_external_id:
+        return False
+    row = conn.execute(
+        "SELECT role FROM users WHERE external_id=? LIMIT 1",
+        (actor_external_id,),
+    ).fetchone()
+    return row is not None and str(row["role"]) == "admin"
+
+
+def _resolve_actor_id(conn: sqlite3.Connection, actor_external_id: str | None) -> str:
+    if not actor_external_id:
+        return "admin"
+    row = conn.execute(
+        "SELECT id FROM users WHERE external_id=? LIMIT 1",
+        (actor_external_id,),
+    ).fetchone()
+    if row is not None:
+        return str(row["id"])
+    return actor_external_id
 
 
 def _default_agents() -> list[str]:
@@ -321,7 +354,7 @@ async def maybe_execute_command(
         return "unknown kb action"
 
     if command == "/unlock" and len(args) == 1:
-        if not _is_admin(admin_ids, actor_external_id):
+        if not _is_admin_actor(conn, admin_ids, actor_external_id):
             return "admin required"
         code_path = Path(settings.admin_unlock_code_path)
         if not code_path.exists():
@@ -354,7 +387,7 @@ async def maybe_execute_command(
         return "lockdown cleared"
 
     if command == "/restart":
-        if not _is_admin(admin_ids, actor_external_id):
+        if not _is_admin_actor(conn, admin_ids, actor_external_id):
             return "admin required"
         system_state = get_system_state(conn)
         if system_state["lockdown"] == 1:
@@ -367,7 +400,7 @@ async def maybe_execute_command(
         return "restart flag set"
 
     if command == "/approve" and len(args) >= 1:
-        if not _is_admin(admin_ids, actor_external_id):
+        if not _is_admin_actor(conn, admin_ids, actor_external_id):
             return "admin required"
         action = args[0].strip().lower()
         target_ref = args[1].strip() if len(args) >= 2 else ""
@@ -391,8 +424,77 @@ async def maybe_execute_command(
             return f"approval created: {action} target={target_ref}"
         return f"approval created: {action}"
 
+    if command == "/channel-approve" and len(args) >= 1:
+        if not _is_admin_actor(conn, admin_ids, actor_external_id):
+            return "admin required"
+        request_id = args[0].strip()
+        mode = args[1].strip().lower() if len(args) >= 2 else "once"
+        if mode not in {"once", "always"}:
+            return "usage: /channel-approve <request_id> once|always"
+        result = approve_request(
+            conn,
+            request_id=request_id,
+            approver_id=_resolve_actor_id(conn, actor_external_id),
+            mode=mode,  # type: ignore[arg-type]
+            trace_id=new_id("trc"),
+        )
+        if not bool(result.get("ok")):
+            return str(result.get("error", "approval failed"))
+        return (
+            f"approved {request_id} mode={mode} "
+            f"status={result.get('status')} dispatched={result.get('dispatched')}"
+        )
+
+    if command == "/channel-deny" and len(args) >= 1:
+        if not _is_admin_actor(conn, admin_ids, actor_external_id):
+            return "admin required"
+        request_id = args[0].strip()
+        reason = " ".join(args[1:]).strip()
+        result = reject_request(
+            conn,
+            request_id=request_id,
+            approver_id=_resolve_actor_id(conn, actor_external_id),
+            reason=reason,
+            trace_id=new_id("trc"),
+        )
+        if not bool(result.get("ok")):
+            return str(result.get("error", "reject failed"))
+        return f"rejected {request_id}"
+
+    if command == "/channel-allow-list":
+        if not _is_admin_actor(conn, admin_ids, actor_external_id):
+            return "admin required"
+        status = args[0].strip().lower() if args else "active"
+        items = list_permissions(conn, status=status)
+        return json.dumps({"status": status, "items": items})
+
+    if command == "/channel-allow-revoke" and len(args) >= 2:
+        if not _is_admin_actor(conn, admin_ids, actor_external_id):
+            return "admin required"
+        channel_type = args[0].strip().lower()
+        recipient = args[1].strip()
+        reason = " ".join(args[2:]).strip() or "manual_revoke"
+        result = revoke_permission(
+            conn,
+            channel_type=channel_type,
+            recipient=recipient,
+            actor_id=_resolve_actor_id(conn, actor_external_id),
+            reason=reason,
+            trace_id=new_id("trc"),
+        )
+        if not bool(result.get("ok")):
+            return str(result.get("error", "revoke failed"))
+        return f"revoked allow for {channel_type}:{recipient}"
+
+    if command == "/channel-approve-list":
+        if not _is_admin_actor(conn, admin_ids, actor_external_id):
+            return "admin required"
+        status = args[0].strip().lower() if args else "pending"
+        items = list_approval_requests(conn, status=status, limit=20, offset=0)
+        return json.dumps({"status": status, "items": items})
+
     if command == "/wa-review" and args:
-        if not _is_admin(admin_ids, actor_external_id):
+        if not _is_admin_actor(conn, admin_ids, actor_external_id):
             return "admin required"
         action = args[0].strip().lower()
         if action == "list":

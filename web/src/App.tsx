@@ -36,7 +36,7 @@ function Protected({ children }: { children: JSX.Element }) {
 
   useEffect(() => {
     if (authCheck.isSuccess) {
-      setAuth(authCheck.data.user_id);
+      setAuth(authCheck.data.user_id, authCheck.data.role);
       return;
     }
     if (authCheck.isError) clearAuth();

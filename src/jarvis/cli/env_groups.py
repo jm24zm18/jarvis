@@ -79,8 +79,13 @@ ENV_GROUPS: list[EnvGroup] = [
         vars=[
             EnvVarDef(
                 "PRIMARY_PROVIDER",
-                "Primary model provider (openrouter or sglang)",
+                "Primary model provider (openrouter, sglang, or lmstudio)",
                 default="openrouter",
+            ),
+            EnvVarDef(
+                "FALLBACK_PROVIDER",
+                "Fallback model provider (openrouter, sglang, or lmstudio)",
+                default="sglang",
             ),
             EnvVarDef("OPENROUTER_API_KEY", "OpenRouter API key", default="", secret=True),
             EnvVarDef(
@@ -127,6 +132,34 @@ ENV_GROUPS: list[EnvGroup] = [
                 "SGLang request timeout in seconds",
                 default="600",
                 required_for_dev=True,
+            ),
+        ],
+    ),
+    EnvGroup(
+        title="Local LLM (LM Studio)",
+        description="LM Studio OpenAI-compatible endpoint for local model routing.",
+        required=False,
+        vars=[
+            EnvVarDef(
+                "LMSTUDIO_BASE_URL",
+                "LM Studio OpenAI-compatible base URL",
+                default="http://127.0.0.1:1234/v1",
+            ),
+            EnvVarDef(
+                "LMSTUDIO_MODEL",
+                "Model identifier for LM Studio",
+                default="local-model",
+            ),
+            EnvVarDef(
+                "LMSTUDIO_API_KEY",
+                "LM Studio API key (optional)",
+                default="",
+                secret=True,
+            ),
+            EnvVarDef(
+                "LMSTUDIO_TIMEOUT_SECONDS",
+                "LM Studio request timeout in seconds",
+                default="600",
             ),
         ],
     ),

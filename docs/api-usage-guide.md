@@ -16,22 +16,30 @@ Bearer headers remain supported for compatibility and CLI/test flows.
 
 - Read config: `GET /api/v1/auth/providers/config`
 - Update config: `POST /api/v1/auth/providers/config`
-- Read SGLang model catalog: `GET /api/v1/auth/providers/models`
+- Read provider model catalogs: `GET /api/v1/auth/providers/models`
 
 Provider config response includes:
-- `primary_provider`, `openrouter_model`, `sglang_model`
+- `primary_provider`, `fallback_provider`, `openrouter_model`, `sglang_model`, `lmstudio_model`, `lmstudio_base_url`
 - `openrouter_api_key_set` (boolean)
 - `openrouter_api_key_masked` (masked preview only; raw key is never returned)
+- `lmstudio_api_key_set` (boolean)
+- `lmstudio_api_key_masked` (masked preview only; raw key is never returned)
 
 Provider update payload supports:
-- `primary_provider` (`openrouter` or `sglang`)
+- `primary_provider` (`openrouter`, `sglang`, or `lmstudio`)
+- `fallback_provider` (`openrouter`, `sglang`, or `lmstudio`, must differ from primary)
 - `openrouter_model`
 - `sglang_model`
+- `lmstudio_model`
+- `lmstudio_base_url`
 - `openrouter_api_key` (set/replace when non-empty)
 - `clear_openrouter_api_key` (explicit clear)
+- `lmstudio_api_key` (set/replace when non-empty)
+- `clear_lmstudio_api_key` (explicit clear)
 
 Runtime behavior:
 - Provider saves apply to live API runtime immediately for provider env keys.
+- Assistant output is sanitized to remove model control wrappers (for example `<|analysis|>` and leaked `<think>...</think>` blocks) before user-facing delivery.
 
 ## Thread and Message Flow
 
@@ -173,6 +181,26 @@ POST /api/v1/approvals/{id}/revoke  # admin only
 ```
 
 Active approval tokens consumed by `self_update_apply` are surfaced in the approvals center.
+
+## Non-Web Reply Approval Gate
+
+When `NON_WEB_REPLY_APPROVAL_REQUIRED=1`, assistant replies for non-web channels (for example WhatsApp/Telegram) are held pending until approved, unless an active sender+channel allow rule exists.
+
+```
+GET  /api/v1/channel-reply-approvals
+POST /api/v1/channel-reply-approvals/{id}/approve   # Body: { "mode": "once"|"always" }
+POST /api/v1/channel-reply-approvals/{id}/reject    # Body: { "reason": "..." }
+
+GET  /api/v1/channel-reply-permissions
+POST /api/v1/channel-reply-permissions/revoke       # Body: { "channel_type": "...", "recipient": "...", "reason": "..." }
+```
+
+Operational command shortcuts in chat:
+- `/channel-approve-list [pending|sent|rejected|approved_once|approved_always]`
+- `/channel-approve <request_id> once|always`
+- `/channel-deny <request_id> [reason]`
+- `/channel-allow-list [active|revoked]`
+- `/channel-allow-revoke <channel_type> <recipient> [reason]`
 
 ## Related Docs
 

@@ -19,6 +19,9 @@
 6. Provider router executes primary/fallback model call.
 7. Tool calls run through policy-gated runtime (`deny-by-default`).
 8. Assistant response is persisted; state extraction is queued as a background task (`jarvis.tasks.memory.extract_thread_state`) and outbound channel task is scheduled in-process.
+9. For non-web channels, outbound assistant replies are approval-gated by default:
+   - if sender+channel permission exists, dispatch proceeds;
+   - otherwise a pending approval request is created and notification is posted to an admin web thread.
 9. Final assistant output is guarded before persistence to block leaked internal planning/tool payload text; blocked output emits `agent.response.leak_blocked`.
 10. Repeated failing tool calls are suppressed within a step (`tool.call.suppressed`) to reduce failure loops.
 11. Roadmap-write success claims are blocked unless a verified write result exists in-step; blocked claims emit `agent.response.claim_blocked`.
@@ -38,7 +41,7 @@
 3. Threads with active attempts or recent activity are skipped (`followup.skipped`).
 4. A compact evaluator produces strict JSON action (`reply` or `no_reply`).
 5. `no_reply` updates state and emits `followup.no_reply` without outbound message.
-6. `reply` persists an assistant message, enqueues channel send (non-web), and emits `followup.sent`.
+6. `reply` persists an assistant message, then applies the same non-web approval gate before any channel enqueue.
 
 ## Human Escalation Flow
 
@@ -122,13 +125,13 @@ OSS models served via SGLang (e.g. `openai/gpt-oss-120b`) require the OpenAI-sta
 
 The compat layer is implemented across three modules:
 
-- **`src/jarvis/providers/compat.py`**: `ProviderCompat` frozen dataclass holding per-provider behavioural flags (`tool_choice`, `parallel_tool_calls`, `strict_tool_schema`).  Pre-built `OPENROUTER_COMPAT` and `SGLANG_COMPAT` constants are wired by the factory.
+- **`src/jarvis/providers/compat.py`**: `ProviderCompat` frozen dataclass holding per-provider behavioural flags (`tool_choice`, `parallel_tool_calls`, `strict_tool_schema`). Compat flags are wired per provider in the factory for OpenRouter, SGLang, and LM Studio.
 - **`src/jarvis/providers/message_builder.py`**: Four helpers consumed by the orchestrator:
   - `build_assistant_message(text, tool_calls)` — builds an assistant dict with `tool_calls` array.
   - `build_tool_result_message(tool_call_id, content)` — builds a `role: "tool"` result dict.
   - `ensure_tool_ids(tool_calls)` — synthesises `spn_<uuid>` IDs for tool calls that omit them.
   - `inject_synthetic_errors_for_orphaned_calls(messages)` — two-pass scan that appends synthetic `role: "tool"` error entries for any assistant `tool_calls` entries that were never answered, preventing OSS models from looping on unacknowledged calls during terminal synthesis.
-- **`src/jarvis/providers/factory.py`**: `_build_openrouter_compat` / `_build_sglang_compat` build `ProviderCompat` from settings (`SGLANG_PARALLEL_TOOL_CALLS`, `SGLANG_TOOL_CHOICE`, `OPENROUTER_TOOL_CHOICE`, `OPENROUTER_PARALLEL_TOOL_CALLS`) and pass them to provider constructors.
+- **`src/jarvis/providers/factory.py`**: `_build_openrouter_compat` / `_build_sglang_compat` / `_build_lmstudio_compat` build `ProviderCompat` from settings (`SGLANG_PARALLEL_TOOL_CALLS`, `SGLANG_TOOL_CHOICE`, `OPENROUTER_TOOL_CHOICE`, `OPENROUTER_PARALLEL_TOOL_CALLS`, `LMSTUDIO_TOOL_CHOICE`, `LMSTUDIO_PARALLEL_TOOL_CALLS`) and pass them to provider constructors.
 
 The orchestrator (`src/jarvis/orchestrator/step.py`) uses `ensure_tool_ids` + `build_assistant_message` before each tool-execution loop, and `build_tool_result_message` for all three tool-result append sites (suppressed duplicates, exception path, and normal success/error path).
 
