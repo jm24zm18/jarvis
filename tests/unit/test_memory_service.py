@@ -5,7 +5,13 @@ import sqlite3
 import pytest
 
 from jarvis.db.connection import get_conn
-from jarvis.db.queries import ensure_channel, ensure_open_thread, ensure_system_state, ensure_user
+from jarvis.db.queries import (
+    create_thread,
+    ensure_channel,
+    ensure_open_thread,
+    ensure_system_state,
+    ensure_user,
+)
 from jarvis.memory.service import MemoryService
 
 
@@ -460,3 +466,88 @@ def test_graph_traverse_returns_edges() -> None:
         graph = service.graph_traverse(conn, uid="d_a", depth=2)
     assert graph["root_uid"] == "d_a"
     assert len(graph["edges"]) >= 2
+
+
+def test_get_user_memory_by_id_enforces_owner_scope() -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        alice_id = ensure_user(conn, "15555550151")
+        bob_id = ensure_user(conn, "15555550152")
+        alice_channel = ensure_channel(conn, alice_id, "whatsapp")
+        bob_channel = ensure_channel(conn, bob_id, "whatsapp")
+        alice_thread = ensure_open_thread(conn, alice_id, alice_channel)
+        bob_thread = ensure_open_thread(conn, bob_id, bob_channel)
+        conn.execute(
+            (
+                "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                "VALUES(?,?,?,?,datetime('now'))"
+            ),
+            ("mem_owner_a", alice_thread, "alice memory", "{}"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                "VALUES(?,?,?,?,datetime('now'))"
+            ),
+            ("mem_owner_b", bob_thread, "bob memory", "{}"),
+        )
+
+        own_item = service.get_user_memory_by_id(
+            conn,
+            requester_thread_id=alice_thread,
+            memory_id="mem_owner_a",
+        )
+        blocked_item = service.get_user_memory_by_id(
+            conn,
+            requester_thread_id=alice_thread,
+            memory_id="mem_owner_b",
+        )
+    assert own_item is not None
+    assert own_item["id"] == "mem_owner_a"
+    assert blocked_item is None
+
+
+def test_search_user_memories_returns_cross_thread_matches_for_same_user() -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550153")
+        other_user_id = ensure_user(conn, "15555550154")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        other_channel_id = ensure_channel(conn, other_user_id, "whatsapp")
+        thread_a = create_thread(conn, user_id, channel_id)
+        thread_b = create_thread(conn, user_id, channel_id)
+        other_thread = create_thread(conn, other_user_id, other_channel_id)
+        conn.execute(
+            (
+                "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                "VALUES(?,?,?,?,datetime('now'))"
+            ),
+            ("mem_cross_a", thread_a, "oreo in thread a", "{}"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                "VALUES(?,?,?,?,datetime('now'))"
+            ),
+            ("mem_cross_b", thread_b, "oreo in thread b", "{}"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                "VALUES(?,?,?,?,datetime('now'))"
+            ),
+            ("mem_cross_other", other_thread, "oreo in other user thread", "{}"),
+        )
+        items = service.search_user_memories(
+            conn,
+            requester_thread_id=thread_a,
+            query="oreo",
+            limit=10,
+            exclude_thread_id=thread_a,
+        )
+    returned_ids = {str(item["id"]) for item in items}
+    assert "mem_cross_b" in returned_ids
+    assert "mem_cross_a" not in returned_ids
+    assert "mem_cross_other" not in returned_ids

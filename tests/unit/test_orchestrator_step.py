@@ -14,6 +14,7 @@ from jarvis.db.queries import (
     insert_message,
 )
 from jarvis.errors import ProviderError
+from jarvis.memory.service import MemoryService
 from jarvis.memory.skills import SkillsService
 from jarvis.orchestrator.step import (
     DEGRADED_RESPONSE,
@@ -663,6 +664,128 @@ def test_run_agent_step_includes_skills_and_environment_context(monkeypatch) -> 
     assert any(str(item.get("slug", "")) == "jarvis-project" for item in skills)
     assert any(str(item.get("slug", "")) == "deploy-checklist" for item in skills)
     assert captured["prompt_mode"] == "full"
+
+
+def test_run_agent_step_resolves_explicit_memory_id_into_context(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr(MemoryService, "_embed_text", lambda self, _text: [1.0, 0.0])
+    captured: dict[str, object] = {}
+
+    def _fake_build_prompt_with_report(
+        system_context: str,
+        summary_short: str,
+        summary_long: str,
+        structured_state: str,
+        memory_chunks: list[str],
+        tail: list[str],
+        token_budget: int,
+        max_memory_items: int = 6,
+        prompt_mode: str = "full",
+        available_tools: list[dict[str, str]] | None = None,
+        skill_catalog: list[dict[str, object]] | None = None,
+    ) -> tuple[str, str, dict[str, object]]:
+        del (
+            system_context,
+            summary_short,
+            summary_long,
+            structured_state,
+            tail,
+            token_budget,
+            max_memory_items,
+            prompt_mode,
+            available_tools,
+            skill_catalog,
+        )
+        captured["memory_chunks"] = memory_chunks
+        return "system", "user", {"sections": {}}
+
+    monkeypatch.setattr(
+        "jarvis.orchestrator.step.build_prompt_with_report",
+        _fake_build_prompt_with_report,
+    )
+    router = _SequenceRouter([(ModelResponse(text="done", tool_calls=[]), "primary")])
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550155")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        source_thread = ensure_open_thread(conn, user_id, channel_id)
+        target_thread = ensure_open_thread(conn, user_id, channel_id)
+        memory_id = MemoryService().write(conn, source_thread, "user said their dog is Oreo")
+        insert_message(conn, target_thread, "user", f"{memory_id} has it")
+        _ = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=target_thread,
+                trace_id="trc_step_mem_id",
+            )
+        )
+    chunks = captured.get("memory_chunks")
+    assert isinstance(chunks, list)
+    assert any(str(chunk).startswith(f"[memory:{memory_id}]") for chunk in chunks)
+
+
+def test_run_agent_step_uses_cross_thread_memory_fallback(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr(MemoryService, "_embed_text", lambda self, _text: [1.0, 0.0])
+    captured: dict[str, object] = {}
+
+    def _fake_build_prompt_with_report(
+        system_context: str,
+        summary_short: str,
+        summary_long: str,
+        structured_state: str,
+        memory_chunks: list[str],
+        tail: list[str],
+        token_budget: int,
+        max_memory_items: int = 6,
+        prompt_mode: str = "full",
+        available_tools: list[dict[str, str]] | None = None,
+        skill_catalog: list[dict[str, object]] | None = None,
+    ) -> tuple[str, str, dict[str, object]]:
+        del (
+            system_context,
+            summary_short,
+            summary_long,
+            structured_state,
+            tail,
+            token_budget,
+            max_memory_items,
+            prompt_mode,
+            available_tools,
+            skill_catalog,
+        )
+        captured["memory_chunks"] = memory_chunks
+        return "system", "user", {"sections": {}}
+
+    monkeypatch.setattr(
+        "jarvis.orchestrator.step.build_prompt_with_report",
+        _fake_build_prompt_with_report,
+    )
+    router = _SequenceRouter([(ModelResponse(text="done", tool_calls=[]), "primary")])
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550156")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        source_thread = ensure_open_thread(conn, user_id, channel_id)
+        target_thread = ensure_open_thread(conn, user_id, channel_id)
+        MemoryService().write(conn, source_thread, "my dog Oreo gets anxious when alone")
+        insert_message(conn, target_thread, "user", "oreo")
+        _ = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=target_thread,
+                trace_id="trc_step_mem_fallback",
+            )
+        )
+    chunks = captured.get("memory_chunks")
+    assert isinstance(chunks, list)
+    assert any("oreo" in str(chunk).lower() for chunk in chunks)
 
 
 def test_run_agent_step_sends_system_message(monkeypatch) -> None:

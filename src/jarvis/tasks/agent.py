@@ -32,6 +32,7 @@ from jarvis.db.queries import (  # noqa: E402
 from jarvis.events.models import EventInput  # noqa: E402
 from jarvis.events.writer import emit_event, redact_payload  # noqa: E402
 from jarvis.ids import new_id  # noqa: E402
+from jarvis.memory.service import MemoryService  # noqa: E402
 from jarvis.memory.skills import SkillsService  # noqa: E402
 from jarvis.orchestrator.step import run_agent_step  # noqa: E402
 from jarvis.plugins.base import PluginContext  # noqa: E402
@@ -1965,6 +1966,70 @@ def _build_registry(
         summary = summarize_thread_logs(conn, target_thread_id)
         return {"summary": summary, "thread_id": target_thread_id}
 
+    async def tool_memory_search(args: dict[str, object]) -> dict[str, object]:
+        service = MemoryService()
+        raw_memory_id = args.get("memory_id")
+        memory_id = str(raw_memory_id).strip() if isinstance(raw_memory_id, str) else ""
+        raw_query = args.get("q", args.get("query"))
+        query = str(raw_query).strip() if isinstance(raw_query, str) else ""
+        raw_limit = args.get("limit", 5)
+        try:
+            limit = int(raw_limit) if isinstance(raw_limit, int | float | str) else 5
+        except (TypeError, ValueError):
+            limit = 5
+        limit = max(1, min(limit, 20))
+        raw_thread_id = args.get("thread_id")
+        target_thread_id = (
+            str(raw_thread_id).strip()
+            if isinstance(raw_thread_id, str) and raw_thread_id.strip()
+            else thread_id
+        )
+
+        requester_user_row = conn.execute(
+            "SELECT user_id FROM threads WHERE id=? LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+        if requester_user_row is None:
+            return {"items": [], "error": "requester thread not found"}
+        requester_user_id = str(requester_user_row["user_id"])
+
+        target_user_row = conn.execute(
+            "SELECT user_id FROM threads WHERE id=? LIMIT 1",
+            (target_thread_id,),
+        ).fetchone()
+        if target_user_row is None:
+            return {"items": [], "error": "thread not found"}
+        if str(target_user_row["user_id"]) != requester_user_id:
+            return {"items": [], "error": "forbidden"}
+
+        if memory_id:
+            item = service.get_user_memory_by_id(
+                conn,
+                requester_thread_id=target_thread_id,
+                memory_id=memory_id,
+                trace_id=trace_id,
+            )
+            return {
+                "items": [item] if item is not None else [],
+                "query_mode": "memory_id",
+                "memory_id": memory_id,
+            }
+        if not query:
+            return {"items": [], "error": "q or memory_id is required"}
+
+        if target_thread_id != thread_id:
+            items = service.search(conn, target_thread_id, limit=limit, query=query)
+            return {"items": items, "query_mode": "thread_query", "thread_id": target_thread_id}
+
+        items = service.search_user_memories(
+            conn,
+            requester_thread_id=thread_id,
+            query=query,
+            limit=limit,
+            trace_id=trace_id,
+        )
+        return {"items": items, "query_mode": "user_query"}
+
     async def tool_skill_list(args: dict[str, object]) -> dict[str, Any]:
         scope = str(args["scope"]) if isinstance(args.get("scope"), str) else actor_id
         raw_pinned_only = args.get("pinned_only")
@@ -2240,6 +2305,29 @@ def _build_registry(
                     "type": "string",
                     "description": "Thread ID (defaults to current thread)",
                 }
+            },
+        },
+    )
+    registry.register(
+        "memory_search",
+        "Search user memory or resolve a specific memory ID",
+        tool_memory_search,
+        parameters={
+            "type": "object",
+            "properties": {
+                "memory_id": {
+                    "type": "string",
+                    "description": "Optional memory item ID (mem_*) to resolve",
+                },
+                "q": {"type": "string", "description": "Search query string"},
+                "thread_id": {
+                    "type": "string",
+                    "description": "Optional thread scope for thread-local search",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max items to return (default 5, max 20)",
+                },
             },
         },
     )

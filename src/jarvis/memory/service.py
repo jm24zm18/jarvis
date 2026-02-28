@@ -1099,6 +1099,130 @@ class MemoryService:
         ).fetchall()
         return [str(row["id"]) for row in rows]
 
+    @staticmethod
+    def _thread_user_id(conn: sqlite3.Connection, thread_id: str) -> str | None:
+        row = conn.execute(
+            "SELECT user_id FROM threads WHERE id=? LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["user_id"])
+
+    def get_user_memory_by_id(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        requester_thread_id: str,
+        memory_id: str,
+        trace_id: str | None = None,
+    ) -> dict[str, object] | None:
+        owner_id = self._thread_user_id(conn, requester_thread_id)
+        if owner_id is None:
+            return None
+        row = conn.execute(
+            (
+                "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
+                "FROM memory_items mi "
+                "JOIN threads t ON t.id=mi.thread_id "
+                "WHERE mi.id=? AND t.user_id=? LIMIT 1"
+            ),
+            (memory_id, owner_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": str(row["id"]),
+            "thread_id": str(row["thread_id"]),
+            "text": str(row["text"]),
+            "metadata": self._parse_metadata(row["metadata_json"]),
+            "created_at": str(row["created_at"]),
+        }
+
+    def search_user_memories(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        requester_thread_id: str,
+        query: str,
+        limit: int = 5,
+        exclude_thread_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        owner_id = self._thread_user_id(conn, requester_thread_id)
+        if owner_id is None:
+            return []
+        search_text = str(query or "").strip()
+        if not search_text:
+            self._emit_memory_event(
+                conn,
+                "memory.retrieve.user_fallback",
+                {"result_count": 0, "query_present": False, "limit": max(1, int(limit))},
+                thread_id=requester_thread_id,
+                trace_id=trace_id,
+            )
+            return []
+
+        capped = max(1, min(int(limit), 50))
+        rows: list[sqlite3.Row] = []
+        fts_query = self._fts_query(search_text)
+        if fts_query:
+            clauses = ["t.user_id=?"]
+            params: list[object] = [owner_id]
+            if exclude_thread_id:
+                clauses.append("mi.thread_id!=?")
+                params.append(exclude_thread_id)
+            where_sql = " AND ".join(clauses)
+            try:
+                rows = conn.execute(
+                    (
+                        "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
+                        "FROM memory_fts mf JOIN memory_items mi ON mi.id=mf.memory_id "
+                        "JOIN threads t ON t.id=mi.thread_id "
+                        f"WHERE {where_sql} AND memory_fts MATCH ? "
+                        "ORDER BY bm25(memory_fts), mi.created_at DESC LIMIT ?"
+                    ),
+                    (*params, fts_query, capped),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                logger.debug("user memory fallback FTS query failed", exc_info=True)
+
+        if not rows:
+            clauses = ["t.user_id=?", "LOWER(mi.text) LIKE ?"]
+            params = [owner_id, f"%{search_text.lower()}%"]
+            if exclude_thread_id:
+                clauses.append("mi.thread_id!=?")
+                params.append(exclude_thread_id)
+            where_sql = " AND ".join(clauses)
+            rows = conn.execute(
+                (
+                    "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
+                    "FROM memory_items mi JOIN threads t ON t.id=mi.thread_id "
+                    f"WHERE {where_sql} "
+                    "ORDER BY mi.created_at DESC LIMIT ?"
+                ),
+                (*params, capped),
+            ).fetchall()
+
+        items: list[dict[str, object]] = [
+            {
+                "id": str(row["id"]),
+                "thread_id": str(row["thread_id"]),
+                "text": str(row["text"]),
+                "metadata": self._parse_metadata(row["metadata_json"]),
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]
+        self._emit_memory_event(
+            conn,
+            "memory.retrieve.user_fallback",
+            {"result_count": len(items), "query_present": True, "limit": capped},
+            thread_id=requester_thread_id,
+            trace_id=trace_id,
+        )
+        return items
+
     def get_user_reflection_watermark(
         self, conn: sqlite3.Connection, user_id: str
     ) -> dict[str, object] | None:

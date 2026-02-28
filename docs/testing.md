@@ -39,6 +39,7 @@ uv run pytest tests/unit/test_memory_tasks.py -v
 uv run pytest tests/unit/test_state_extractor.py -v
 uv run pytest tests/unit/test_memory_reflection.py -v
 uv run pytest tests/unit/test_knowledge_graph.py -v
+uv run pytest tests/unit/test_memory_service.py -v
 uv run pytest tests/unit/test_task_knowledge_extraction.py -v
 uv run pytest tests/unit/test_feature_build_task.py -v
 ```

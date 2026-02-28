@@ -153,6 +153,10 @@ Periodic health visibility:
    - `last_event_write_age_seconds`
    - `last_message_write_age_seconds`
    - `whatsapp_typing_active_threads_set/clear`
+5. Monitor memory-recall diagnostics for cross-thread user recall:
+   - `memory.reference.resolve` payload fields: `ids_seen`, `ids_resolved`, `ids_denied`
+   - `memory.retrieve.user_fallback` payload fields: `result_count`, `query_present`, `limit`
+   - sustained `ids_denied > 0` should be treated as expected ownership enforcement unless paired with user-reported misses.
 
 ### State Extraction Ops
 

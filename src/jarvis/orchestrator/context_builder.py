@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 from dataclasses import dataclass
 
 from jarvis.config import get_settings
+from jarvis.events.models import EventInput
+from jarvis.events.writer import emit_event, redact_payload
+from jarvis.ids import new_id
 from jarvis.memory.knowledge import KnowledgeBaseService
 from jarvis.memory.knowledge_graph import KnowledgeGraph
 from jarvis.memory.service import MemoryService
@@ -27,6 +32,9 @@ class AgentContext:
     user_profile_snippet: str | None
     kg_facts: list[str]
     token_counts: dict[str, int]
+
+
+_MEMORY_ID_PATTERN = re.compile(r"\b(mem_[a-z0-9]+)\b", re.IGNORECASE)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -91,6 +99,7 @@ def build_agent_context(
     actor_id: str,
     query_text: str,
     recent_rows: list[dict[str, str]],
+    trace_id: str | None = None,
 ) -> AgentContext:
     settings = get_settings()
     memory = MemoryService()
@@ -104,7 +113,77 @@ def build_agent_context(
     )
     structured_state = render_state_section(active_state_items)
     semantic_hits = memory.search(conn, thread_id, limit=8, query=query_text or None)
-    retrieved = [str(item.get("text", "")).strip() for item in semantic_hits if item.get("text")]
+    referenced_memory_ids: list[str] = []
+    explicit_hits: list[dict[str, object]] = []
+    if query_text:
+        seen_memory_ids: set[str] = set()
+        for match in _MEMORY_ID_PATTERN.findall(query_text):
+            mid = str(match).strip().lower()
+            if not mid or mid in seen_memory_ids:
+                continue
+            seen_memory_ids.add(mid)
+            referenced_memory_ids.append(mid)
+        for memory_id in referenced_memory_ids[:3]:
+            hit = memory.get_user_memory_by_id(
+                conn,
+                requester_thread_id=thread_id,
+                memory_id=memory_id,
+                trace_id=trace_id,
+            )
+            if hit is not None:
+                explicit_hits.append(hit)
+        resolve_payload = {
+            "thread_id": thread_id,
+            "ids_seen": len(referenced_memory_ids),
+            "ids_resolved": len(explicit_hits),
+            "ids_denied": max(0, len(referenced_memory_ids) - len(explicit_hits)),
+        }
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id or new_id("trc"),
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="memory.reference.resolve",
+                component="orchestrator",
+                actor_type="agent",
+                actor_id=actor_id,
+                payload_json=json.dumps(resolve_payload),
+                payload_redacted_json=json.dumps(redact_payload(resolve_payload)),
+            ),
+        )
+
+    fallback_hits: list[dict[str, object]] = []
+    if query_text and len(semantic_hits) < 2:
+        fallback_hits = memory.search_user_memories(
+            conn,
+            requester_thread_id=thread_id,
+            query=query_text,
+            limit=4,
+            exclude_thread_id=thread_id,
+            trace_id=trace_id,
+        )
+
+    combined_hits: list[dict[str, object]] = []
+    seen_hit_ids: set[str] = set()
+    for hit in [*explicit_hits, *semantic_hits, *fallback_hits]:
+        hit_id = str(hit.get("id", "")).strip()
+        if not hit_id or hit_id in seen_hit_ids:
+            continue
+        seen_hit_ids.add(hit_id)
+        combined_hits.append(hit)
+    explicit_ids = {str(hit.get("id", "")).strip() for hit in explicit_hits}
+    retrieved: list[str] = []
+    for hit in combined_hits:
+        text = str(hit.get("text", "")).strip()
+        if not text:
+            continue
+        hit_id = str(hit.get("id", "")).strip()
+        if hit_id in explicit_ids:
+            retrieved.append(f"[memory:{hit_id}] {text}")
+        else:
+            retrieved.append(text)
 
     kb_context: list[str] = []
     if actor_id == "main":
@@ -156,7 +235,7 @@ def build_agent_context(
         summary_long=str(summaries.get("long", "")),
         compact_summary=str(summaries.get("short", "")),
         structured_state=structured_state,
-        semantic_hits=semantic_hits,
+        semantic_hits=combined_hits,
         memory_chunks=memory_chunks,
         skill_catalog=skill_catalog,
         user_profile_snippet=user_profile_snippet,

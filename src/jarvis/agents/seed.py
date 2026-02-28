@@ -25,6 +25,7 @@ def ensure_main_agent_seed(agent_root: Path) -> bool:
             f"  - session_list\n"
             f"  - session_history\n"
             f"  - thread_logs\n"
+            f"  - memory_search\n"
             f"  - session_send\n"
             f"  - web_search\n"
             f"  - exec_host\n"

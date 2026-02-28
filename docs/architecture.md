@@ -16,6 +16,7 @@
 3. `channel.inbound` event is emitted.
 4. In-process task runner dispatches `agent_step`.
 5. Orchestrator builds prompt from agent bundle + a unified context builder (`orchestrator/context_builder.py`) that assembles summaries, structured state, semantic hits, KB snippets, skills, and optional user profile/KG facts.
+   - Context assembly now resolves explicit `mem_*` references (ownership-scoped) and can add user-scoped cross-thread memory fallback hits when thread-local retrieval is sparse.
 6. Provider router executes primary/fallback model call.
 7. Tool calls run through policy-gated runtime (`deny-by-default`).
 8. Assistant response is persisted; state extraction is queued as a background task (`jarvis.tasks.memory.extract_thread_state`) and outbound channel task is scheduled in-process.
@@ -62,6 +63,7 @@
 6. Feature-build traces cap repeated identical tool-call signatures and emit `tool.call.loop_cap_reached` before terminal synthesis fallback.
 7. Feature-build finalization emits `feature.build.terminal_synthesis` and enforces a deliverable gate (diff/no-op blockers + protected-path checks) before success.
 8. Repeated consecutive `placeholder_response_after_tool_loop` outcomes fail fast via `feature.build.retry.denied` instead of consuming all retry slots.
+9. `memory_search` is available to `main` for explicit memory-ID/user-memory retrieval, aligned with CBAC `memory:read` tool mappings.
 
 ## Feature-build decomposition pipeline
 

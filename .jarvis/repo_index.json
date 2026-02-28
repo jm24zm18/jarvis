@@ -52,6 +52,7 @@
       "create_feature_request",
       "echo",
       "exec_host",
+      "memory_search",
       "request_human_escalation",
       "session_history",
       "session_list",
@@ -312,7 +313,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-28T18:12:10.129185+00:00",
+  "generated_at": "2026-02-28T19:02:14.131614+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",

@@ -696,6 +696,7 @@ async def run_agent_step(
         actor_id=actor_id,
         query_text=query_text,
         recent_rows=context_rows,
+        trace_id=trace_id,
     )
     bundle = _load_agent_bundle(actor_id)
     agent_context = _load_agent_context(actor_id) or f"You are Jarvis {actor_id} agent."
@@ -777,6 +778,7 @@ async def run_agent_step(
             actor_id=actor_id,
             query_text=query_text,
             recent_rows=context_rows,
+            trace_id=trace_id,
         )
         system_prompt, user_prompt, prompt_report = build_prompt_with_report(
             system_context=agent_context,

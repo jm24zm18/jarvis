@@ -18,6 +18,47 @@
 - [ ] Implement RLM decomposition + child build pipeline for large feature scopes
       Accept: new `rlm` package + migration 077, `feature_request_build_runs` gains `decomposed` status, RLM config/docs updated, admin `/split` route implemented, and unit tests (`test_rlm_*`, `test_feature_split`, `test_feature_build_rlm_routing`) cover the new behavior.
 
+## Execution Update (2026-02-28, Cross-thread memory recall hardening)
+
+- Completed:
+  - Added ownership-safe memory lookup methods in `MemoryService`:
+    - `get_user_memory_by_id(...)` for explicit `mem_*` resolution.
+    - `search_user_memories(...)` for user-scoped cross-thread fallback retrieval.
+  - Added user-fallback memory retrieval telemetry event:
+    - `memory.retrieve.user_fallback` with `result_count`, `query_present`, `limit`.
+  - Updated orchestrator context assembly:
+    - resolves explicit `mem_*` references from user input and injects resolved items into prompt context.
+    - emits `memory.reference.resolve` telemetry with `ids_seen`, `ids_resolved`, `ids_denied`.
+    - uses user-scoped cross-thread fallback retrieval when thread-local semantic retrieval is sparse.
+  - Added runtime tool support:
+    - registered `memory_search` tool in `src/jarvis/tasks/agent.py`.
+    - added `memory_search` to main-agent allowed tools in:
+      - `agents/main/identity.md`
+      - `src/jarvis/agents/seed.py`
+  - Prompt safety hardening:
+    - updated `prompt_builder` safety guidance to prefer `memory_search` when user cites `mem_*`.
+  - Added regression coverage:
+    - `tests/unit/test_memory_service.py` owner-scope + cross-thread user search tests.
+    - `tests/unit/test_orchestrator_step.py` explicit `mem_*` context resolution + cross-thread fallback context tests.
+  - Updated docs:
+    - `docs/architecture.md`
+    - `docs/change-safety.md`
+    - `docs/testing.md`
+    - `docs/runbook.md`
+
+- Missing tasks discovered during implementation:
+  - Add admin UI/API surfacing for `memory.reference.resolve` and `memory.retrieve.user_fallback` (currently observable in events only).
+  - Add focused integration test coverage for the `memory_search` tool execution path through runtime policy gating (unit-level behavior is covered; runtime-path integration remains to be added).
+
+- Remaining tasks before handoff:
+  - Run focused verification:
+    - `uv run pytest tests/unit/test_memory_service.py tests/unit/test_orchestrator_step.py -v`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
 ## Execution Update (2026-02-28, Event-Driven Task Lesson Extraction Phase 1)
 
 - Completed:
@@ -1930,3 +1971,39 @@ Rollback policy:
 - Remaining tasks before handoff:
   - Run full gate sweep: `make test-gates`
   - Add dedicated integration coverage for the new `/api/v1/channel-reply-approvals*` and `/api/v1/channel-reply-permissions*` endpoints.
+
+## Execution Update (2026-02-28, Integration Skills: Session Management + Web Research + Skill Orchestration)
+
+- Completed:
+  - Added new on-demand seed skill `skills/session-management.md` (`slug: session-management`, `pinned: false`) with:
+    - deterministic routing order
+    - handoff trigger criteria
+    - required handoff packet schema
+    - failure/timeout fallback to `main`
+    - policy/ownership guardrails
+  - Added new on-demand seed skill `skills/web-research.md` (`slug: web-research`, `pinned: false`) with:
+    - staged query refinement loop
+    - source-quality ranking
+    - volatility freshness checks
+    - evidence-per-claim validation and contradiction handling
+    - explicit insufficient-evidence stop condition
+  - Added new on-demand seed skill `skills/skill-orchestration.md` (`slug: skill-orchestration`, `pinned: false`) with:
+    - decision matrix for direct handling vs existing skill vs new skill creation
+    - multi-skill conflict resolution guidance
+    - post-task reusable knowledge capture rules
+    - anti-overlap and compact-context constraints
+
+- Missing tasks discovered during implementation:
+  - Add focused unit coverage for seed-skill sync to assert the new slugs are present after bootstrap sync.
+
+- Remaining tasks before handoff:
+  - Optional verification:
+    - `uv run jarvis skill list`
+    - `uv run jarvis skill info session-management`
+    - `uv run jarvis skill info web-research`
+    - `uv run jarvis skill info skill-orchestration`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`

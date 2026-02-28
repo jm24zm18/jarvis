@@ -5,6 +5,7 @@ allowed_tools:
   - session_list
   - session_history
   - thread_logs
+  - memory_search
   - session_send
   - web_search
   - exec_host
