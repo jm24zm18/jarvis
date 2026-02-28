@@ -222,6 +222,12 @@ Provider admin runtime note:
 | `MEMORY_REFLECTION_INSIGHT_LIMIT` | int | `3` | Max insights synthesized per reflection execution. |
 | `MEMORY_REFLECTION_PRUNE_THRESHOLD` | float | `0.35` | Importance score threshold for reflection-driven pruning. |
 | `MEMORY_REFLECTION_PRUNE_AGE_DAYS` | int | `30` | Minimum age window before low-importance reflection pruning applies. |
+| `AUTO_KNOWLEDGE_EXTRACTION_ENABLED` | int | `0` | Enable event-driven task lesson extraction after complex tool-use steps. |
+| `AUTO_KNOWLEDGE_EXTRACTION_MIN_TOOL_CALLS` | int | `5` | Minimum total tool calls in a step before task lesson extraction is queued. |
+| `AUTO_KNOWLEDGE_EXTRACTION_MAX_PER_DAY` | int | `6` | Per-user cap on `knowledge.extraction.complete` runs in a rolling 24-hour window. |
+| `AUTO_KNOWLEDGE_EXTRACTION_COOLDOWN_MINUTES` | int | `25` | Per-thread cooldown between successful task lesson extraction completions. |
+| `AUTO_KNOWLEDGE_EXTRACTION_NOTIFY` | int | `1` | Emit a web notification when task lesson extraction writes at least one new triple. |
+| `AUTO_KNOWLEDGE_EXTRACTION_CONFIDENCE_THRESHOLD` | float | `0.75` | Minimum confidence required for accepting extracted task lessons. |
 | `REFLECTION_MODEL` | str | `` | Optional model hint used by cross-thread profile/KG synthesis (`empty` = default provider routing). |
 | `SEARXNG_BASE_URL` | str | `http://localhost:8080` | SearXNG base URL. |
 | `SEARXNG_API_KEY` | str | `` | SearXNG API key. |

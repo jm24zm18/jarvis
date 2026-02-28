@@ -390,6 +390,30 @@ class Settings(BaseSettings):
         alias="MEMORY_REFLECTION_PRUNE_AGE_DAYS",
         default=30,
     )
+    auto_knowledge_extraction_enabled: int = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_ENABLED",
+        default=0,
+    )
+    auto_knowledge_extraction_min_tool_calls: int = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_MIN_TOOL_CALLS",
+        default=5,
+    )
+    auto_knowledge_extraction_max_per_day: int = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_MAX_PER_DAY",
+        default=6,
+    )
+    auto_knowledge_extraction_cooldown_minutes: int = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_COOLDOWN_MINUTES",
+        default=25,
+    )
+    auto_knowledge_extraction_notify: int = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_NOTIFY",
+        default=1,
+    )
+    auto_knowledge_extraction_confidence_threshold: float = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_CONFIDENCE_THRESHOLD",
+        default=0.75,
+    )
     reflection_model: str = Field(alias="REFLECTION_MODEL", default="")
 
     searxng_base_url: str = Field(alias="SEARXNG_BASE_URL", default="http://localhost:8080")

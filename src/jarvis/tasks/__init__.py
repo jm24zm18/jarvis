@@ -74,6 +74,10 @@ def _register_tasks(runner: TaskRunner) -> None:
     runner.register("jarvis.tasks.memory.migrate_tiers", memory.migrate_tiers)
     runner.register("jarvis.tasks.memory.prune_adaptive", memory.prune_adaptive)
     runner.register("jarvis.tasks.memory.proactive_reflection", memory.proactive_reflection)
+    runner.register(
+        "jarvis.tasks.memory.post_task_knowledge_extraction",
+        memory.post_task_knowledge_extraction,
+    )
     runner.register("jarvis.tasks.memory.sync_failure_capsules", memory.sync_failure_capsules)
     runner.register("jarvis.tasks.memory.evaluate_consistency", memory.evaluate_consistency)
     runner.register("jarvis.tasks.onboarding.onboarding_step", onboarding.onboarding_step)

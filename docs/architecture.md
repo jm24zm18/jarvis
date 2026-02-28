@@ -19,6 +19,7 @@
 6. Provider router executes primary/fallback model call.
 7. Tool calls run through policy-gated runtime (`deny-by-default`).
 8. Assistant response is persisted; state extraction is queued as a background task (`jarvis.tasks.memory.extract_thread_state`) and outbound channel task is scheduled in-process.
+9. When enabled and complexity threshold is met (tool-call count), orchestrator queues event-driven task lesson extraction (`jarvis.tasks.memory.post_task_knowledge_extraction`) and emits `knowledge.extraction.queued`.
 9. For non-web channels, outbound assistant replies are approval-gated by default:
    - if sender+channel permission exists, dispatch proceeds;
    - otherwise a pending approval request is created and notification is posted to an admin web thread.
@@ -193,6 +194,8 @@ The orchestrator (`src/jarvis/orchestrator/step.py`) uses `ensure_tool_ids` + `b
   - persists durable profile summaries in `user_profiles` (+ history in `user_profile_history`);
   - rate-limits profile synthesis via `user_reflection_watermarks` (max once per 24h/user);
   - optionally extracts user-scoped KG triples into `knowledge_graph` when `MEMORY_GRAPH_ENABLED=1`.
+- Event-driven task lesson extraction writes operational facts to `knowledge_graph` with `extraction_type='task_lesson'` (distinct from periodic `profile` synthesis), tracks `source_trace_id`, and emits `knowledge.extraction.complete`.
+- Task lesson extraction is best-effort and rate-limited via per-user daily cap + per-thread cooldown to prevent extraction churn on marathon sessions.
 - State extraction watermark rows now carry lifecycle status (`idle|running|failed|skipped`) and status timestamps/error metadata for operational observability.
 - `state_items` now includes `insight`/`worldview` type tags so the renderer and orchestrator prompts can surface higher-level context updates supplied by reflection runs.
 

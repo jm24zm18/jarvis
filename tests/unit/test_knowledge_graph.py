@@ -61,3 +61,57 @@ def test_knowledge_graph_supersedes_weaker_conflict() -> None:
     assert row["superseded_by"] == new_id
     assert len(active) == 1
     assert active[0]["object"] == "Go"
+
+
+def test_knowledge_graph_extraction_type_filter_and_user_scope() -> None:
+    graph = KnowledgeGraph()
+    with get_conn() as conn:
+        profile_id = graph.upsert_triple(
+            conn,
+            user_id="usr_test_kg3",
+            subject="next.js app router",
+            predicate="uses",
+            object_="server actions",
+            confidence=0.9,
+            extraction_type="profile",
+        )
+        task_id = graph.upsert_triple(
+            conn,
+            user_id="usr_test_kg3",
+            subject="next.js app router",
+            predicate="best_practice_for",
+            object_="wrap server action mutations in try/catch",
+            confidence=0.92,
+            extraction_type="task_lesson",
+            source_trace_id="trc_kg_scope_1",
+        )
+        other_user_id = graph.upsert_triple(
+            conn,
+            user_id="usr_test_kg4",
+            subject="next.js app router",
+            predicate="best_practice_for",
+            object_="wrap server action mutations in try/catch",
+            confidence=0.91,
+            extraction_type="task_lesson",
+            source_trace_id="trc_kg_scope_2",
+        )
+        task_rows = graph.query(
+            conn,
+            user_id="usr_test_kg3",
+            extraction_type="task_lesson",
+        )
+        profile_rows = graph.query(
+            conn,
+            user_id="usr_test_kg3",
+            extraction_type="profile",
+        )
+    assert profile_id is not None
+    assert task_id is not None
+    assert other_user_id is not None
+    assert task_id != other_user_id
+    assert len(task_rows) == 1
+    assert task_rows[0]["extraction_type"] == "task_lesson"
+    assert task_rows[0]["source_trace_id"] == "trc_kg_scope_1"
+    assert task_rows[0]["extracted_at"] is not None
+    assert len(profile_rows) == 1
+    assert profile_rows[0]["extraction_type"] == "profile"

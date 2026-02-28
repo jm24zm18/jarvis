@@ -20,6 +20,10 @@ class KnowledgeGraph:
             "dislikes",
             "lives_in",
             "works_at",
+            "best_practice_for",
+            "lesson_learned",
+            "should_avoid",
+            "skill_for",
         }
     )
 
@@ -28,8 +32,16 @@ class KnowledgeGraph:
         return datetime.now(UTC).isoformat()
 
     @staticmethod
-    def _triple_id(subject: str, predicate: str, object_: str) -> str:
-        digest = sha256(f"{subject}\n{predicate}\n{object_}".encode()).hexdigest()[:12]
+    def _triple_id(
+        user_id: str,
+        subject: str,
+        predicate: str,
+        object_: str,
+        extraction_type: str,
+    ) -> str:
+        digest = sha256(
+            f"{user_id}\n{subject}\n{predicate}\n{object_}\n{extraction_type}".encode()
+        ).hexdigest()[:12]
         return f"kg_{digest}"
 
     def supersede(
@@ -58,10 +70,15 @@ class KnowledgeGraph:
         confidence: float,
         importance: int = 5,
         source_thread_id: str | None = None,
+        extraction_type: str = "profile",
+        source_trace_id: str | None = None,
     ) -> str | None:
         clean_subject = subject.strip().lower()
         clean_predicate = predicate.strip().lower()
         clean_object = object_.strip()
+        clean_extraction_type = extraction_type.strip().lower() or "profile"
+        if clean_extraction_type not in {"profile", "task_lesson"}:
+            clean_extraction_type = "profile"
         if not clean_subject or not clean_object:
             return None
         if clean_predicate not in self.ALLOWED_PREDICATES:
@@ -70,42 +87,64 @@ class KnowledgeGraph:
             return None
 
         now = self._now_iso()
-        triple_id = self._triple_id(clean_subject, clean_predicate, clean_object)
+        triple_id = self._triple_id(
+            user_id,
+            clean_subject,
+            clean_predicate,
+            clean_object,
+            clean_extraction_type,
+        )
 
         existing_exact = conn.execute(
-            "SELECT id FROM knowledge_graph WHERE id=? LIMIT 1",
-            (triple_id,),
+            (
+                "SELECT id FROM knowledge_graph "
+                "WHERE user_id=? AND subject=? AND predicate=? AND object=? "
+                "AND extraction_type=? LIMIT 1"
+            ),
+            (
+                user_id,
+                clean_subject,
+                clean_predicate,
+                clean_object,
+                clean_extraction_type,
+            ),
         ).fetchone()
         if existing_exact is not None:
+            existing_id = str(existing_exact["id"])
             conn.execute(
                 (
                     "UPDATE knowledge_graph SET confidence=?, importance=?, last_updated=?, "
-                    "source_thread_id=?, superseded_by=NULL WHERE id=?"
+                    "source_thread_id=?, superseded_by=NULL, extraction_type=?, source_trace_id=? "
+                    "WHERE id=?"
                 ),
                 (
                     float(confidence),
                     max(1, min(10, int(importance))),
                     now,
                     source_thread_id,
-                    triple_id,
+                    clean_extraction_type,
+                    source_trace_id,
+                    existing_id,
                 ),
             )
-            return triple_id
+            return existing_id
 
         conflicts = conn.execute(
             (
                 "SELECT id, object, confidence FROM knowledge_graph "
-                "WHERE user_id=? AND subject=? AND predicate=? AND superseded_by IS NULL"
+                "WHERE user_id=? AND subject=? AND predicate=? AND extraction_type=? "
+                "AND superseded_by IS NULL"
             ),
-            (user_id, clean_subject, clean_predicate),
+            (user_id, clean_subject, clean_predicate, clean_extraction_type),
         ).fetchall()
 
         conn.execute(
             (
                 "INSERT INTO knowledge_graph("
                 "id, user_id, subject, predicate, object, confidence, importance, "
-                "first_seen, last_updated, source_thread_id, superseded_by"
-                ") VALUES(?,?,?,?,?,?,?,?,?,?,NULL)"
+                "first_seen, last_updated, source_thread_id, superseded_by, extraction_type, "
+                "extracted_at, source_trace_id"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,?,?)"
             ),
             (
                 triple_id,
@@ -118,6 +157,9 @@ class KnowledgeGraph:
                 now,
                 now,
                 source_thread_id,
+                clean_extraction_type,
+                now,
+                source_trace_id,
             ),
         )
 
@@ -148,6 +190,7 @@ class KnowledgeGraph:
         user_id: str,
         subject: str | None = None,
         predicate: str | None = None,
+        extraction_type: str | None = None,
         limit: int = 20,
     ) -> list[dict[str, object]]:
         params: list[object] = [user_id]
@@ -158,11 +201,15 @@ class KnowledgeGraph:
         if predicate and predicate.strip():
             clauses.append("predicate=?")
             params.append(predicate.strip().lower())
+        if extraction_type and extraction_type.strip():
+            clauses.append("extraction_type=?")
+            params.append(extraction_type.strip().lower())
         params.append(max(1, int(limit)))
         rows = conn.execute(
             (
                 "SELECT id, user_id, subject, predicate, object, confidence, importance, "
-                "first_seen, last_updated, source_thread_id, superseded_by "
+                "first_seen, last_updated, source_thread_id, superseded_by, extraction_type, "
+                "extracted_at, source_trace_id "
                 "FROM knowledge_graph "
                 f"WHERE {' AND '.join(clauses)} "
                 "ORDER BY importance DESC, confidence DESC, last_updated DESC "
@@ -186,6 +233,15 @@ class KnowledgeGraph:
                 else None,
                 "superseded_by": str(row["superseded_by"])
                 if row["superseded_by"] is not None
+                else None,
+                "extraction_type": str(row["extraction_type"])
+                if row["extraction_type"] is not None
+                else "profile",
+                "extracted_at": str(row["extracted_at"])
+                if row["extracted_at"] is not None
+                else None,
+                "source_trace_id": str(row["source_trace_id"])
+                if row["source_trace_id"] is not None
                 else None,
             }
             for row in rows

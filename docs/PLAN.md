@@ -18,6 +18,53 @@
 - [ ] Implement RLM decomposition + child build pipeline for large feature scopes
       Accept: new `rlm` package + migration 077, `feature_request_build_runs` gains `decomposed` status, RLM config/docs updated, admin `/split` route implemented, and unit tests (`test_rlm_*`, `test_feature_split`, `test_feature_build_rlm_routing`) cover the new behavior.
 
+## Execution Update (2026-02-28, Event-Driven Task Lesson Extraction Phase 1)
+
+- Completed:
+  - Added migration `086_task_lesson_extraction_type.sql`:
+    - `knowledge_graph.extraction_type` (`profile|task_lesson`)
+    - `knowledge_graph.extracted_at`
+    - `knowledge_graph.source_trace_id`
+    - indexes for user/type and user/type/time lookups.
+  - Added config surface + env/docs contract for:
+    - `AUTO_KNOWLEDGE_EXTRACTION_ENABLED`
+    - `AUTO_KNOWLEDGE_EXTRACTION_MIN_TOOL_CALLS`
+    - `AUTO_KNOWLEDGE_EXTRACTION_MAX_PER_DAY`
+    - `AUTO_KNOWLEDGE_EXTRACTION_COOLDOWN_MINUTES`
+    - `AUTO_KNOWLEDGE_EXTRACTION_NOTIFY`
+    - `AUTO_KNOWLEDGE_EXTRACTION_CONFIDENCE_THRESHOLD`
+  - Extended `KnowledgeGraph` predicates and upsert/query API to support task lessons and extraction-type filtering.
+  - Hardened KG upsert exact-match/supersession scoping to include user + extraction type.
+  - Added event-driven extraction queue path in orchestrator with total tool-call accumulation and `knowledge.extraction.queued` event emission.
+  - Added `post_task_knowledge_extraction` task pipeline (best-effort):
+    - strict JSON lesson extraction prompt
+    - predicate and confidence allowlist gates
+    - per-user daily cap + per-thread cooldown via events table
+    - `knowledge.extraction.complete` event + optional web notification
+    - profile merge support through existing merge/upsert profile path.
+  - Registered new task in task runner.
+  - Added/updated tests:
+    - `tests/unit/test_task_knowledge_extraction.py`
+    - `tests/unit/test_knowledge_graph.py`
+    - `tests/unit/test_orchestrator_step.py`
+  - Updated docs:
+    - `docs/configuration.md`
+    - `docs/architecture.md`
+    - `docs/change-safety.md`
+    - `docs/testing.md`
+
+- Missing tasks discovered during implementation:
+  - Add admin/API surface for filtered retrieval/review of `task_lesson` triples (currently queryable in DB/context path but no dedicated management route/UI).
+
+- Remaining tasks before handoff:
+  - Run focused verification:
+    - `uv run pytest tests/unit/test_task_knowledge_extraction.py tests/unit/test_knowledge_graph.py tests/unit/test_orchestrator_step.py -v`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
 ## Execution Update (2026-02-28, Jarvis Intelligence Core v2 memory stack)
 
 - Completed:

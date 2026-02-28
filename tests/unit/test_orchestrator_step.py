@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
     ensure_channel,
@@ -221,6 +222,175 @@ def test_run_agent_step_queues_state_extraction_task(monkeypatch) -> None:
     payload = json.loads(str(row["payload_json"]))
     assert payload["thread_id"] == thread_id
     assert payload["queue"] == "agent_default"
+
+
+def test_run_agent_step_queues_task_knowledge_extraction_when_threshold_met(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_ENABLED", "1")
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_MIN_TOOL_CALLS", "2")
+    get_settings.cache_clear()
+    queued_calls: list[tuple[str, dict[str, object], str | None]] = []
+
+    class _Runner:
+        def send_task(
+            self,
+            name: str,
+            kwargs: dict[str, object] | None = None,
+            queue: str | None = None,
+        ) -> bool:
+            queued_calls.append((name, kwargs or {}, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="calling tools",
+                    tool_calls=[
+                        {"name": "echo", "arguments": {"x": 1}},
+                        {"name": "echo", "arguments": {"x": 2}},
+                    ],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="final answer", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550990")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "please debug this")
+        _ = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_kgq")
+        )
+        row = conn.execute(
+            "SELECT payload_json FROM events "
+            "WHERE trace_id=? AND event_type='knowledge.extraction.queued' "
+            "ORDER BY created_at DESC LIMIT 1",
+            ("trc_step_kgq",),
+        ).fetchone()
+
+    call = next(
+        c for c in queued_calls if c[0] == "jarvis.tasks.memory.post_task_knowledge_extraction"
+    )
+    assert call[2] == "agent_default"
+    assert int(call[1]["total_tool_calls"]) == 2
+    assert row is not None
+    payload = json.loads(str(row["payload_json"]))
+    assert int(payload["total_tool_calls"]) == 2
+
+
+def test_run_agent_step_does_not_queue_task_knowledge_extraction_below_threshold(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_ENABLED", "1")
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_MIN_TOOL_CALLS", "3")
+    get_settings.cache_clear()
+    queued_calls: list[tuple[str, dict[str, object], str | None]] = []
+
+    class _Runner:
+        def send_task(
+            self,
+            name: str,
+            kwargs: dict[str, object] | None = None,
+            queue: str | None = None,
+        ) -> bool:
+            queued_calls.append((name, kwargs or {}, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="calling tool",
+                    tool_calls=[{"name": "echo", "arguments": {"x": 1}}],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="final answer", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550991")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "please debug this")
+        _ = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_kgq_skip",
+            )
+        )
+
+    assert all(
+        call[0] != "jarvis.tasks.memory.post_task_knowledge_extraction" for call in queued_calls
+    )
+
+
+def test_run_agent_step_non_main_actor_does_not_queue_task_knowledge_extraction(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_ENABLED", "1")
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_MIN_TOOL_CALLS", "1")
+    get_settings.cache_clear()
+    queued_calls: list[tuple[str, dict[str, object], str | None]] = []
+
+    class _Runner:
+        def send_task(
+            self,
+            name: str,
+            kwargs: dict[str, object] | None = None,
+            queue: str | None = None,
+        ) -> bool:
+            queued_calls.append((name, kwargs or {}, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="calling tool",
+                    tool_calls=[{"name": "echo", "arguments": {"x": 1}}],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="worker final", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550992")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "please debug this")
+        _ = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_kgq_worker",
+                actor_id="researcher",
+            )
+        )
+
+    assert all(
+        call[0] != "jarvis.tasks.memory.post_task_knowledge_extraction" for call in queued_calls
+    )
 
 
 def test_run_agent_step_model_path_with_tool_loop(monkeypatch) -> None:

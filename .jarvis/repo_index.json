@@ -312,7 +312,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-28T15:25:17.437888+00:00",
+  "generated_at": "2026-02-28T18:12:10.129185+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -644,6 +644,10 @@
     {
       "file": "src/jarvis/db/migrations/085_user_reflection_watermarks.sql",
       "number": 85
+    },
+    {
+      "file": "src/jarvis/db/migrations/086_task_lesson_extraction_type.sql",
+      "number": 86
     }
   ],
   "protected_modules": [

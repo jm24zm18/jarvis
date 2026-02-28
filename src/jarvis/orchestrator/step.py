@@ -805,6 +805,7 @@ async def run_agent_step(
     failed_tool_signatures: set[str] = set()
     repeated_tool_signatures: dict[str, int] = {}
     verified_roadmap_item_ids: list[str] = []
+    total_tool_calls = 0
     for step_idx in range(max_tool_iterations + 1):
         if progress_fn is not None:
             progress_fn("phase", {"phase": "model.run", "iteration": step_idx})
@@ -923,6 +924,7 @@ async def run_agent_step(
             if model_resp.tool_calls
             else embedded_tool_calls
         )
+        total_tool_calls += len(parsed_tool_calls)
         thought_text = reasoning_text or stripped_text
         thought_payload: dict[str, object] = {
             "iteration": step_idx,
@@ -1846,6 +1848,17 @@ async def run_agent_step(
 
     # Check if thread needs compaction based on N-message threshold
     _maybe_trigger_compaction(conn, thread_id, settings)
+    if int(settings.auto_knowledge_extraction_enabled) == 1:
+        _maybe_enqueue_knowledge_extraction(
+            conn=conn,
+            thread_id=thread_id,
+            actor_id=actor_id,
+            trace_id=trace_id,
+            total_tool_calls=total_tool_calls,
+            step_idx=step_idx,
+            settings=settings,
+            notify_fn=notify_fn,
+        )
 
     emit_event(
         conn,
@@ -1908,3 +1921,74 @@ def _maybe_trigger_compaction(
             )
         except Exception:
             pass
+
+
+def _maybe_enqueue_knowledge_extraction(
+    *,
+    conn: sqlite3.Connection,
+    thread_id: str,
+    actor_id: str,
+    trace_id: str,
+    total_tool_calls: int,
+    step_idx: int,
+    settings: object,
+    notify_fn: Callable[[str, dict[str, object]], None] | None = None,
+) -> None:
+    if actor_id != "main":
+        return
+    min_calls = max(1, int(getattr(settings, "auto_knowledge_extraction_min_tool_calls", 5)))
+    if total_tool_calls < min_calls:
+        return
+    try:
+        from jarvis.tasks import get_task_runner
+
+        payload: dict[str, object] = {
+            "thread_id": thread_id,
+            "actor_id": actor_id,
+            "trace_id": trace_id,
+            "queue": "agent_default",
+            "total_tool_calls": total_tool_calls,
+            "step_idx": step_idx,
+        }
+        ok = get_task_runner().send_task(
+            "jarvis.tasks.memory.post_task_knowledge_extraction",
+            kwargs={
+                "thread_id": thread_id,
+                "actor_id": actor_id,
+                "trace_id": trace_id,
+                "total_tool_calls": total_tool_calls,
+                "step_idx": step_idx,
+            },
+            queue="agent_default",
+        )
+        if not ok:
+            logger.warning(
+                "Failed to enqueue post_task_knowledge_extraction thread_id=%s trace_id=%s",
+                thread_id,
+                trace_id,
+            )
+            return
+        if notify_fn is not None:
+            notify_fn("knowledge.extraction.queued", payload)
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="knowledge.extraction.queued",
+                component="memory",
+                actor_type="agent",
+                actor_id=actor_id,
+                payload_json=json.dumps(payload),
+                payload_redacted_json=json.dumps(redact_payload(payload)),
+            ),
+        )
+    except Exception:
+        logger.warning(
+            "Failed to enqueue post_task_knowledge_extraction thread_id=%s trace_id=%s",
+            thread_id,
+            trace_id,
+            exc_info=True,
+        )

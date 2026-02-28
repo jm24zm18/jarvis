@@ -25,6 +25,9 @@
 - The system must maintain a periodic stall watchdog covering edge cases where thread processing is live but outbound loops hang, guaranteeing `runtime.stall.detected` emission and fallback recovery.
 - State extraction must not block assistant reply persistence; extraction runs asynchronously and emits `state.extraction.queued -> complete|skipped|failed` lifecycle events.
 - State extraction watermark lifecycle metadata (`extraction_status`, `status_updated_at`, `last_error`) must stay consistent with extraction terminal outcomes.
+- Task lesson extraction must remain async/best-effort and must not block assistant reply persistence (`knowledge.extraction.queued -> complete`).
+- Task lesson extraction must remain ownership-safe and user-scoped; KG exact-match/supersession logic must not cross user boundaries or extraction types.
+- Task lesson extraction must respect configured safety bounds: min tool-call threshold, per-user daily limit, per-thread cooldown, and confidence gate.
 - Assistant final output must pass leak-guard sanitization before message persistence; internal planning/tool payload artifacts must never be user-visible.
 - Repeated failing tool calls within a single agent step must be suppressible to avoid deterministic failure loops.
 - Assistant must not claim roadmap/feature-request mutation success unless an in-step verified write result exists; unverified claims must be blocked and logged (`agent.response.claim_blocked`).
