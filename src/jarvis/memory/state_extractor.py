@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +33,9 @@ class ExtractResult:
     items_conflicted: int = 0
     items_dropped: int = 0
     duration_ms: int = 0
+    llm_ms: int = 0
+    embed_ms: int = 0
+    db_ms: int = 0
     skipped_reason: str | None = None
 
 
@@ -128,6 +132,7 @@ async def extract_state_items(
     router: ProviderRouter,
     memory: Any,
     actor_id: str = "main",
+    on_status_change: Callable[[str], Awaitable[None]] | None = None,
 ) -> ExtractResult:
     settings = get_settings()
     if int(settings.state_extraction_enabled) != 1:
@@ -141,6 +146,7 @@ async def extract_state_items(
                 router=router,
                 memory=memory,
                 actor_id=actor_id,
+                on_status_change=on_status_change,
             ),
             timeout=timeout_seconds,
         )
@@ -156,6 +162,7 @@ async def _extract_state_items_impl(
     router: ProviderRouter,
     memory: Any,
     actor_id: str = "main",
+    on_status_change: Callable[[str], Awaitable[None]] | None = None,
 ) -> ExtractResult:
     started = time.perf_counter()
     settings = get_settings()
@@ -165,16 +172,22 @@ async def _extract_state_items_impl(
         conn, thread_id=thread_id, agent_id=scoped_actor
     )
     if not allowed:
+        if on_status_change is not None:
+            await on_status_change("skipped")
         return ExtractResult(skipped_reason=scope_reason)
     max_messages = max(1, int(settings.state_extraction_max_messages))
     watermark = store.get_extraction_watermark(conn, thread_id)
     new_messages = store.get_new_messages_since(conn, thread_id, watermark, max_messages)
     if not new_messages:
         logger.debug("state extraction skipped due to watermark thread=%s", thread_id)
+        if on_status_change is not None:
+            await on_status_change("skipped")
         return ExtractResult(skipped_reason="no_new_messages")
     if watermark is None:
         last = new_messages[-1]
         store.set_extraction_watermark(conn, thread_id, last["created_at"], last["id"])
+        if on_status_change is not None:
+            await on_status_change("skipped")
         return ExtractResult(skipped_reason="bootstrap")
     user_message_ids = {
         message["id"]
@@ -184,6 +197,8 @@ async def _extract_state_items_impl(
     if not user_message_ids:
         last = new_messages[-1]
         store.set_extraction_watermark(conn, thread_id, last["created_at"], last["id"])
+        if on_status_change is not None:
+            await on_status_change("skipped")
         return ExtractResult(skipped_reason="no_user_messages")
 
     existing = store.get_active_items(
@@ -212,17 +227,23 @@ async def _extract_state_items_impl(
             "content": f"{_existing_state_block(existing)}\n\n{_messages_block(new_messages)}",
         },
     ]
+    llm_started = time.perf_counter()
     try:
-        response, _lane, _primary_error = await router.generate(
-            convo, tools=None, temperature=0.0, max_tokens=2048
+        response, _lane, _primary_error = await asyncio.wait_for(
+            router.generate(convo, tools=None, temperature=0.0, max_tokens=2048),
+            timeout=max(1, int(settings.state_extraction_llm_timeout)),
         )
     except Exception as exc:
         if _is_provider_quota_cooldown_error(f"{type(exc).__name__}: {exc}"):
+            if on_status_change is not None:
+                await on_status_change("skipped")
             return ExtractResult(
                 duration_ms=int((time.perf_counter() - started) * 1000),
+                llm_ms=int((time.perf_counter() - llm_started) * 1000),
                 skipped_reason="provider_quota_cooldown",
             )
         raise
+    llm_ms = int((time.perf_counter() - llm_started) * 1000)
     parsed = _extract_json_array(response.text)
     candidate_items: list[StateItem] = []
     dropped = 0
@@ -242,22 +263,44 @@ async def _extract_state_items_impl(
     if not candidate_items:
         last = new_messages[-1]
         store.set_extraction_watermark(conn, thread_id, last["created_at"], last["id"])
+        if on_status_change is not None:
+            await on_status_change("skipped")
         return ExtractResult(
             items_dropped=dropped,
             duration_ms=int((time.perf_counter() - started) * 1000),
+            llm_ms=llm_ms,
             skipped_reason="no_valid_items",
         )
 
     merge_threshold = float(settings.state_extraction_merge_threshold)
     conflict_threshold = float(settings.state_extraction_conflict_threshold)
     capped_items = candidate_items[:25]
+    embed_started = time.perf_counter()
+    embed_func = getattr(memory, "embed_texts", None)
+    if callable(embed_func):
+        embeddings = await asyncio.wait_for(
+            asyncio.to_thread(embed_func, [item.text for item in capped_items]),
+            timeout=max(1, int(settings.state_extraction_embed_timeout)),
+        )
+    else:
+        embeddings = await asyncio.wait_for(
+            asyncio.to_thread(
+                lambda: [memory.embed_text(item.text) for item in capped_items]
+            ),
+            timeout=max(1, int(settings.state_extraction_embed_timeout)),
+        )
+    if len(embeddings) != len(capped_items):
+        raise RuntimeError(
+            f"embedding batch size mismatch: expected={len(capped_items)} got={len(embeddings)}"
+        )
+    embed_ms = int((time.perf_counter() - embed_started) * 1000)
     merged_count = 0
     conflicted_count = 0
 
+    db_started = time.perf_counter()
     conn.execute("BEGIN")
     try:
-        for item in capped_items:
-            vector = memory.embed_text(item.text)
+        for item, vector in zip(capped_items, embeddings, strict=False):
             similar = store.search_similar_items(
                 conn=conn,
                 thread_id=thread_id,
@@ -356,6 +399,9 @@ async def _extract_state_items_impl(
     except Exception:
         conn.rollback()
         raise
+    db_ms = int((time.perf_counter() - db_started) * 1000)
+    if on_status_change is not None:
+        await on_status_change("idle")
 
     return ExtractResult(
         items_extracted=len(capped_items),
@@ -363,5 +409,8 @@ async def _extract_state_items_impl(
         items_conflicted=conflicted_count,
         items_dropped=dropped + max(0, len(candidate_items) - len(capped_items)),
         duration_ms=int((time.perf_counter() - started) * 1000),
+        llm_ms=llm_ms,
+        embed_ms=embed_ms,
+        db_ms=db_ms,
         skipped_reason=None,
     )

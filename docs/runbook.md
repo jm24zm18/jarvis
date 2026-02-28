@@ -165,8 +165,12 @@ Periodic health visibility:
    - `state.extraction.retry_scheduled` payload `attempt`, `max_attempts`, `retry_in_seconds`
    - `state.extraction.failed` payload `primary_failure_kind`
    - `state.extraction.failed` payload retry metadata (`attempt_count`, `max_attempts`, `retry_attempted`)
-   - `state.extraction.complete` payload `skipped_reason`
+   - `state.extraction.complete` payload `skipped_reason`, `llm_ms`, `embed_ms`, `db_ms`
 4. Quota cooldown is reported as `skipped_reason=provider_quota_cooldown`.
+5. Watermark diagnostics:
+   - `state_extraction_watermarks.extraction_status` should transition through `running -> idle|skipped|failed`.
+   - `status_updated_at` should advance on every extraction terminal state update.
+   - `last_error` should be populated only when status is `failed`.
 
 ### Memory Conflict Resolution Operator Flow
 

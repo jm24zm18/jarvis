@@ -29,11 +29,11 @@ make setup-smoke-running
   and web dependency install.
 - `make setup-smoke-running` is the same smoke path but skips the dev port preflight.
   Use it when local dependency services are intentionally already running.
-- `./start-dev.sh` runs `make dev` first (including port preflight and dependency startup),
-  then restarts `jarvis-baileys`, verifies SearXNG health, and finally launches API + web
-  dev servers. This keeps web search available by default while still clearing stale
-  WhatsApp auth/session state. For `401 loggedOut`, run `Force Re-pair` in Admin UI
-  (or `POST /api/v1/channels/whatsapp/reset`) to relink.
+- `./start-dev.sh` runs dev preflight first, then:
+  - with `DEV_USE_HOST_OLLAMA=1` (default): starts Docker `searxng` + `sglang` and reuses host Ollama (`OLLAMA_BASE_URL`, default `http://localhost:11434`)
+  - with `DEV_USE_HOST_OLLAMA=0`: runs full `make dev` (Docker Ollama + SearXNG + SGLang)
+  The script then restarts `jarvis-baileys`, verifies Ollama/SearXNG health, and launches API + web dev servers.
+  For `401 loggedOut`, run `Force Re-pair` in Admin UI (or `POST /api/v1/channels/whatsapp/reset`) to relink.
 
 ## Common Workflows
 
@@ -146,6 +146,11 @@ Notes:
 
 - Detect current listeners:
   - `ss -ltn '( sport = :11434 or sport = :30000 or sport = :8080 )'`
+- If port `11434` is occupied by host Ollama, use host mode for the one-command launcher:
+  - `DEV_USE_HOST_OLLAMA=1 ./start-dev.sh`
+  - validate host Ollama: `curl -fsS http://localhost:11434/api/tags`
+- To force Docker Ollama in the one-command launcher:
+  - `DEV_USE_HOST_OLLAMA=0 ./start-dev.sh`
 - If needed, run dependencies on alternate host ports with `docker compose` overrides.
   Example `docker-compose.override.yml`:
 

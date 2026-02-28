@@ -34,6 +34,9 @@ Or run everything for local API + web development in one command:
 ./start-dev.sh
 ```
 
+`start-dev.sh` defaults to `DEV_USE_HOST_OLLAMA=1` (reuse host Ollama on `11434`).
+Use `DEV_USE_HOST_OLLAMA=0 ./start-dev.sh` to force Docker-managed Ollama.
+
 ## Web UI
 
 - One-time dependency bootstrap: `make web-install`

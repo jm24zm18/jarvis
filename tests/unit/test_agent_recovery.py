@@ -166,7 +166,12 @@ def test_resolve_existing_trace_message_id_falls_back_to_agent_step_end_event() 
         channel_id = ensure_channel(conn, user_id, "web")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
         message_id = insert_message(conn, thread_id, "assistant", "already emitted")
-        _emit_trace_step_end_event(conn, trace_id=trace_id, thread_id=thread_id, message_id=message_id)
+        _emit_trace_step_end_event(
+            conn,
+            trace_id=trace_id,
+            thread_id=thread_id,
+            message_id=message_id,
+        )
         resolved = resolve_existing_trace_message_id(conn, trace_id=trace_id, thread_id=thread_id)
     assert resolved == message_id
 
@@ -185,7 +190,12 @@ def test_agent_step_returns_existing_event_message_without_new_attempt(monkeypat
         thread_id = ensure_open_thread(conn, user_id, channel_id)
         insert_message(conn, thread_id, "user", "what date is today")
         message_id = insert_message(conn, thread_id, "assistant", "Today is **February 28, 2026**.")
-        _emit_trace_step_end_event(conn, trace_id=trace_id, thread_id=thread_id, message_id=message_id)
+        _emit_trace_step_end_event(
+            conn,
+            trace_id=trace_id,
+            thread_id=thread_id,
+            message_id=message_id,
+        )
 
     returned = agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
     assert returned == message_id
@@ -210,7 +220,12 @@ def test_reaper_skips_duplicate_when_message_already_emitted(monkeypatch) -> Non
         channel_id = ensure_channel(conn, user_id, "web")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
         message_id = insert_message(conn, thread_id, "assistant", "already sent")
-        _emit_trace_step_end_event(conn, trace_id=trace_id, thread_id=thread_id, message_id=message_id)
+        _emit_trace_step_end_event(
+            conn,
+            trace_id=trace_id,
+            thread_id=thread_id,
+            message_id=message_id,
+        )
         start_attempt(
             conn,
             trace_id=trace_id,
@@ -236,7 +251,10 @@ def test_reaper_skips_duplicate_when_message_already_emitted(monkeypatch) -> Non
 
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT status, failure_kind, final_message_id FROM agent_run_attempts WHERE trace_id=? AND attempt=1",
+            (
+                "SELECT status, failure_kind, final_message_id "
+                "FROM agent_run_attempts WHERE trace_id=? AND attempt=1"
+            ),
             (trace_id,),
         ).fetchone()
         duplicate_note = conn.execute(

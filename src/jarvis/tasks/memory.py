@@ -15,6 +15,7 @@ from jarvis.db.queries import now_iso
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
+from jarvis.memory.knowledge_graph import KnowledgeGraph
 from jarvis.memory.service import MemoryService
 from jarvis.memory.state_extractor import extract_state_items
 from jarvis.memory.state_store import StateStore
@@ -157,9 +158,11 @@ def extract_thread_state(
         return payload
 
     with get_conn() as conn:
+        store = StateStore()
         now = datetime.now(UTC)
         remaining = _state_backoff_active_seconds(thread_id, now)
         if remaining > 0:
+            store.set_extraction_status(conn, thread_id, "skipped")
             payload["skipped_reason"] = "backoff_active"
             payload["retry_in_seconds"] = remaining
             emit_event(
@@ -199,6 +202,7 @@ def extract_thread_state(
         retry_delays_used: list[int] = []
         final_exc: Exception | None = None
         result = None
+        store.set_extraction_status(conn, thread_id, "running", last_error=None)
 
         while attempt_count < max_attempts:
             attempt_count += 1
@@ -274,16 +278,24 @@ def extract_thread_state(
                     "items_conflicted": result.items_conflicted,
                     "items_dropped": result.items_dropped,
                     "duration_ms": result.duration_ms,
+                    "llm_ms": result.llm_ms,
+                    "embed_ms": result.embed_ms,
+                    "db_ms": result.db_ms,
                     "skipped_reason": result.skipped_reason,
                 }
             )
             if payload.get("skipped_reason") in {"provider_quota_cooldown"}:
+                store.set_extraction_status(conn, thread_id, "skipped")
                 failure_kind = "quota_retryable"
                 payload["retry_in_seconds"] = _set_state_backoff(
                     thread_id, failure_kind=failure_kind, settings=settings
                 )
                 event_type = "state.extraction.skipped"
             else:
+                if payload.get("skipped_reason"):
+                    store.set_extraction_status(conn, thread_id, "skipped")
+                else:
+                    store.set_extraction_status(conn, thread_id, "idle")
                 _clear_state_backoff(thread_id)
                 event_type = "state.extraction.complete"
             if retry_attempted:
@@ -333,6 +345,7 @@ def extract_thread_state(
                 failure_kind=str(payload.get("primary_failure_kind", "generic")),
                 settings=settings,
             )
+            store.set_extraction_status(conn, thread_id, "failed", last_error=error[:500])
             emit_event(
                 conn,
                 EventInput(
@@ -640,6 +653,145 @@ def run_memory_maintenance() -> dict[str, object]:
     }
 
 
+def _extract_json_payload(raw: str) -> object:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`").strip()
+        text = text.replace("json\n", "", 1).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+        start = text.find("[")
+        end = text.rfind("]")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+    return {}
+
+
+def _merge_beliefs(
+    existing: dict[str, object] | None,
+    incoming: dict[str, object],
+) -> dict[str, object]:
+    base = dict(existing or {})
+    for key in ("prefers", "avoids", "knows", "goals"):
+        old_values = base.get(key, [])
+        new_values = incoming.get(key, [])
+        merged: list[str] = []
+        for value in [*old_values, *new_values]:
+            if not isinstance(value, str):
+                continue
+            clean = value.strip()
+            if clean and clean not in merged:
+                merged.append(clean)
+        base[key] = merged[:20]
+    if isinstance(incoming.get("context"), dict):
+        context = dict(base.get("context", {})) if isinstance(base.get("context"), dict) else {}
+        context.update(incoming.get("context", {}))
+        base["context"] = context
+    return base
+
+
+def _render_profile_summary(profile: dict[str, object]) -> str:
+    parts: list[str] = []
+    for key in ("prefers", "avoids", "knows", "goals"):
+        values = profile.get(key, [])
+        if isinstance(values, list) and values:
+            short = ", ".join(str(item) for item in values[:4])
+            parts.append(f"{key}: {short}")
+    if not parts:
+        return "No stable profile synthesized yet."
+    return " | ".join(parts)
+
+
+def _synthesize_profile_json(
+    router: ProviderRouter,
+    *,
+    user_id: str,
+    items: list[dict[str, object]],
+    model_name: str,
+) -> dict[str, object]:
+    top_lines = [
+        f"- ({item['type_tag']}, importance={item['importance_score']:.2f}) {item['text']}"
+        for item in items[:50]
+    ]
+    prompt = "".join(
+        [
+            "Infer stable user profile beliefs from cross-thread notes.\n",
+            "Return ONLY JSON object with keys: ",
+            "prefers (array), avoids (array), knows (array), goals (array), context (object).\n",
+            f"Preferred model hint: {model_name}\n" if model_name else "",
+            f"user_id={user_id}\n",
+            "Evidence:\n",
+            "\n".join(top_lines),
+        ]
+    )
+    convo = [
+        {"role": "system", "content": "Return strict JSON only."},
+        {"role": "user", "content": prompt},
+    ]
+    response, _lane, _err = asyncio.run(
+        asyncio.wait_for(
+            router.generate(
+                convo,
+                tools=None,
+                temperature=0.1,
+                max_tokens=800,
+            ),
+            timeout=5,
+        )
+    )
+    parsed = _extract_json_payload(response.text)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _extract_kg_triples(
+    router: ProviderRouter,
+    *,
+    user_id: str,
+    items: list[dict[str, object]],
+    model_name: str,
+) -> list[dict[str, object]]:
+    top_lines = [f"- {item['text']}" for item in items[:40]]
+    prompt = "".join(
+        [
+            "Extract stable factual triples for this user.\n",
+            "Return ONLY JSON array of objects with keys: subject, predicate, object, confidence, importance.\n",
+            "Allowed predicates: prefers, avoids, knows, uses, has_goal, works_on, owns, dislikes, lives_in, works_at.\n",
+            f"Preferred model hint: {model_name}\n" if model_name else "",
+            f"user_id={user_id}\n",
+            "Evidence:\n",
+            "\n".join(top_lines),
+        ]
+    )
+    convo = [
+        {"role": "system", "content": "Return strict JSON only."},
+        {"role": "user", "content": prompt},
+    ]
+    response, _lane, _err = asyncio.run(
+        asyncio.wait_for(
+            router.generate(
+                convo,
+                tools=None,
+                temperature=0.0,
+                max_tokens=900,
+            ),
+            timeout=5,
+        )
+    )
+    parsed = _extract_json_payload(response.text)
+    return [row for row in parsed if isinstance(row, dict)] if isinstance(parsed, list) else []
+
+
 def proactive_reflection() -> dict[str, object]:
     settings = get_settings()
     if int(settings.memory_reflection_enabled) != 1:
@@ -649,16 +801,31 @@ def proactive_reflection() -> dict[str, object]:
     prune_threshold = float(settings.memory_reflection_prune_threshold)
     prune_age = max(0, int(settings.memory_reflection_prune_age_days))
     state_limit = max(1, int(settings.state_max_active_items))
+    reflection_model = str(settings.reflection_model).strip()
     service = MemoryService()
     store = StateStore()
-    summary: dict[str, int] = {"threads": 0, "insights": 0, "pruned": 0}
+    graph = KnowledgeGraph()
+    summary: dict[str, int] = {
+        "threads": 0,
+        "insights": 0,
+        "pruned": 0,
+        "profiles_updated": 0,
+        "kg_triples_upserted": 0,
+    }
     with get_conn() as conn:
         candidates = service.get_reflection_candidates(conn, batch_size)
+        touched_user_ids: set[str] = set()
         for candidate in candidates:
             thread_id = candidate["thread_id"]
             active_items = store.get_active_items(conn, thread_id, limit=state_limit)
             if not active_items:
                 continue
+            user_row = conn.execute(
+                "SELECT user_id FROM threads WHERE id=? LIMIT 1",
+                (thread_id,),
+            ).fetchone()
+            if user_row is not None:
+                touched_user_ids.add(str(user_row["user_id"]))
             summary["threads"] += 1
             refs = [
                 ref.strip()
@@ -750,6 +917,87 @@ def proactive_reflection() -> dict[str, object]:
                     payload_redacted_json=json.dumps(redact_payload(payload)),
                 ),
             )
+
+        if touched_user_ids:
+            router = ProviderRouter(
+                build_primary_provider(settings),
+                build_fallback_provider(settings),
+            )
+            now = datetime.now(UTC)
+            for user_id in touched_user_ids:
+                threads = service.get_user_threads(conn, user_id)
+                watermark = service.get_user_reflection_watermark(conn, user_id)
+                if watermark and watermark.get("last_reflected_at"):
+                    try:
+                        last_run = datetime.fromisoformat(str(watermark["last_reflected_at"]))
+                        if (now - last_run) < timedelta(hours=24):
+                            continue
+                    except ValueError:
+                        pass
+                top_items = service.get_user_top_state_items(conn, user_id, limit=50)
+                if not top_items:
+                    continue
+                try:
+                    synthesized = _synthesize_profile_json(
+                        router,
+                        user_id=user_id,
+                        items=top_items,
+                        model_name=reflection_model,
+                    )
+                except Exception:
+                    logger.debug("profile synthesis failed user_id=%s", user_id, exc_info=True)
+                    synthesized = {}
+                existing = service.get_user_profile(conn, user_id)
+                existing_beliefs = (
+                    existing.get("core_beliefs", {}) if isinstance(existing, dict) else {}
+                )
+                merged = _merge_beliefs(
+                    existing_beliefs if isinstance(existing_beliefs, dict) else {},
+                    synthesized,
+                )
+                summary_text = _render_profile_summary(merged)
+                service.upsert_user_profile(
+                    conn,
+                    user_id,
+                    beliefs=merged,
+                    summary=summary_text,
+                    source_thread_count=len(threads),
+                    reason="cross_thread_reflection",
+                )
+                summary["profiles_updated"] += 1
+                service.set_user_reflection_watermark(
+                    conn,
+                    user_id,
+                    reflected_at=now.isoformat(),
+                    source_thread_count=len(threads),
+                )
+
+                if int(settings.memory_graph_enabled) != 1:
+                    continue
+                try:
+                    triples = _extract_kg_triples(
+                        router,
+                        user_id=user_id,
+                        items=top_items,
+                        model_name=reflection_model,
+                    )
+                except Exception:
+                    logger.debug("kg extraction failed user_id=%s", user_id, exc_info=True)
+                    triples = []
+                source_thread = top_items[0]["thread_id"] if top_items else None
+                for triple in triples:
+                    triple_id = graph.upsert_triple(
+                        conn,
+                        user_id=user_id,
+                        subject=str(triple.get("subject", "")),
+                        predicate=str(triple.get("predicate", "")),
+                        object_=str(triple.get("object", "")),
+                        confidence=float(triple.get("confidence", 0.0)),
+                        importance=int(triple.get("importance", 5)),
+                        source_thread_id=str(source_thread) if source_thread else None,
+                    )
+                    if triple_id:
+                        summary["kg_triples_upserted"] += 1
     return {"ok": True, "summary": summary}
 
 

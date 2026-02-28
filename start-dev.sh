@@ -12,6 +12,10 @@ SEARXNG_BASE="${SEARXNG_BASE_URL:-http://localhost:8080}"
 SEARXNG_BASE="${SEARXNG_BASE%/}"
 SEARXNG_HEALTH_URL="${SEARXNG_BASE}/healthz"
 SEARXNG_SEARCH_URL="${SEARXNG_BASE}/search"
+OLLAMA_BASE="${OLLAMA_BASE_URL:-http://localhost:11434}"
+OLLAMA_BASE="${OLLAMA_BASE%/}"
+OLLAMA_TAGS_URL="${OLLAMA_BASE}/api/tags"
+DEV_USE_HOST_OLLAMA="${DEV_USE_HOST_OLLAMA:-1}"
 
 wait_for_searxng() {
   local attempts=20
@@ -32,13 +36,33 @@ wait_for_searxng() {
 }
 
 echo "[1/5] Starting Docker dependencies..."
-make dev
+DEV_USE_HOST_OLLAMA="${DEV_USE_HOST_OLLAMA}" python3 scripts/dev_preflight_ports.py
+if [[ "${DEV_USE_HOST_OLLAMA}" == "1" ]]; then
+  echo "Using host Ollama at ${OLLAMA_BASE} (DEV_USE_HOST_OLLAMA=1)."
+  docker compose up -d searxng sglang >/dev/null
+else
+  echo "Using Docker Ollama (DEV_USE_HOST_OLLAMA=0)."
+  make dev
+fi
 
 echo "[2/5] Restarting jarvis-baileys for a clean WhatsApp session..."
 docker compose stop jarvis-baileys >/dev/null 2>&1 || true
 docker compose up -d jarvis-baileys >/dev/null
 
-echo "[3/5] Verifying SearXNG health at ${SEARXNG_BASE}..."
+echo "[3/5] Verifying Ollama and SearXNG health..."
+if [[ "${DEV_USE_HOST_OLLAMA}" == "1" ]]; then
+  if ! curl -fsS -m 3 "${OLLAMA_TAGS_URL}" >/dev/null 2>&1; then
+    echo "Host Ollama is not reachable at ${OLLAMA_BASE}."
+    echo ""
+    echo "Remediation:"
+    echo "- Start host Ollama: ollama serve"
+    echo "- Or use Docker Ollama: DEV_USE_HOST_OLLAMA=0 ./start-dev.sh"
+    echo "- Validate manually: curl -fsS ${OLLAMA_TAGS_URL}"
+    exit 1
+  fi
+fi
+
+echo "Checking SearXNG health at ${SEARXNG_BASE}..."
 if ! wait_for_searxng; then
   echo "SearXNG did not become healthy."
   echo ""

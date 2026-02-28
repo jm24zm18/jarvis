@@ -279,6 +279,9 @@ def test_extract_thread_state_emits_complete_event_and_trace_notification(monkey
         items_conflicted = 0
         items_dropped = 0
         duration_ms = 42
+        llm_ms = 10
+        embed_ms = 10
+        db_ms = 10
         skipped_reason = None
 
     async def _fake_extract_state_items(*_args, **_kwargs):
@@ -398,6 +401,9 @@ def test_extract_thread_state_retries_timeout_then_succeeds(monkeypatch) -> None
         items_conflicted = 0
         items_dropped = 0
         duration_ms = 15
+        llm_ms = 5
+        embed_ms = 5
+        db_ms = 5
         skipped_reason = None
 
     attempts = {"n": 0}

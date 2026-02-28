@@ -14,6 +14,7 @@
 - WhatsApp inbound processing must not return `500` when `whatsapp_thread_map` contains stale
   mappings; stale rows must be pruned/remapped before `messages` insert.
 - Memory state reads/writes must enforce thread-scoped active-agent boundaries and emit governance denials on blocked mutation attempts.
+- Cross-thread profile and KG synthesis must remain strictly user-scoped; no facts may cross ownership boundaries.
 - Every `agent.step.start` must resolve to a terminal attempt status in `agent_run_attempts`; stale `running` attempts must be recoverable without duplicating final assistant publication for the same trace.
 - CBAC route and runtime gates must hold:
   - API scope checks must use `require_scope(...)` for scoped resources.
@@ -23,6 +24,7 @@
 - `channel.typing.clear` events must be unequivocally guaranteed (e.g., via `finally` blocks) to prevent stuck client indicators.
 - The system must maintain a periodic stall watchdog covering edge cases where thread processing is live but outbound loops hang, guaranteeing `runtime.stall.detected` emission and fallback recovery.
 - State extraction must not block assistant reply persistence; extraction runs asynchronously and emits `state.extraction.queued -> complete|skipped|failed` lifecycle events.
+- State extraction watermark lifecycle metadata (`extraction_status`, `status_updated_at`, `last_error`) must stay consistent with extraction terminal outcomes.
 - Assistant final output must pass leak-guard sanitization before message persistence; internal planning/tool payload artifacts must never be user-visible.
 - Repeated failing tool calls within a single agent step must be suppressible to avoid deterministic failure loops.
 - Assistant must not claim roadmap/feature-request mutation success unless an in-step verified write result exists; unverified claims must be blocked and logged (`agent.response.claim_blocked`).

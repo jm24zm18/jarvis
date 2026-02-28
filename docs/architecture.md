@@ -15,7 +15,7 @@
      before message insert, preventing webhook `500` from FK failures.
 3. `channel.inbound` event is emitted.
 4. In-process task runner dispatches `agent_step`.
-5. Orchestrator builds prompt from agent bundle + thread context + memory.
+5. Orchestrator builds prompt from agent bundle + a unified context builder (`orchestrator/context_builder.py`) that assembles summaries, structured state, semantic hits, KB snippets, skills, and optional user profile/KG facts.
 6. Provider router executes primary/fallback model call.
 7. Tool calls run through policy-gated runtime (`deny-by-default`).
 8. Assistant response is persisted; state extraction is queued as a background task (`jarvis.tasks.memory.extract_thread_state`) and outbound channel task is scheduled in-process.
@@ -189,6 +189,11 @@ The orchestrator (`src/jarvis/orchestrator/step.py`) uses `ensure_tool_ids` + `b
   - event map upsert uses `ON CONFLICT(event_id) DO UPDATE` to keep `thread_id` current.
 - Vector backfill is best-effort and non-fatal: per-row map integrity conflicts are logged and skipped so background indexing continues under concurrent writes.
 - Background task `proactive_reflection` runs every 6 hours (configurable) to synthesize `worldview` and `insight` state items from recent activity, prune low-importance state rows, and emit `memory.reflection.run` events that record how many insights/prunes happened per thread.
+- Reflection now also performs user-level cross-thread synthesis:
+  - persists durable profile summaries in `user_profiles` (+ history in `user_profile_history`);
+  - rate-limits profile synthesis via `user_reflection_watermarks` (max once per 24h/user);
+  - optionally extracts user-scoped KG triples into `knowledge_graph` when `MEMORY_GRAPH_ENABLED=1`.
+- State extraction watermark rows now carry lifecycle status (`idle|running|failed|skipped`) and status timestamps/error metadata for operational observability.
 - `state_items` now includes `insight`/`worldview` type tags so the renderer and orchestrator prompts can surface higher-level context updates supplied by reflection runs.
 
 ## Migration Ledger

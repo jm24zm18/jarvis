@@ -199,7 +199,10 @@ Provider admin runtime note:
 | `STATE_EXTRACTION_MAX_MESSAGES` | int | `20` | Message window used for state extraction candidates. |
 | `STATE_EXTRACTION_MERGE_THRESHOLD` | float | `0.92` | Similarity threshold for state merge decisions. |
 | `STATE_EXTRACTION_CONFLICT_THRESHOLD` | float | `0.85` | Similarity threshold for conflict queue insertion. |
-| `STATE_EXTRACTION_TIMEOUT_SECONDS` | int | `30` | Timeout for state extraction model operations. |
+| `STATE_EXTRACTION_TIMEOUT_SECONDS` | int | `180` | End-to-end timeout for state extraction run. |
+| `STATE_EXTRACTION_LLM_TIMEOUT` | int | `45` | Timeout for the extraction LLM phase (`router.generate`). |
+| `STATE_EXTRACTION_EMBED_TIMEOUT` | int | `15` | Timeout for batched state-item embedding generation. |
+| `STATE_EXTRACTION_DB_TIMEOUT` | int | `10` | Timeout budget for extraction DB merge/upsert phase. |
 | `STATE_EXTRACTION_BACKOFF_BASE_SECONDS` | int | `30` | Base retry delay for per-thread extraction backoff after failures. |
 | `STATE_EXTRACTION_BACKOFF_MAX_SECONDS` | int | `600` | Max retry delay for per-thread extraction backoff. |
 | `STATE_MAX_ACTIVE_ITEMS` | int | `40` | Max active state items maintained per scope before archival pressure. |
@@ -218,7 +221,8 @@ Provider admin runtime note:
 | `MEMORY_REFLECTION_BATCH_SIZE` | int | `10` | Maximum open threads processed per reflection run. |
 | `MEMORY_REFLECTION_INSIGHT_LIMIT` | int | `3` | Max insights synthesized per reflection execution. |
 | `MEMORY_REFLECTION_PRUNE_THRESHOLD` | float | `0.35` | Importance score threshold for reflection-driven pruning. |
-| `MEMORY_REFLECTION_PRUNE_AGE_DAYS` | int | `30` | Minimum age (days) for state items considered for pruning. |
+| `MEMORY_REFLECTION_PRUNE_AGE_DAYS` | int | `30` | Minimum age window before low-importance reflection pruning applies. |
+| `REFLECTION_MODEL` | str | `` | Optional model hint used by cross-thread profile/KG synthesis (`empty` = default provider routing). |
 | `SEARXNG_BASE_URL` | str | `http://localhost:8080` | SearXNG base URL. |
 | `SEARXNG_API_KEY` | str | `` | SearXNG API key. |
 | `SEARXNG_API_KEY_HEADER` | str | `X-API-Key` | SearXNG API key header name. |

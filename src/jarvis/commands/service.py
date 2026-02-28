@@ -335,14 +335,14 @@ async def maybe_execute_command(
                 limit = int(raw_limit)
             except ValueError:
                 limit = 10
-            items = kb.list_docs(conn, limit=limit)
-            return json.dumps({"items": items})
+            kb_items = kb.list_docs(conn, limit=limit)
+            return json.dumps({"items": kb_items})
         if action == "search":
             query = " ".join(args[1:]).strip()
             if not query:
                 return "usage: /kb search <query>"
-            items = kb.search(conn, query=query, limit=10)
-            return json.dumps({"query": query, "items": items})
+            kb_items = kb.search(conn, query=query, limit=10)
+            return json.dumps({"query": query, "items": kb_items})
         if action == "get":
             ref = " ".join(args[1:]).strip()
             if not ref:
@@ -465,8 +465,8 @@ async def maybe_execute_command(
         if not _is_admin_actor(conn, admin_ids, actor_external_id):
             return "admin required"
         status = args[0].strip().lower() if args else "active"
-        items = list_permissions(conn, status=status)
-        return json.dumps({"status": status, "items": items})
+        permission_items = list_permissions(conn, status=status)
+        return json.dumps({"status": status, "items": permission_items})
 
     if command == "/channel-allow-revoke" and len(args) >= 2:
         if not _is_admin_actor(conn, admin_ids, actor_external_id):
@@ -490,8 +490,8 @@ async def maybe_execute_command(
         if not _is_admin_actor(conn, admin_ids, actor_external_id):
             return "admin required"
         status = args[0].strip().lower() if args else "pending"
-        items = list_approval_requests(conn, status=status, limit=20, offset=0)
-        return json.dumps({"status": status, "items": items})
+        approval_items = list_approval_requests(conn, status=status, limit=20, offset=0)
+        return json.dumps({"status": status, "items": approval_items})
 
     if command == "/wa-review" and args:
         if not _is_admin_actor(conn, admin_ids, actor_external_id):

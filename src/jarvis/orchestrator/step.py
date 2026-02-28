@@ -24,11 +24,8 @@ from jarvis.errors import ProviderError
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
-from jarvis.memory.knowledge import KnowledgeBaseService
 from jarvis.memory.service import MemoryService
-from jarvis.memory.skills import SkillsService
-from jarvis.memory.state_renderer import render_state_section
-from jarvis.memory.state_store import StateStore
+from jarvis.orchestrator.context_builder import build_agent_context
 from jarvis.orchestrator.prompt_builder import build_prompt_with_report, estimate_tokens
 from jarvis.providers.factory import resolve_primary_provider_name
 from jarvis.providers.message_builder import (
@@ -689,55 +686,17 @@ async def run_agent_step(
             )
             return command_message_id
 
-    memory = MemoryService()
-    summaries = memory.thread_summary(conn, thread_id)
-    state_store = StateStore()
-    active_state_items = state_store.get_active_items(
-        conn, thread_id, limit=max(1, int(settings.state_max_active_items))
+    context_rows = [
+        {"role": str(row["role"]), "content": str(row["content"])}
+        for row in reversed(rows)
+    ]
+    agent_ctx = build_agent_context(
+        conn,
+        thread_id=thread_id,
+        actor_id=actor_id,
+        query_text=query_text,
+        recent_rows=context_rows,
     )
-    structured_state = render_state_section(active_state_items)
-    retrieved = [str(item.get("text", "")) for item in memory.search(conn, thread_id, limit=8)]
-    kb_context: list[str] = []
-    if actor_id == "main":
-        kb = KnowledgeBaseService()
-        if query_text:
-            kb_items = kb.search(conn, query=query_text, limit=2)
-        else:
-            kb_items = kb.list_docs(conn, limit=2)
-        kb_context = [f"[kb:{item['title']}] {item['content']}" for item in kb_items]
-
-    skills = SkillsService()
-    pinned_skills = skills.get_pinned(conn, scope=actor_id)
-    skill_catalog: list[dict[str, object]] = []
-    seen_skill_slugs: set[str] = set()
-    for item in pinned_skills:
-        slug = str(item.get("slug", "")).strip()
-        if not slug or slug in seen_skill_slugs:
-            continue
-        seen_skill_slugs.add(slug)
-        skill_catalog.append(
-            {
-                "slug": slug,
-                "title": str(item.get("title", "")).strip(),
-                "scope": str(item.get("scope", actor_id)),
-                "pinned": bool(item.get("pinned", False)),
-            }
-        )
-    if query_text:
-        related_skills = skills.search(conn, query=query_text, scope=actor_id, limit=2)
-        for item in related_skills:
-            slug = str(item.get("slug", "")).strip()
-            if not slug or slug in seen_skill_slugs:
-                continue
-            seen_skill_slugs.add(slug)
-            skill_catalog.append(
-                {
-                    "slug": slug,
-                    "title": str(item.get("title", "")).strip(),
-                    "scope": str(item.get("scope", actor_id)),
-                    "pinned": bool(item.get("pinned", False)),
-                }
-            )
     bundle = _load_agent_bundle(actor_id)
     agent_context = _load_agent_context(actor_id) or f"You are Jarvis {actor_id} agent."
     max_actions_per_step = bundle.max_actions_per_step if bundle is not None else 6
@@ -765,16 +724,16 @@ async def run_agent_step(
     ]
     system_prompt, user_prompt, prompt_report = build_prompt_with_report(
         system_context=agent_context,
-        summary_short=summaries["short"],
-        summary_long=summaries["long"],
-        structured_state=structured_state,
-        memory_chunks=kb_context + retrieved,
+        summary_short=agent_ctx.summary_short,
+        summary_long=agent_ctx.summary_long,
+        structured_state=agent_ctx.structured_state,
+        memory_chunks=agent_ctx.memory_chunks,
         tail=tail,
         token_budget=token_budget,
         max_memory_items=6,
         prompt_mode=prompt_mode,
         available_tools=tool_context,
-        skill_catalog=skill_catalog,
+        skill_catalog=agent_ctx.skill_catalog,
     )
     prompt_report_payload = {
         **prompt_report,
@@ -782,7 +741,8 @@ async def run_agent_step(
         "trace_id": trace_id,
         "thread_id": thread_id,
         "tool_count": len(tool_context),
-        "skill_count": len(skill_catalog),
+        "skill_count": len(agent_ctx.skill_catalog),
+        "context_tokens": agent_ctx.token_counts,
     }
     logger.info("Prompt build report: %s", json.dumps(prompt_report_payload, sort_keys=True))
     if notify_fn is not None:
@@ -811,24 +771,25 @@ async def run_agent_step(
         )
         mem_service = MemoryService()
         mem_service.compact_thread(conn, thread_id, llm_summarize=False)
-        # Reload summaries after compaction
-        summaries = mem_service.thread_summary(conn, thread_id)
-        active_state_items = state_store.get_active_items(
-            conn, thread_id, limit=max(1, int(settings.state_max_active_items))
+        agent_ctx = build_agent_context(
+            conn,
+            thread_id=thread_id,
+            actor_id=actor_id,
+            query_text=query_text,
+            recent_rows=context_rows,
         )
-        structured_state = render_state_section(active_state_items)
         system_prompt, user_prompt, prompt_report = build_prompt_with_report(
             system_context=agent_context,
-            summary_short=summaries["short"],
-            summary_long=summaries["long"],
-            structured_state=structured_state,
-            memory_chunks=kb_context + retrieved,
+            summary_short=agent_ctx.summary_short,
+            summary_long=agent_ctx.summary_long,
+            structured_state=agent_ctx.structured_state,
+            memory_chunks=agent_ctx.memory_chunks,
             tail=tail,
             token_budget=token_budget,
             max_memory_items=6,
             prompt_mode=prompt_mode,
             available_tools=tool_context,
-            skill_catalog=skill_catalog,
+            skill_catalog=agent_ctx.skill_catalog,
         )
 
     convo: list[dict[str, Any]] = [

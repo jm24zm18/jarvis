@@ -18,6 +18,57 @@
 - [ ] Implement RLM decomposition + child build pipeline for large feature scopes
       Accept: new `rlm` package + migration 077, `feature_request_build_runs` gains `decomposed` status, RLM config/docs updated, admin `/split` route implemented, and unit tests (`test_rlm_*`, `test_feature_split`, `test_feature_build_rlm_routing`) cover the new behavior.
 
+## Execution Update (2026-02-28, Jarvis Intelligence Core v2 memory stack)
+
+- Completed:
+  - Added migrations:
+    - `082_extraction_status.sql` (`state_extraction_watermarks` status/error metadata)
+    - `083_user_profiles.sql` (`user_profiles`, `user_profile_history`)
+    - `084_knowledge_graph.sql` (`knowledge_graph`)
+    - `085_user_reflection_watermarks.sql` (per-user synthesis cadence)
+  - Added extraction lifecycle observability + timing:
+    - `llm_ms`, `embed_ms`, `db_ms` in extraction results/events
+    - status transitions through `running|idle|failed|skipped`
+    - watermark metadata writes (`status_updated_at`, `last_error`)
+  - Added batched embedding API:
+    - `IEmbedder.embed_texts(...)`
+    - `MemoryService.embed_texts(...)` with Ollama batch endpoint + bounded fallback fan-out
+  - Replaced ad-hoc orchestrator context assembly with unified builder:
+    - `src/jarvis/orchestrator/context_builder.py`
+    - `step.py` now sources summary/state/semantic/KB/skills/profile/KG context from one path
+  - Added Tier 3 user profile synthesis in reflection:
+    - cross-thread top-item synthesis
+    - additive merge + profile history snapshots
+    - per-user 24h cadence via `user_reflection_watermarks`
+  - Added user-scoped Knowledge Graph support:
+    - `src/jarvis/memory/knowledge_graph.py`
+    - confidence gate and conflict supersession logic
+    - context injection path via unified context builder when `MEMORY_GRAPH_ENABLED=1`
+  - Added/updated tests:
+    - `tests/unit/test_knowledge_graph.py`
+    - `tests/unit/test_state_extractor.py`
+    - `tests/unit/test_memory_tasks.py`
+    - `tests/unit/test_memory_reflection.py`
+    - `tests/unit/test_orchestrator_step.py`
+    - `tests/unit/test_prompt_builder.py`
+  - Updated documentation:
+    - `docs/architecture.md`
+    - `docs/configuration.md`
+    - `docs/codebase-tour.md`
+    - `docs/testing.md`
+    - `docs/change-safety.md`
+    - `docs/runbook.md`
+
+- Missing tasks discovered during implementation:
+  - Add admin/UI visibility for user profile and KG summaries (currently available in DB/context path but not surfaced in admin pages).
+
+- Remaining tasks before handoff:
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
 ## Execution Update (2026-02-28, start-dev dependency + SearXNG health alignment)
 
 - Completed:
@@ -46,6 +97,40 @@
     - `make lint`
     - `make typecheck`
     - `make test-gates`
+
+## Execution Update (2026-02-28, Host Ollama dev startup compatibility)
+
+- Completed:
+  - Updated `scripts/dev_preflight_ports.py` to support host-Ollama local workflow:
+    - new env toggle: `DEV_USE_HOST_OLLAMA=1` skips port `11434` conflict checks
+    - preflight success output now reflects effective required ports.
+  - Updated `start-dev.sh` startup contract:
+    - defaults to `DEV_USE_HOST_OLLAMA=1`
+    - runs preflight directly
+    - in host mode starts Docker `searxng` + `sglang` while reusing host Ollama (`OLLAMA_BASE_URL`)
+    - in docker mode (`DEV_USE_HOST_OLLAMA=0`) runs full `make dev`
+    - adds explicit host Ollama reachability check (`/api/tags`) with remediation output.
+  - Updated docs to match behavior:
+    - `README.md`
+    - `docs/getting-started.md`
+    - `docs/local-development.md`
+
+- Missing tasks discovered during implementation:
+  - Add a focused automated test for `scripts/dev_preflight_ports.py` host-mode branch (`DEV_USE_HOST_OLLAMA=1`) to avoid regressions in preflight semantics.
+
+- Remaining tasks before handoff:
+  - Run focused verification:
+    - `python3 scripts/dev_preflight_ports.py`
+    - `DEV_USE_HOST_OLLAMA=1 python3 scripts/dev_preflight_ports.py`
+    - `bash -n start-dev.sh`
+  - Optional runtime validation:
+    - `DEV_USE_HOST_OLLAMA=1 ./start-dev.sh`
+    - `DEV_USE_HOST_OLLAMA=0 ./start-dev.sh`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
 
 ## Execution Update (2026-02-28, Duplicate Reply Prevention for Stale Recovery)
 

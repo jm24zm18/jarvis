@@ -312,7 +312,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-28T14:11:46.459682+00:00",
+  "generated_at": "2026-02-28T15:25:17.437888+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -628,6 +628,22 @@
     {
       "file": "src/jarvis/db/migrations/081_channel_reply_approvals.sql",
       "number": 81
+    },
+    {
+      "file": "src/jarvis/db/migrations/082_extraction_status.sql",
+      "number": 82
+    },
+    {
+      "file": "src/jarvis/db/migrations/083_user_profiles.sql",
+      "number": 83
+    },
+    {
+      "file": "src/jarvis/db/migrations/084_knowledge_graph.sql",
+      "number": 84
+    },
+    {
+      "file": "src/jarvis/db/migrations/085_user_reflection_watermarks.sql",
+      "number": 85
     }
   ],
   "protected_modules": [

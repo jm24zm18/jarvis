@@ -42,6 +42,14 @@ If you want one command that starts dependencies and launches API + web dev serv
 ./start-dev.sh
 ```
 
+`start-dev.sh` defaults to host-Ollama mode (`DEV_USE_HOST_OLLAMA=1`), so local
+`ollama serve` on `11434` is reused while Docker starts SearXNG + SGLang.
+To force Docker-managed Ollama instead:
+
+```bash
+DEV_USE_HOST_OLLAMA=0 ./start-dev.sh
+```
+
 ## 3. Start API
 
 In terminal A:

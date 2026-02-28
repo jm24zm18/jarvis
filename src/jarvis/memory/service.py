@@ -3,6 +3,7 @@
 import json
 import logging
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from math import sqrt
@@ -230,6 +231,38 @@ class MemoryService:
 
     def embed_text(self, text: str) -> list[float]:
         return self._embed_text(text)
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        settings = get_settings()
+        cleaned = [str(text) for text in texts]
+        base_url = settings.ollama_base_url.rstrip("/")
+        payload = {"model": settings.ollama_embed_model, "input": cleaned}
+        try:
+            with httpx.Client(timeout=12) as client:
+                response = client.post(f"{base_url}/api/embed", json=payload)
+                response.raise_for_status()
+            body = response.json()
+            embeddings = body.get("embeddings")
+            if isinstance(embeddings, list):
+                parsed_batch: list[list[float]] = []
+                for item in embeddings:
+                    if isinstance(item, dict):
+                        raw = item.get("embedding")
+                    else:
+                        raw = item
+                    if isinstance(raw, list):
+                        parsed = [float(v) for v in raw if isinstance(v, int | float)]
+                        parsed_batch.append(self._fit_dims(parsed, settings.memory_embed_dims))
+                if len(parsed_batch) == len(cleaned):
+                    return parsed_batch
+        except Exception:
+            logger.debug("batch embeddings failed; falling back to local fan-out", exc_info=True)
+
+        max_workers = max(1, min(8, len(cleaned)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            return list(executor.map(self._embed_text, cleaned))
 
     def _embed_text_cached(self, conn: sqlite3.Connection, text: str) -> list[float]:
         settings = get_settings()
@@ -917,6 +950,194 @@ class MemoryService:
             thread_id=thread_id,
         )
         return filtered
+
+    @staticmethod
+    def _safe_json_object(
+        raw: object,
+        default: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str) and raw.strip():
+            try:
+                decoded = json.loads(raw)
+            except json.JSONDecodeError:
+                return default or {}
+            if isinstance(decoded, dict):
+                return decoded
+        return default or {}
+
+    def get_user_profile(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+    ) -> dict[str, object] | None:
+        row = conn.execute(
+            (
+                "SELECT user_id, core_beliefs, summary, last_updated, version, source_thread_count "
+                "FROM user_profiles WHERE user_id=? LIMIT 1"
+            ),
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "user_id": str(row["user_id"]),
+            "core_beliefs": self._safe_json_object(row["core_beliefs"]),
+            "summary": str(row["summary"]) if row["summary"] is not None else "",
+            "last_updated": str(row["last_updated"]),
+            "version": int(row["version"] or 1),
+            "source_thread_count": int(row["source_thread_count"] or 0),
+        }
+
+    def upsert_user_profile(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        *,
+        beliefs: dict[str, object],
+        summary: str,
+        source_thread_count: int,
+        reason: str = "reflection",
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        existing = self.get_user_profile(conn, user_id)
+        version = 1
+        if existing is not None:
+            snapshot = json.dumps(existing, sort_keys=True)
+            conn.execute(
+                (
+                    "INSERT INTO user_profile_history("
+                    "id, user_id, snapshot, changed_at, change_reason"
+                    ") "
+                    "VALUES(?,?,?,?,?)"
+                ),
+                (new_id("uph"), user_id, snapshot, now, reason),
+            )
+            try:
+                version_raw = existing.get("version", 1)
+                if isinstance(version_raw, int):
+                    version = version_raw + 1
+                elif isinstance(version_raw, str):
+                    version = int(version_raw) + 1
+                else:
+                    version = 2
+            except (TypeError, ValueError):
+                version = 2
+        conn.execute(
+            (
+                "INSERT INTO user_profiles("
+                "user_id, core_beliefs, summary, last_updated, version, source_thread_count"
+                ") VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "core_beliefs=excluded.core_beliefs, "
+                "summary=excluded.summary, "
+                "last_updated=excluded.last_updated, "
+                "version=excluded.version, "
+                "source_thread_count=excluded.source_thread_count"
+            ),
+            (
+                user_id,
+                json.dumps(beliefs, sort_keys=True),
+                summary.strip(),
+                now,
+                version,
+                max(0, int(source_thread_count)),
+            ),
+        )
+
+    def get_user_top_state_items(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, object]]:
+        rows = conn.execute(
+            (
+                "SELECT si.thread_id, si.uid, si.text, si.type_tag, si.confidence, "
+                "si.importance_score, "
+                "si.refs_json, si.topic_tags_json "
+                "FROM state_items si "
+                "JOIN threads t ON t.id=si.thread_id "
+                "WHERE t.user_id=? AND si.status!='superseded' "
+                "ORDER BY si.importance_score DESC, si.last_seen_at DESC "
+                "LIMIT ?"
+            ),
+            (user_id, max(1, int(limit))),
+        ).fetchall()
+        items: list[dict[str, object]] = []
+        for row in rows:
+            refs_raw = row["refs_json"]
+            topic_raw = row["topic_tags_json"]
+            try:
+                refs_list = json.loads(str(refs_raw)) if refs_raw is not None else []
+            except json.JSONDecodeError:
+                refs_list = []
+            try:
+                topic_list = json.loads(str(topic_raw)) if topic_raw is not None else []
+            except json.JSONDecodeError:
+                topic_list = []
+            items.append(
+                {
+                    "thread_id": str(row["thread_id"]),
+                    "uid": str(row["uid"]),
+                    "text": str(row["text"]),
+                    "type_tag": str(row["type_tag"]),
+                    "confidence": str(row["confidence"]),
+                    "importance_score": float(row["importance_score"] or 0.0),
+                    "refs": [str(ref) for ref in refs_list if isinstance(ref, str)],
+                    "topic_tags": [str(tag) for tag in topic_list if isinstance(tag, str)],
+                }
+            )
+        return items
+
+    def get_user_threads(self, conn: sqlite3.Connection, user_id: str) -> list[str]:
+        rows = conn.execute(
+            "SELECT id FROM threads WHERE user_id=? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [str(row["id"]) for row in rows]
+
+    def get_user_reflection_watermark(
+        self, conn: sqlite3.Connection, user_id: str
+    ) -> dict[str, object] | None:
+        row = conn.execute(
+            (
+                "SELECT user_id, last_reflected_at, source_thread_count, updated_at "
+                "FROM user_reflection_watermarks WHERE user_id=? LIMIT 1"
+            ),
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "user_id": str(row["user_id"]),
+            "last_reflected_at": str(row["last_reflected_at"]) if row["last_reflected_at"] else "",
+            "source_thread_count": int(row["source_thread_count"] or 0),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def set_user_reflection_watermark(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        *,
+        reflected_at: str,
+        source_thread_count: int,
+    ) -> None:
+        conn.execute(
+            (
+                "INSERT INTO user_reflection_watermarks("
+                "user_id, last_reflected_at, source_thread_count, updated_at"
+                ") VALUES(?,?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "last_reflected_at=excluded.last_reflected_at, "
+                "source_thread_count=excluded.source_thread_count, "
+                "updated_at=excluded.updated_at"
+            ),
+            (user_id, reflected_at, max(0, int(source_thread_count)), reflected_at),
+        )
 
     def get_reflection_candidates(
         self, conn: sqlite3.Connection, limit: int

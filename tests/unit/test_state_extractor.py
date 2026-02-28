@@ -202,6 +202,8 @@ def test_extractor_timeout_has_descriptive_message() -> None:
             mock_settings.return_value.state_max_active_items = 40
             mock_settings.return_value.state_extraction_merge_threshold = 0.92
             mock_settings.return_value.state_extraction_conflict_threshold = 0.85
+            mock_settings.return_value.state_extraction_llm_timeout = 1
+            mock_settings.return_value.state_extraction_embed_timeout = 1
             with pytest.raises(TimeoutError) as exc_info:
                 asyncio.run(
                     extract_state_items(

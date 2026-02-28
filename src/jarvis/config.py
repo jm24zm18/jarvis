@@ -329,7 +329,19 @@ class Settings(BaseSettings):
     )
     state_max_active_items: int = Field(alias="STATE_MAX_ACTIVE_ITEMS", default=40)
     state_extraction_timeout_seconds: int = Field(
-        alias="STATE_EXTRACTION_TIMEOUT_SECONDS", default=90
+        alias="STATE_EXTRACTION_TIMEOUT_SECONDS", default=180
+    )
+    state_extraction_llm_timeout: int = Field(
+        alias="STATE_EXTRACTION_LLM_TIMEOUT",
+        default=45,
+    )
+    state_extraction_embed_timeout: int = Field(
+        alias="STATE_EXTRACTION_EMBED_TIMEOUT",
+        default=15,
+    )
+    state_extraction_db_timeout: int = Field(
+        alias="STATE_EXTRACTION_DB_TIMEOUT",
+        default=10,
     )
     state_extraction_backoff_base_seconds: int = Field(
         alias="STATE_EXTRACTION_BACKOFF_BASE_SECONDS",
@@ -378,6 +390,7 @@ class Settings(BaseSettings):
         alias="MEMORY_REFLECTION_PRUNE_AGE_DAYS",
         default=30,
     )
+    reflection_model: str = Field(alias="REFLECTION_MODEL", default="")
 
     searxng_base_url: str = Field(alias="SEARXNG_BASE_URL", default="http://localhost:8080")
     searxng_api_key: str = Field(alias="SEARXNG_API_KEY", default="")
