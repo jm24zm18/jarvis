@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import SupportsInt, cast
 
 import click
 
@@ -18,6 +19,7 @@ from jarvis.cli.chat import (
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import update_feature_build_run
+from jarvis.formatting import format_int_human, format_timestamp_human
 from jarvis.memory.skills import SkillsService
 from jarvis.tools.feature_isolate import WorkspaceContext, validate_workspace
 
@@ -36,7 +38,7 @@ def setup() -> None:
 
 
 @cli.command()
-@click.option("--json", "json_output", is_flag=True, help="Append JSON output to the report.")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON report only.")
 @click.option("--fix", is_flag=True, help="Try to auto-fix supported failed checks.")
 def doctor(json_output: bool, fix: bool) -> None:
     """Run diagnostic checks and print a health report."""
@@ -69,6 +71,15 @@ def _classify_cli_error(message: str) -> tuple[str, str]:
             "Request timed out. Verify service health and connectivity.",
         )
     return ("provider_unavailable", message)
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    try:
+        if isinstance(value, int | float | str | bytes | bytearray):
+            return int(value)
+        return int(cast(SupportsInt, value))
+    except (TypeError, ValueError):
+        return default
 
 
 @cli.command()
@@ -226,7 +237,7 @@ def export(thread_id: str, include_events: bool, output: str | None) -> None:
             (thread_id,),
         ).fetchone()
 
-    out = open(output, "w") if output else sys.stdout
+    out = open(output, "w", encoding="utf-8") if output else sys.stdout
     try:
         for msg in messages:
             out.write(json.dumps({
@@ -490,9 +501,12 @@ def maintenance_status(json_output: bool) -> None:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
     click.echo(f"enabled: {payload['enabled']}")
-    click.echo(f"heartbeat_interval_seconds: {payload['heartbeat_interval_seconds']}")
-    click.echo(f"interval_seconds: {payload['interval_seconds']}")
-    click.echo(f"timeout_seconds: {payload['timeout_seconds']}")
+    click.echo(
+        "heartbeat_interval_seconds: "
+        f"{format_int_human(_as_int(payload['heartbeat_interval_seconds']))}"
+    )
+    click.echo(f"interval_seconds: {format_int_human(_as_int(payload['interval_seconds']))}")
+    click.echo(f"timeout_seconds: {format_int_human(_as_int(payload['timeout_seconds']))}")
     click.echo(f"create_bugs: {payload['create_bugs']}")
     click.echo(f"workdir: {payload['workdir']}")
     click.echo("commands:")
@@ -511,25 +525,33 @@ def maintenance_status(json_output: bool) -> None:
     click.echo(f"agent_run_reaper_interval_seconds: {payload['agent_run_reaper_interval_seconds']}")
     agent_run_stats = payload.get("agent_run_stats")
     if isinstance(agent_run_stats, dict):
+        recovered = format_int_human(_as_int(agent_run_stats.get("recovered_last_24h", 0)))
+        stale = format_int_human(_as_int(agent_run_stats.get("stale_abandoned", 0)))
+        exhausted = format_int_human(_as_int(agent_run_stats.get("retry_exhausted", 0)))
         click.echo(
             "agent_run_stats: "
-            f"running={agent_run_stats.get('running')} "
-            f"recovered_last_24h={agent_run_stats.get('recovered_last_24h')} "
-            f"stale_abandoned={agent_run_stats.get('stale_abandoned')} "
-            f"retry_exhausted={agent_run_stats.get('retry_exhausted')}"
+            f"running={format_int_human(_as_int(agent_run_stats.get('running', 0)))} "
+            f"recovered_last_24h={recovered} "
+            f"stale_abandoned={stale} "
+            f"retry_exhausted={exhausted}"
         )
     last_heartbeat = payload.get("last_heartbeat")
     if isinstance(last_heartbeat, dict):
+        created_at = str(last_heartbeat.get("created_at") or "")
         click.echo(
             "last_heartbeat: "
-            f"{last_heartbeat.get('created_at')} trace={last_heartbeat.get('trace_id')}"
+            f"{format_timestamp_human(created_at) if created_at else '-'} "
+            f"trace={last_heartbeat.get('trace_id')}"
         )
-    click.echo(f"open_maintenance_bugs: {payload['open_maintenance_bugs']}")
+    open_bugs = format_int_human(_as_int(payload["open_maintenance_bugs"]))
+    click.echo(f"open_maintenance_bugs: {open_bugs}")
     latest = payload["latest_maintenance_bug"]
     if isinstance(latest, dict):
+        created_at = str(latest.get("created_at") or "")
         click.echo(
             "latest_maintenance_bug: "
-            f"{latest.get('id')} {latest.get('status')} {latest.get('created_at')}"
+            f"{latest.get('id')} {latest.get('status')} "
+            f"{format_timestamp_human(created_at) if created_at else '-'}"
         )
 
 
@@ -690,7 +712,7 @@ def memory_export(
                 ),
                 ((tier, max(1, int(limit))) if tier.strip() else (max(1, int(limit)),)),
             ).fetchall()
-    out = open(output, "w") if output else sys.stdout
+    out = open(output, "w", encoding="utf-8") if output else sys.stdout
     try:
         for row in rows:
             out.write(

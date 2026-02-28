@@ -59,6 +59,7 @@
       "skill_list",
       "skill_read",
       "skill_write",
+      "thread_logs",
       "update_persona",
       "web_search"
     ],
@@ -311,7 +312,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-27T23:50:24.403377+00:00",
+  "generated_at": "2026-02-28T14:11:46.459682+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",

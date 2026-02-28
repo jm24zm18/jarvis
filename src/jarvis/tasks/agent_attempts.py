@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import random
 import sqlite3
@@ -133,6 +134,44 @@ def get_success_message_id(conn: sqlite3.Connection, *, trace_id: str) -> str | 
         return None
     value = str(row["final_message_id"] or "").strip()
     return value or None
+
+
+def resolve_existing_trace_message_id(
+    conn: sqlite3.Connection, *, trace_id: str, thread_id: str
+) -> str | None:
+    """Resolve an already-emitted assistant message for this trace, if any."""
+    succeeded_id = get_success_message_id(conn, trace_id=trace_id)
+    if succeeded_id:
+        return succeeded_id
+
+    rows = conn.execute(
+        (
+            "SELECT payload_json FROM events "
+            "WHERE trace_id=? AND event_type='agent.step.end' "
+            "ORDER BY created_at DESC LIMIT 10"
+        ),
+        (trace_id,),
+    ).fetchall()
+    for row in rows:
+        raw_payload = str(row["payload_json"] or "").strip()
+        if not raw_payload:
+            continue
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        message_id = str(payload.get("message_id") or "").strip()
+        if not message_id:
+            continue
+        msg_row = conn.execute(
+            "SELECT id FROM messages WHERE id=? AND thread_id=? LIMIT 1",
+            (message_id, thread_id),
+        ).fetchone()
+        if msg_row is not None:
+            return message_id
+    return None
 
 
 def next_attempt_number(conn: sqlite3.Connection, *, trace_id: str) -> int:

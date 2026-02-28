@@ -37,6 +37,21 @@ uv run jarvis --help
 - `uv run jarvis memory review --conflicts [--limit 50]`
 - `uv run jarvis memory export [--format jsonl] [--tier <tier>] [--thread-id <thr_...>] [-o <file>] [--limit 1000]`
 
+## Setup Wizard Env Groups
+
+`uv run jarvis setup` prompts by environment category (from `src/jarvis/cli/env_groups.py`):
+
+- `Core` (required)
+- `Task Runner` (required)
+- `WhatsApp` (optional)
+- `OpenRouter` (optional)
+- `Local LLM (SGLang)` (required for local dev profile)
+- `Local LLM (LM Studio)` (optional)
+- `Embeddings (Ollama)` (required for local dev profile)
+- `Search (SearXNG)` (required for local dev profile)
+- `Backup & Alerting` (optional)
+- `GitHub PR Automation` (optional)
+
 ## Common Examples
 
 ```bash
@@ -73,6 +88,14 @@ uv run pytest tests/unit/test_cli_checks.py -q
 uv run pytest tests/unit/test_cli_chat.py -q
 uv run jarvis doctor --json
 ```
+
+## Output Formatting Policy
+
+- Human mode (`default`) is optimized for readability.
+- JSON mode (`--json`) is machine-only payload output:
+  - `jarvis doctor --json` prints only JSON.
+  - `jarvis test-gates --json` prints only JSON.
+- CLI export writes text files with explicit UTF-8 encoding.
 
 ## Related Docs
 

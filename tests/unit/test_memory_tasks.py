@@ -389,6 +389,129 @@ def test_extract_thread_state_backoff_skips_repeated_failures(monkeypatch) -> No
     assert skipped_row is not None
 
 
+def test_extract_thread_state_retries_timeout_then_succeeds(monkeypatch) -> None:
+    memory_tasks._STATE_EXTRACTION_BACKOFF.clear()
+
+    class _Result:
+        items_extracted = 1
+        items_merged = 0
+        items_conflicted = 0
+        items_dropped = 0
+        duration_ms = 15
+        skipped_reason = None
+
+    attempts = {"n": 0}
+
+    async def _flaky_extract_state_items(*_args, **_kwargs):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise TimeoutError("state extractor timed out")
+        return _Result()
+
+    monkeypatch.setattr("jarvis.tasks.memory.extract_state_items", _flaky_extract_state_items)
+
+    with get_conn() as conn:
+        user_id = ensure_user(conn, "15550010017")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = create_thread(conn, user_id, channel_id)
+
+    payload = extract_thread_state(
+        thread_id=thread_id,
+        actor_id="main",
+        trace_id="trc_mem_retry_success",
+    )
+    assert int(payload["items_extracted"]) == 1
+    assert int(payload["attempt_count"]) == 3
+    assert int(payload["max_attempts"]) == 3
+    assert payload["retry_attempted"] is True
+
+    with get_conn() as conn:
+        retry_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM events "
+                "WHERE trace_id=? AND event_type='state.extraction.retry_scheduled'",
+                ("trc_mem_retry_success",),
+            ).fetchone()["n"]
+        )
+        failed_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM events "
+                "WHERE trace_id=? AND event_type='state.extraction.failed'",
+                ("trc_mem_retry_success",),
+            ).fetchone()["n"]
+        )
+        complete_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM events "
+                "WHERE trace_id=? AND event_type='state.extraction.complete'",
+                ("trc_mem_retry_success",),
+            ).fetchone()["n"]
+        )
+        trace_retry_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM web_notifications "
+                "WHERE thread_id=? AND event_type='trace.state.extraction.retry_scheduled'",
+                (thread_id,),
+            ).fetchone()["n"]
+        )
+    assert retry_count == 2
+    assert failed_count == 0
+    assert complete_count == 1
+    assert trace_retry_count == 2
+
+
+def test_extract_thread_state_timeout_retries_exhausted(monkeypatch) -> None:
+    memory_tasks._STATE_EXTRACTION_BACKOFF.clear()
+
+    async def _always_timeout(*_args, **_kwargs):
+        raise TimeoutError("state extractor timed out")
+
+    monkeypatch.setattr("jarvis.tasks.memory.extract_state_items", _always_timeout)
+
+    with get_conn() as conn:
+        user_id = ensure_user(conn, "15550010018")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = create_thread(conn, user_id, channel_id)
+
+    payload = extract_thread_state(
+        thread_id=thread_id,
+        actor_id="main",
+        trace_id="trc_mem_retry_exhausted",
+    )
+    assert payload["primary_failure_kind"] == "timeout"
+    assert payload["retry_attempted"] is True
+    assert int(payload["attempt_count"]) == 3
+    assert int(payload["max_attempts"]) == 3
+    assert payload["retry_delays_seconds"] == [1, 2]
+    assert int(payload["retry_in_seconds"]) >= 1
+
+    with get_conn() as conn:
+        retry_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM events "
+                "WHERE trace_id=? AND event_type='state.extraction.retry_scheduled'",
+                ("trc_mem_retry_exhausted",),
+            ).fetchone()["n"]
+        )
+        failed_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM events "
+                "WHERE trace_id=? AND event_type='state.extraction.failed'",
+                ("trc_mem_retry_exhausted",),
+            ).fetchone()["n"]
+        )
+        trace_retry_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM web_notifications "
+                "WHERE thread_id=? AND event_type='trace.state.extraction.retry_scheduled'",
+                (thread_id,),
+            ).fetchone()["n"]
+        )
+    assert retry_count == 2
+    assert failed_count == 1
+    assert trace_retry_count == 2
+
+
 def test_evaluate_consistency_persists_details_payload() -> None:
     with get_conn() as conn:
         user_id = ensure_user(conn, "15550010002")

@@ -37,6 +37,12 @@ Provider update payload supports:
 - `lmstudio_api_key` (set/replace when non-empty)
 - `clear_lmstudio_api_key` (explicit clear)
 
+Validation and constraints:
+- `primary_provider` and `fallback_provider` must each be one of `openrouter|sglang|lmstudio`.
+- `fallback_provider` must differ from `primary_provider`.
+- If only `primary_provider` is updated and existing fallback is invalid/equal, fallback is auto-resolved.
+- Invalid provider choices return `400`.
+
 Runtime behavior:
 - Provider saves apply to live API runtime immediately for provider env keys.
 - Assistant output is sanitized to remove model control wrappers (for example `<|analysis|>` and leaked `<think>...</think>` blocks) before user-facing delivery.
@@ -120,6 +126,14 @@ Admin-only operations for interacting with the local repository:
 - Lockdown toggle (admin): `POST /api/v1/system/lockdown`
 - Reload agents (admin): `POST /api/v1/system/reload-agents`
 
+`GET /api/v1/system/status` includes:
+- `system`: persisted system state (including lockdown status/reason).
+- `providers`: provider health payload plus `primary_name` and `fallback_name`.
+- `provider_errors.last_primary_failure`: latest fallback reason from `model.fallback` events, when present.
+- `queue_depths.in_flight`: in-process task runner in-flight count.
+- `scheduler`: schedule backlog estimate.
+- `stale_periodic_jobs`: stale periodic job list.
+
 Note the distinction:
 - `/status`, `/restart`, `/unlock` are chat slash commands handled by `src/jarvis/commands/service.py`.
 - `/api/v1/system/*` are HTTP endpoints.
@@ -195,12 +209,21 @@ GET  /api/v1/channel-reply-permissions
 POST /api/v1/channel-reply-permissions/revoke       # Body: { "channel_type": "...", "recipient": "...", "reason": "..." }
 ```
 
+Important behavior:
+- There is currently no per-request fetch endpoint (`GET /api/v1/channel-reply-approvals/{id}` does not exist).
+- Approval states include `pending`, `approved_once`, `approved_always`, `sent`, and `rejected`.
+- `reject` is only valid while request status is `pending`.
+- `approve` with `mode=always` creates an active sender+channel permission record.
+- Invalid approve mode returns `{ "ok": false, "error": "mode must be 'once' or 'always'" }`.
+
 Operational command shortcuts in chat:
 - `/channel-approve-list [pending|sent|rejected|approved_once|approved_always]`
 - `/channel-approve <request_id> once|always`
 - `/channel-deny <request_id> [reason]`
 - `/channel-allow-list [active|revoked]`
 - `/channel-allow-revoke <channel_type> <recipient> [reason]`
+
+Detailed workflow and payload examples: `docs/channel-reply-approvals.md`
 
 ## Related Docs
 

@@ -145,6 +145,7 @@ The orchestrator (`src/jarvis/orchestrator/step.py`) uses `ensure_tool_ids` + `b
 - `src/jarvis/config.py`: typed env contract + production validation.
 - `src/jarvis/db/*`: connection layer, query helpers, SQL migrations.
 - `src/jarvis/events/*`: event models and writer.
+- `src/jarvis/formatting/*`: shared human-display formatting helpers for CLI output.
 - `src/jarvis/memory/*`: thread memory, skills memory, knowledge base.
 - `src/jarvis/models/*`: shared typed models.
 - `src/jarvis/onboarding/*`: onboarding service logic.

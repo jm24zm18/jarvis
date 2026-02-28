@@ -88,3 +88,13 @@ test("event key is deterministic and truncate helper is safe", () => {
   assert.equal(truncateText("hello", 10), "hello");
   assert.equal(truncateText("helloworld", 5), "hell…");
 });
+
+test("formatting normalizes invisible markers in numeric previews", () => {
+  const event = {
+    event_type: "model.fallback",
+    payload: { primary_error: "timeout at 7\u200E : 1 0 : 5 2" },
+    created_at: "2026-02-17T00:00:00.000Z",
+  };
+  const formatted = formatThinkingEvent(event);
+  assert.match(formatted.preview, /7:10:52/);
+});

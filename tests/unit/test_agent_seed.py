@@ -13,6 +13,7 @@ def test_ensure_main_agent_seed_creates_missing_files(tmp_path: Path) -> None:
     identity = (root / "main" / "identity.md").read_text()
     assert "web_search" in identity
     assert "exec_host" in identity
+    assert "thread_logs" in identity
     assert "skill_list" in identity
     assert "skill_read" in identity
     assert "skill_write" in identity

@@ -33,12 +33,12 @@ function CreateApprovalModal({
 
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-            <div className="bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-xl p-6 w-full max-w-md space-y-4 shadow-xl">
-                <h2 className="text-lg font-semibold text-[var(--text-primary)]">Create Approval Token</h2>
+            <div className="bg-bg border border-[var(--color-border)] rounded-lg p-6 w-full max-w-md space-y-4 shadow-xl">
+                <h2 className="text-lg font-mono text-xs font-semibold uppercase tracking-widest text-text2">Create Approval Token</h2>
                 <div className="space-y-1">
-                    <label className="text-xs text-[var(--text-muted)]">Action</label>
+                    <label className="text-xs text-text3">Action</label>
                     <select
-                        className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-primary)] p-2 text-sm"
+                        className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-text p-2 text-sm"
                         value={action}
                         onChange={e => setAction(e.target.value)}
                     >
@@ -48,7 +48,7 @@ function CreateApprovalModal({
                     </select>
                 </div>
                 <div className="space-y-1">
-                    <label className="text-xs text-[var(--text-muted)]">Target Ref (e.g. trace_id, optional)</label>
+                    <label className="text-xs text-text3">Target Ref (e.g. trace_id, optional)</label>
                     <Input
                         placeholder="Leave blank for wildcard"
                         value={targetRef}
@@ -56,7 +56,7 @@ function CreateApprovalModal({
                     />
                 </div>
                 <div className="space-y-1">
-                    <label className="text-xs text-[var(--text-muted)]">TTL (minutes)</label>
+                    <label className="text-xs text-text3">TTL (minutes)</label>
                     <Input
                         type="number"
                         placeholder="30"
@@ -95,15 +95,15 @@ function ApprovalRow({ item }: { item: ApprovalRecord }) {
             : "default";
 
     return (
-        <div className="flex items-center justify-between gap-3 text-sm border-b border-[var(--border-default)] py-3 last:border-0">
+        <div className="flex items-center justify-between gap-3 text-sm border-b border-[var(--color-border)] py-3 last:border-0">
             <div className="flex-1 min-w-0 space-y-0.5">
-                <div className="font-medium text-[var(--text-primary)] truncate">{item.action}</div>
+                <div className="font-medium text-text truncate">{item.action}</div>
                 {item.target_ref && (
-                    <div className="text-xs text-[var(--text-muted)] font-mono truncate">
+                    <div className="text-xs text-text3 font-mono truncate">
                         ref: {item.target_ref}
                     </div>
                 )}
-                <div className="text-xs text-[var(--text-muted)]">
+                <div className="text-xs text-text3">
                     by {item.actor_id} · {item.created_at.slice(0, 19)}
                     {item.expires_at && ` · expires ${item.expires_at.slice(0, 19)}`}
                 </div>
@@ -163,7 +163,7 @@ export default function AdminApprovalsPage() {
             {/* Filters */}
             <div className="flex gap-3 flex-wrap">
                 <select
-                    className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-primary)] px-3 py-2 text-sm"
+                    className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-text px-3 py-2 text-sm"
                     value={actionFilter}
                     onChange={e => setActionFilter(e.target.value)}
                 >
@@ -173,7 +173,7 @@ export default function AdminApprovalsPage() {
                     ))}
                 </select>
                 <select
-                    className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-primary)] px-3 py-2 text-sm"
+                    className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-text px-3 py-2 text-sm"
                     value={statusFilter}
                     onChange={e => setStatusFilter(e.target.value)}
                 >
@@ -186,10 +186,10 @@ export default function AdminApprovalsPage() {
 
             <Card>
                 {isLoading && (
-                    <p className="text-sm text-[var(--text-muted)] text-center py-6">Loading…</p>
+                    <p className="text-sm text-text3 text-center py-6">Loading…</p>
                 )}
                 {!isLoading && items.length === 0 && (
-                    <p className="text-sm text-[var(--text-muted)] text-center py-6">No approvals found</p>
+                    <p className="text-sm text-text3 text-center py-6">No approvals found</p>
                 )}
                 {items.map(item => (
                     <ApprovalRow key={item.id} item={item} />

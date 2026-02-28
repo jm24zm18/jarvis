@@ -30,6 +30,7 @@ Canonical navigation for repository documentation.
 
 - API reference (generated): `docs/api-reference.md`
 - API workflows: `docs/api-usage-guide.md`
+- Channel reply approvals workflow: `docs/channel-reply-approvals.md`
 - CLI reference: `docs/cli-reference.md`
 - Web admin/chat behavior: `docs/web-admin-guide.md`
 - Deploy and systemd ops: `docs/deploy-operations.md`

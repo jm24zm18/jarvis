@@ -4,6 +4,7 @@ allowed_tools:
   - echo
   - session_list
   - session_history
+  - thread_logs
   - session_send
   - web_search
   - exec_host

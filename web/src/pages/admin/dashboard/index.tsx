@@ -1,12 +1,13 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Lock, Unlock, Server, Calendar, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { Lock, Unlock, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { getSystemStatus, reloadAgents, resetDatabase, setLockdown } from "../../../api/endpoints";
 import { useWebSocket } from "../../../hooks/useWebSocket";
 import Header from "../../../components/layout/Header";
 import Button from "../../../components/ui/Button";
 import Card from "../../../components/ui/Card";
 import Badge from "../../../components/ui/Badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../../components/ui/table";
 
 export default function AdminDashboardPage() {
   const queryClient = useQueryClient();
@@ -39,134 +40,66 @@ export default function AdminDashboardPage() {
   const primaryProviderName = data?.providers.primary_name ?? "primary";
   const fallbackProviderName = data?.providers.fallback_name ?? "fallback";
   const queueDepths = Object.entries(data?.queue_depths ?? {});
-  const maxDepth = Math.max(1, ...queueDepths.map(([, d]) => Number(d)));
 
   return (
     <div>
       <Header title="System Dashboard" subtitle="Health, providers, queues, scheduler" />
 
-      {/* Stat cards */}
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="overflow-hidden">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                Lockdown
-              </p>
-              <p className="mt-1 font-display text-2xl text-[var(--text-primary)]">
-                {lockdown ? "ON" : "OFF"}
-              </p>
-            </div>
-            <div
-              className={`flex h-10 w-10 items-center justify-center rounded-lg ${lockdown ? "bg-red-100 dark:bg-red-900/30" : "bg-emerald-100 dark:bg-emerald-900/30"
-                }`}
-            >
-              {lockdown ? (
-                <Lock className="h-5 w-5 text-red-600 dark:text-red-400" />
-              ) : (
-                <Unlock className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-              )}
-            </div>
-          </div>
-          <div className="mt-2">
+      {/* Stat row */}
+      <div className="mb-6 grid grid-cols-2 divide-x divide-[var(--color-border)] rounded-lg border border-[var(--color-border)] lg:grid-cols-4">
+        <div className="px-4 py-3">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-text3">Lockdown</p>
+          <p className="mt-1 font-mono text-lg font-semibold text-text">
+            {lockdown ? "ON" : "OFF"}
+          </p>
+          <div className="mt-1">
             <Badge variant={lockdown ? "danger" : "success"}>
-              {lockdown ? "System locked" : "Operational"}
+              {lockdown ? "Locked" : "Operational"}
             </Badge>
           </div>
-        </Card>
+        </div>
 
-        <Card className="overflow-hidden">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                Primary Provider ({primaryProviderName})
-              </p>
-              <p className="mt-1 font-display text-2xl text-[var(--text-primary)]">
-                {data?.providers.primary ? "UP" : "DOWN"}
-              </p>
-            </div>
-            <div
-              className={`flex h-10 w-10 items-center justify-center rounded-lg ${data?.providers.primary
-                  ? "bg-emerald-100 dark:bg-emerald-900/30"
-                  : "bg-red-100 dark:bg-red-900/30"
-                }`}
-            >
-              <Server
-                className={`h-5 w-5 ${data?.providers.primary
-                    ? "text-emerald-600 dark:text-emerald-400"
-                    : "text-red-600 dark:text-red-400"
-                  }`}
-              />
-            </div>
-          </div>
-          <div className="mt-2">
+        <div className="px-4 py-3">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-text3">
+            Primary ({primaryProviderName})
+          </p>
+          <p className="mt-1 font-mono text-lg font-semibold text-text">
+            {data?.providers.primary ? "UP" : "DOWN"}
+          </p>
+          <div className="mt-1">
             <Badge variant={data?.providers.primary ? "success" : "danger"}>
               {data?.providers.primary ? "Healthy" : "Unreachable"}
             </Badge>
           </div>
-        </Card>
+        </div>
 
-        <Card className="overflow-hidden">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                Fallback Provider ({fallbackProviderName})
-              </p>
-              <p className="mt-1 font-display text-2xl text-[var(--text-primary)]">
-                {data?.providers.fallback ? "UP" : "DOWN"}
-              </p>
-            </div>
-            <div
-              className={`flex h-10 w-10 items-center justify-center rounded-lg ${data?.providers.fallback
-                  ? "bg-emerald-100 dark:bg-emerald-900/30"
-                  : "bg-amber-100 dark:bg-amber-900/30"
-                }`}
-            >
-              <Server
-                className={`h-5 w-5 ${data?.providers.fallback
-                    ? "text-emerald-600 dark:text-emerald-400"
-                    : "text-amber-600 dark:text-amber-400"
-                  }`}
-              />
-            </div>
-          </div>
-          <div className="mt-2">
+        <div className="px-4 py-3">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-text3">
+            Fallback ({fallbackProviderName})
+          </p>
+          <p className="mt-1 font-mono text-lg font-semibold text-text">
+            {data?.providers.fallback ? "UP" : "DOWN"}
+          </p>
+          <div className="mt-1">
             <Badge variant={data?.providers.fallback ? "success" : "warning"}>
               {data?.providers.fallback ? "Available" : "Unavailable"}
             </Badge>
           </div>
-        </Card>
+        </div>
 
-        <Card className="overflow-hidden">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                Scheduler Deferred
-              </p>
-              <p className="mt-1 font-display text-2xl text-[var(--text-primary)]">
-                {data?.scheduler.deferred_total ?? 0}
-              </p>
-            </div>
-            <div
-              className={`flex h-10 w-10 items-center justify-center rounded-lg ${(data?.scheduler.deferred_total ?? 0) > 0
-                  ? "bg-amber-100 dark:bg-amber-900/30"
-                  : "bg-emerald-100 dark:bg-emerald-900/30"
-                }`}
-            >
-              <Calendar
-                className={`h-5 w-5 ${(data?.scheduler.deferred_total ?? 0) > 0
-                    ? "text-amber-600 dark:text-amber-400"
-                    : "text-emerald-600 dark:text-emerald-400"
-                  }`}
-              />
-            </div>
-          </div>
-          <div className="mt-2">
+        <div className="px-4 py-3">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-text3">
+            Scheduler Deferred
+          </p>
+          <p className="mt-1 font-mono text-lg font-semibold text-text">
+            {data?.scheduler.deferred_total ?? 0}
+          </p>
+          <div className="mt-1">
             <Badge variant={(data?.scheduler.deferred_total ?? 0) > 0 ? "warning" : "success"}>
               {(data?.scheduler.deferred_total ?? 0) > 0 ? "Backlogged" : "Clear"}
             </Badge>
           </div>
-        </Card>
+        </div>
       </div>
 
       {/* Actions */}
@@ -217,47 +150,38 @@ export default function AdminDashboardPage() {
 
       {/* Queue depths + Scheduler backlog */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card
-          header={
-            <h3 className="font-display text-base text-[var(--text-primary)]">Queue Depths</h3>
-          }
-        >
+        <Card header={<span className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Queue Depths</span>}>
           {queueDepths.length === 0 ? (
-            <p className="text-sm text-[var(--text-muted)]">No queues reported.</p>
+            <p className="text-sm text-text3">No queues reported.</p>
           ) : (
-            <div className="space-y-3">
-              {queueDepths.map(([name, depth]) => {
-                const numDepth = Number(depth);
-                const pct = Math.min(100, (numDepth / maxDepth) * 100);
-                const isHigh = numDepth > maxDepth * 0.7;
-                return (
-                  <div key={name}>
-                    <div className="mb-1 flex items-center justify-between text-sm">
-                      <span className="font-medium text-[var(--text-primary)]">{name}</span>
-                      <Badge variant={isHigh ? "warning" : "default"}>{numDepth}</Badge>
-                    </div>
-                    <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--bg-mist)]">
-                      <div
-                        className={`h-full rounded-full transition-all ${isHigh ? "bg-[var(--color-danger)]" : "bg-[var(--color-brand)]"
-                          }`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Queue</TableHead>
+                  <TableHead>Depth</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {queueDepths.map(([name, depth]) => {
+                  const numDepth = Number(depth);
+                  return (
+                    <TableRow key={name}>
+                      <TableCell className="font-mono text-xs">{name}</TableCell>
+                      <TableCell>
+                        <Badge variant={numDepth > 10 ? "warning" : "default"}>
+                          {numDepth}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           )}
         </Card>
 
-        <Card
-          header={
-            <h3 className="font-display text-base text-[var(--text-primary)]">
-              Scheduler Backlog
-            </h3>
-          }
-        >
-          <pre className="max-h-80 overflow-auto rounded-lg bg-[var(--bg-mist)] p-3 text-xs text-[var(--text-secondary)]">
+        <Card header={<span className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Scheduler Backlog</span>}>
+          <pre className="max-h-80 overflow-auto rounded bg-surface-2 p-3 font-mono text-xs text-text2">
             {JSON.stringify(data?.scheduler ?? {}, null, 2)}
           </pre>
         </Card>

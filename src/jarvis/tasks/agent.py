@@ -45,9 +45,9 @@ from jarvis.tasks.agent_attempts import (  # noqa: E402
     classify_failure,
     compute_retry_delay_seconds,
     finish_attempt,
-    get_success_message_id,
     is_retryable_failure,
     next_attempt_number,
+    resolve_existing_trace_message_id,
     set_next_retry,
     start_attempt,
     touch_attempt,
@@ -1223,14 +1223,18 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
     retry_max_seconds = max(retry_base_seconds, int(settings.agent_step_retry_max_seconds))
 
     with get_conn() as conn:
-        existing_success = get_success_message_id(conn, trace_id=trace_id)
+        existing_success = resolve_existing_trace_message_id(
+            conn, trace_id=trace_id, thread_id=thread_id
+        )
         if existing_success is not None:
             return existing_success
 
     attempt = 1
     while attempt <= max_attempts:
         with get_conn() as conn:
-            existing_success = get_success_message_id(conn, trace_id=trace_id)
+            existing_success = resolve_existing_trace_message_id(
+                conn, trace_id=trace_id, thread_id=thread_id
+            )
             if existing_success is not None:
                 return existing_success
             running_attempt = active_running_attempt(conn, trace_id=trace_id)
@@ -1347,7 +1351,9 @@ def agent_step(trace_id: str, thread_id: str, actor_id: str = "main") -> str:
                     )
                 )
 
-                existing_success = get_success_message_id(conn, trace_id=trace_id)
+                existing_success = resolve_existing_trace_message_id(
+                    conn, trace_id=trace_id, thread_id=thread_id
+                )
                 if existing_success is not None and existing_success != message_id:
                     finish_attempt(
                         conn,

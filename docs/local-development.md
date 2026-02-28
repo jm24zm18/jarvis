@@ -29,12 +29,31 @@ make setup-smoke-running
   and web dependency install.
 - `make setup-smoke-running` is the same smoke path but skips the dev port preflight.
   Use it when local dependency services are intentionally already running.
-- `./start-dev.sh` restarts `jarvis-baileys` on each run (`docker compose stop` then
-  `docker compose up -d`) before launching API + web dev servers, which is useful when
-  recovering from stale WhatsApp auth/session state. For `401 loggedOut`, run
-  `Force Re-pair` in Admin UI (or `POST /api/v1/channels/whatsapp/reset`) to relink.
+- `./start-dev.sh` runs `make dev` first (including port preflight and dependency startup),
+  then restarts `jarvis-baileys`, verifies SearXNG health, and finally launches API + web
+  dev servers. This keeps web search available by default while still clearing stale
+  WhatsApp auth/session state. For `401 loggedOut`, run `Force Re-pair` in Admin UI
+  (or `POST /api/v1/channels/whatsapp/reset`) to relink.
 
 ## Common Workflows
+
+### Configure LM Studio provider (optional)
+
+1. Start LM Studio locally and enable its OpenAI-compatible server.
+2. Set `.env` values:
+   - `LMSTUDIO_BASE_URL` (default: `http://127.0.0.1:1234/v1`)
+   - `LMSTUDIO_MODEL`
+   - optional `LMSTUDIO_API_KEY`
+3. Restart API (`make api`).
+4. Verify model catalog from admin API:
+   - `GET /api/v1/auth/providers/models` should include `lmstudio_models`.
+5. Optionally set provider routing in admin API/UI:
+   - `GET /api/v1/auth/providers/config`
+   - `POST /api/v1/auth/providers/config`
+
+Notes:
+- Provider config saves update `.env` and reload API runtime provider settings immediately.
+- LM Studio health checks use `GET {LMSTUDIO_BASE_URL}/models`.
 
 ### Add a tool
 

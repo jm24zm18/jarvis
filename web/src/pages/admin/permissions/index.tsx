@@ -41,8 +41,8 @@ export default function AdminPermissionsPage() {
         className="mb-6"
         header={
           <div className="flex items-center gap-2">
-            <Shield className="h-4 w-4 text-[var(--text-muted)]" />
-            <h3 className="font-display text-base text-[var(--text-primary)]">Edit Permission</h3>
+            <Shield className="h-4 w-4 text-text3" />
+            <h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Edit Permission</h3>
           </div>
         }
       >
@@ -89,8 +89,8 @@ export default function AdminPermissionsPage() {
         header={
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Shield className="h-4 w-4 text-[var(--text-muted)]" />
-              <h3 className="font-display text-base text-[var(--text-primary)]">
+              <Shield className="h-4 w-4 text-text3" />
+              <h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">
                 Permission Matrix
               </h3>
             </div>
@@ -102,7 +102,7 @@ export default function AdminPermissionsPage() {
       >
         {toolUniverse.length === 0 ? (
           <div className="flex min-h-[120px] items-center justify-center">
-            <p className="text-sm text-[var(--text-muted)]">
+            <p className="text-sm text-text3">
               No permissions configured yet.
             </p>
           </div>
@@ -110,14 +110,14 @@ export default function AdminPermissionsPage() {
           <div className="-mx-4 overflow-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-[var(--border-default)]">
-                  <th className="sticky left-0 bg-surface px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+                <tr className="border-b border-[var(--color-border)]">
+                  <th className="sticky left-0 bg-[var(--color-surface)] px-4 py-2.5 text-left text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">
                     Principal
                   </th>
                   {toolUniverse.map((tool) => (
                     <th
                       key={tool}
-                      className="px-3 py-2.5 text-center text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]"
+                      className="px-3 py-2.5 text-center text-[10px] font-mono uppercase tracking-widest text-text3 font-medium"
                     >
                       <div className="max-w-[100px] truncate" title={tool}>
                         {tool}
@@ -130,16 +130,16 @@ export default function AdminPermissionsPage() {
                 {(permissions.data?.items ?? []).map((group) => (
                   <tr
                     key={group.principal_id}
-                    className="border-b border-[var(--border-default)] transition hover:bg-[var(--bg-mist)]"
+                    className="border-b border-[var(--color-border)] transition hover:bg-surface-2"
                   >
-                    <td className="sticky left-0 bg-surface px-4 py-2.5">
+                    <td className="sticky left-0 bg-[var(--color-surface)] px-4 py-2.5">
                       <div className="flex items-center gap-2">
-                        <Shield className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+                        <Shield className="h-3.5 w-3.5 text-text3" />
                         <div>
-                          <div className="font-medium text-[var(--text-primary)]">
+                          <div className="font-medium text-text">
                             {group.principal_id}
                           </div>
-                          <div className="text-[11px] text-[var(--text-muted)]">
+                          <div className="text-[11px] text-text3">
                             {group.principal_type}
                           </div>
                         </div>
@@ -159,7 +159,7 @@ export default function AdminPermissionsPage() {
                                 toolName: tool,
                               })
                             }
-                            className="inline-flex items-center justify-center rounded-md p-1 transition hover:bg-[var(--bg-mist)]"
+                            className="inline-flex items-center justify-center rounded-md p-1 transition hover:bg-surface-2"
                             title={
                               allowed
                                 ? `Revoke ${tool} from ${group.principal_id}`
@@ -167,9 +167,9 @@ export default function AdminPermissionsPage() {
                             }
                           >
                             {allowed ? (
-                              <ToggleRight className="h-6 w-6 text-leaf" />
+                              <ToggleRight className="h-6 w-6 text-accent" />
                             ) : (
-                              <ToggleLeft className="h-6 w-6 text-[var(--text-muted)]" />
+                              <ToggleLeft className="h-6 w-6 text-text3" />
                             )}
                           </button>
                         </td>

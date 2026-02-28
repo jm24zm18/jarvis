@@ -19,6 +19,9 @@ function normalizeProvider(value: string): ProviderName {
   return "openrouter";
 }
 
+const selectCls =
+  "w-full rounded-md border border-[var(--color-border-2)] bg-[var(--color-surface-2)] px-3 py-2 font-mono text-sm text-text outline-none focus:border-accent";
+
 export default function AdminProvidersPage() {
   const providerQuery = useQuery({
     queryKey: ["provider-config"],
@@ -152,15 +155,15 @@ export default function AdminProvidersPage() {
       <Header
         title="Providers"
         subtitle="Provider routing and model selection"
-        icon={<Server className="h-6 w-6" />}
+        icon={<Server className="h-5 w-5" />}
       />
 
       <Card
         className="mb-6"
         header={
           <div className="flex items-center gap-2">
-            <Server className="h-4 w-4 text-[var(--text-muted)]" />
-            <span className="font-display text-sm font-semibold text-[var(--text-primary)]">
+            <Server className="h-4 w-4 text-accent" />
+            <span className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">
               Model Routing
             </span>
           </div>
@@ -168,9 +171,9 @@ export default function AdminProvidersPage() {
       >
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <label className="text-sm">
-            <span className="mb-1 block font-medium text-[var(--text-primary)]">Primary Provider</span>
+            <span className="mb-1 block font-mono text-xs font-medium text-text2">Primary Provider</span>
             <select
-              className="w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-elevated)] px-3 py-2 text-sm text-[var(--text-primary)]"
+              className={selectCls}
               value={primaryProvider}
               onChange={(e) => setPrimaryProvider(normalizeProvider(e.target.value))}
             >
@@ -186,11 +189,11 @@ export default function AdminProvidersPage() {
             </select>
           </label>
           <label className="text-sm">
-            <span className="mb-1 block font-medium text-[var(--text-primary)]">
+            <span className="mb-1 block font-mono text-xs font-medium text-text2">
               Fallback Provider
             </span>
             <select
-              className="w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-elevated)] px-3 py-2 text-sm text-[var(--text-primary)]"
+              className={selectCls}
               value={fallbackProvider}
               onChange={(e) => setFallbackProvider(normalizeProvider(e.target.value))}
             >
@@ -206,20 +209,20 @@ export default function AdminProvidersPage() {
             </select>
           </label>
           <label className="text-sm">
-            <span className="mb-1 block font-medium text-[var(--text-primary)]">OpenRouter Model</span>
+            <span className="mb-1 block font-mono text-xs font-medium text-text2">OpenRouter Model</span>
             <Input
               value={openrouterModel}
               onChange={(e) => setOpenrouterModel(e.target.value)}
               placeholder="google/gemini-2.5-flash"
             />
-            <span className="mt-1 block text-xs text-[var(--text-muted)]">
+            <span className="mt-1 block font-mono text-xs text-text3">
               Any model ID available on openrouter.ai
             </span>
           </label>
           <label className="text-sm">
-            <span className="mb-1 block font-medium text-[var(--text-primary)]">SGLang Model</span>
+            <span className="mb-1 block font-mono text-xs font-medium text-text2">SGLang Model</span>
             <select
-              className="w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-elevated)] px-3 py-2 text-sm text-[var(--text-primary)]"
+              className={selectCls}
               value={sglangModel}
               onChange={(e) => setSglangModel(e.target.value)}
             >
@@ -232,16 +235,16 @@ export default function AdminProvidersPage() {
                 </option>
               ))}
             </select>
-            <span className="mt-1 block text-xs text-[var(--text-muted)]">
+            <span className="mt-1 block font-mono text-xs text-text3">
               Source: {modelCatalogQuery.data?.sglang_source || "configured value"}
             </span>
           </label>
         </div>
         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
           <label className="text-sm">
-            <span className="mb-1 block font-medium text-[var(--text-primary)]">LM Studio Model</span>
+            <span className="mb-1 block font-mono text-xs font-medium text-text2">LM Studio Model</span>
             <select
-              className="w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-elevated)] px-3 py-2 text-sm text-[var(--text-primary)]"
+              className={selectCls}
               value={lmstudioModel}
               onChange={(e) => setLmstudioModel(e.target.value)}
             >
@@ -254,12 +257,12 @@ export default function AdminProvidersPage() {
                 </option>
               ))}
             </select>
-            <span className="mt-1 block text-xs text-[var(--text-muted)]">
+            <span className="mt-1 block font-mono text-xs text-text3">
               Source: {modelCatalogQuery.data?.lmstudio_source || "configured value"}
             </span>
           </label>
           <label className="text-sm md:col-span-2">
-            <span className="mb-1 block font-medium text-[var(--text-primary)]">LM Studio Base URL</span>
+            <span className="mb-1 block font-mono text-xs font-medium text-text2">LM Studio Base URL</span>
             <Input
               value={lmstudioBaseUrl}
               onChange={(e) => setLmstudioBaseUrl(e.target.value)}
@@ -269,14 +272,14 @@ export default function AdminProvidersPage() {
         </div>
         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
           <label className="text-sm md:col-span-2">
-            <span className="mb-1 block font-medium text-[var(--text-primary)]">OpenRouter API Key</span>
+            <span className="mb-1 block font-mono text-xs font-medium text-text2">OpenRouter API Key</span>
             <Input
               type="password"
               value={openrouterApiKey}
               onChange={(e) => setOpenrouterApiKey(e.target.value)}
               placeholder="sk-or-v1-..."
             />
-            <span className="mt-1 block text-xs text-[var(--text-muted)]">
+            <span className="mt-1 block font-mono text-xs text-text3">
               Current:{" "}
               {providerQuery.data?.openrouter_api_key_set
                 ? providerQuery.data.openrouter_api_key_masked || "(masked)"
@@ -284,14 +287,14 @@ export default function AdminProvidersPage() {
             </span>
           </label>
           <label className="text-sm">
-            <span className="mb-1 block font-medium text-[var(--text-primary)]">LM Studio API Key</span>
+            <span className="mb-1 block font-mono text-xs font-medium text-text2">LM Studio API Key</span>
             <Input
               type="password"
               value={lmstudioApiKey}
               onChange={(e) => setLmstudioApiKey(e.target.value)}
               placeholder="optional"
             />
-            <span className="mt-1 block text-xs text-[var(--text-muted)]">
+            <span className="mt-1 block font-mono text-xs text-text3">
               Current:{" "}
               {providerQuery.data?.lmstudio_api_key_set
                 ? providerQuery.data.lmstudio_api_key_masked || "(masked)"
@@ -320,10 +323,10 @@ export default function AdminProvidersPage() {
           <div
             className={`mt-4 rounded-lg border px-4 py-3 ${
               providerStatus === "success"
-                ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20"
+                ? "border-success/30 bg-success-dim"
                 : providerStatus === "error"
-                  ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/20"
-                  : "border-[var(--border-default)] bg-[var(--bg-mist)]"
+                  ? "border-danger/30 bg-danger-dim"
+                  : "border-[var(--color-border)] bg-surface-2"
             }`}
           >
             {providerStatus && (
@@ -342,7 +345,7 @@ export default function AdminProvidersPage() {
               </div>
             )}
             {providerDetail && (
-              <p className="text-sm text-[var(--text-secondary)]">{providerDetail}</p>
+              <p className="font-mono text-xs text-text2">{providerDetail}</p>
             )}
           </div>
         )}

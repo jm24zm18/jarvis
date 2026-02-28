@@ -28,7 +28,7 @@ Source of truth: `src/jarvis/config.py`.
 | `PROMPT_BUDGET_OPENROUTER_TOKENS` | int | `200000` | Prompt budget for OpenRouter lane. |
 | `PROMPT_BUDGET_SGLANG_TOKENS` | int | `110000` | Prompt budget for SGLang lane. |
 
-### Lockdown and Queue Controls
+### Lockdown Controls
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
@@ -38,10 +38,6 @@ Source of truth: `src/jarvis/config.py`.
 | `LOCKDOWN_ROLLBACK_WINDOW_MINUTES` | int | `30` | Rollback window in minutes. |
 | `LOCKDOWN_EXEC_HOST_FAIL_THRESHOLD` | int | `5` | Exec-host failure threshold. |
 | `LOCKDOWN_EXEC_HOST_FAIL_WINDOW_MINUTES` | int | `10` | Exec-host failure window. |
-| `QUEUE_THRESHOLD_AGENT_PRIORITY` | int | `200` | Queue warning threshold. |
-| `QUEUE_THRESHOLD_AGENT_DEFAULT` | int | `500` | Queue warning threshold. |
-| `QUEUE_THRESHOLD_TOOLS_IO` | int | `500` | Queue warning threshold. |
-| `QUEUE_THRESHOLD_LOCAL_LLM` | int | `10` | Queue warning threshold. |
 
 ### Self-Update
 
@@ -56,12 +52,28 @@ Source of truth: `src/jarvis/config.py`.
 | `SELFUPDATE_SANDBOX_ENABLED` | int | `0` | When `1`, run smoke-gate checks inside Docker sandbox instead of host process. |
 | `SELFUPDATE_SANDBOX_IMAGE` | str | `jarvis-sandbox:latest` | Docker image used for sandboxed smoke checks. |
 | `SELFUPDATE_SANDBOX_TIMEOUT_SECONDS` | int | `300` | Timeout for each sandboxed smoke command. |
+| `SELFUPDATE_CRITICAL_PATHS` | str | `src/jarvis/policy/**,src/jarvis/tools/runtime.py,src/jarvis/auth/**,src/jarvis/routes/api/**,src/jarvis/db/migrations/**` | Comma-delimited critical path globs used for self-update risk checks. |
+| `SELFUPDATE_PR_AUTORAISE` | int | `0` | Automatically open PRs for self-update patches when enabled. |
+| `SELFUPDATE_FITNESS_GATE_MODE` | str | `warn` | Fitness gate mode (`warn` or `enforce`). |
+| `SELFUPDATE_TEST_GATE_MODE` | str | `warn` | Test gate mode (`warn` or `enforce`). |
+| `SELFUPDATE_MAX_FILES_PER_PATCH` | int | `20` | Max changed files allowed per patch proposal. |
+| `SELFUPDATE_MAX_RISK_SCORE` | int | `100` | Max risk score allowed for self-update execution. |
+| `SELFUPDATE_MAX_PATCH_ATTEMPTS_PER_DAY` | int | `10` | Daily cap for patch attempts. |
+| `SELFUPDATE_MAX_PRS_PER_DAY` | int | `5` | Daily cap for auto-raised PRs. |
+| `SELFUPDATE_TEST_GATE_MIN_COVERAGE_PCT` | float | `0.0` | Minimum required coverage percentage when test gate is enforced. |
+| `SELFUPDATE_TEST_GATE_REQUIRE_CRITICAL_TESTS` | int | `1` | Require critical test suites in self-update gate evaluation. |
+| `SELFUPDATE_FITNESS_MAX_AGE_MINUTES` | int | `180` | Maximum accepted age for cached fitness metrics. |
+| `SELFUPDATE_MIN_BUILD_SUCCESS_RATE` | float | `0.8` | Minimum build success rate threshold for self-update safety checks. |
+| `SELFUPDATE_MAX_REGRESSION_FREQ` | float | `0.4` | Maximum allowed regression frequency threshold. |
+| `SELFUPDATE_MAX_ROLLBACK_FREQ` | int | `3` | Maximum allowed rollback frequency threshold. |
 
-### Scheduler, Restart, and RabbitMQ Mgmt
+### Scheduler and Orchestration
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
 | `SCHEDULER_MAX_CATCHUP` | int | `10` | Global catch-up cap per schedule tick. |
+| `TASK_RUNNER_MAX_CONCURRENT` | int | `20` | Max concurrent in-process background tasks. |
+| `TASK_RUNNER_SHUTDOWN_TIMEOUT_SECONDS` | int | `30` | Shutdown grace timeout for in-flight background tasks. |
 | `FOLLOWUP_HEARTBEAT_INTERVAL_SECONDS` | int | `300` | Interval for proactive follow-up heartbeat evaluation (`0` disables). |
 | `FOLLOWUP_MAX_THREADS_PER_TICK` | int | `20` | Max enabled threads evaluated each follow-up heartbeat tick. |
 | `FOLLOWUP_MIN_IDLE_SECONDS` | int | `300` | Minimum idle age for a thread before follow-up evaluation. |
@@ -79,7 +91,10 @@ Source of truth: `src/jarvis/config.py`.
 | `FEATURE_BUILD_ESCALATE_ON_EXHAUSTED` | int | `1` | When `1`, exhausted feature-build terminal failures trigger configured human escalation dispatch. |
 | `FEATURE_BUILD_FAIL_FAST_PLACEHOLDER_REPEAT` | int | `1` | When `1`, repeated consecutive `placeholder_response_after_tool_loop` outcomes fail fast instead of re-scheduling retries. |
 | `FEATURE_BUILD_DELIVERABLE_GATE_ENABLED` | int | `1` | When `1`, feature-build runs require deliverable evidence (diff/no-op blockers + safety checks) before success finalization. |
+| `FEATURE_BUILD_ATTEMPT_CAPSULES_ENABLED` | int | `1` | Enable attempt-level failure capsule generation for feature-build runs. |
+| `FEATURE_BUILD_REPEAT_LIMIT` | int | `2` | Cap repeated equivalent attempt outcomes before terminal escalation/fallback behavior. |
 | `FEATURE_BUILD_LOOP_CAP_THRESHOLD` | int | `8` | Max repeated identical tool-call signature count per build attempt before forcing terminal synthesis fallback. |
+| `FEATURE_BUILD_REQUIRE_TEST_GATES` | int | `1` | Require test-gate evidence before feature-build success finalization. |
 | `FEATURE_BUILD_USE_RLM` | int | `0` | When `1`, enable pre-build RLM decomposition (requires `RLM_ENABLED=1`). |
 | `FEATURE_BUILD_AUTO_DECOMPOSE` | int | `1` | When `1`, broad-scope feature builds automatically attempt decomposition even when RLM toggles are disabled. |
 | `FEATURE_BUILD_DECOMPOSE_FALLBACK` | int | `1` | When `1`, failed decomposition falls back to deterministic layer-based subtask splitting before terminal guidance. |
@@ -95,9 +110,12 @@ Source of truth: `src/jarvis/config.py`.
 | `RLM_CONTEXT_TOKEN_LIMIT` | int | `4000` | Token budget for context injection (4 chars/token approximation). |
 | `RLM_PROMPT_TOKEN_LIMIT` | int | `8000` | Max `max_tokens` passed to the provider when building prompts. |
 | `RLM_VALIDATION_ATTEMPTS` | int | `2` | Total provider attempts (initial + repairs) before failing with human escalation. |
+| `RLM_MAX_ATTEMPTS` | int | `2` | Max full decomposition attempts before terminal failure. |
 | `RLM_MAX_REFINEMENTS` | int | `3` | Max number of repair prompts allowed when validation errors occur. |
 | `RLM_TIMEOUT_S` | int | `120` | Timeout (seconds) for each decomposition provider call. |
 | `RLM_BUDGET_PER_1K_TOKENS` | float | `0.02` | Conservative cost estimate per 1,000 tokens for budgeting and logging. |
+| `ORCHESTRATOR_MAX_TOOL_ITERATIONS` | int | `8` | Hard cap on tool-call loop iterations per orchestrator attempt. |
+| `ORCHESTRATOR_FALLBACK_ONLY_RETRIES` | int | `2` | Retry allowance when execution is already on fallback provider paths only. |
 | `HUMAN_ESCALATION_CHANNEL_TYPE` | str | `whatsapp` | Outbound channel used for escalation dispatch (`whatsapp`, `telegram`, etc. as configured). |
 | `HUMAN_ESCALATION_TARGETS` | str | `` | Comma-separated external channel IDs to notify when escalation is requested. |
 | `HUMAN_ESCALATION_DEFAULT_PRIORITY` | str | `normal` | Default escalation priority when caller does not provide one. |
@@ -107,11 +125,6 @@ Source of truth: `src/jarvis/config.py`.
 | `AGENT_RUN_TOOL_STALE_MIN_SECONDS` | int | `240` | Minimum stale cutoff while phase=`tool.exec`. |
 | `AGENT_RUN_FINALIZE_STALE_MIN_SECONDS` | int | `120` | Minimum stale cutoff while phase=`state.extract`/`finalize`. |
 | `AGENT_RUN_STALE_HARD_CAP_SECONDS` | int | `2700` | Absolute per-attempt runtime cap before stale recovery. |
-| `RABBITMQ_MGMT_URL` | str | `` | Optional RabbitMQ mgmt endpoint. |
-| `RABBITMQ_MGMT_USER` | str | `` | RabbitMQ mgmt username. |
-| `RABBITMQ_MGMT_PASSWORD` | str | `` | RabbitMQ mgmt password. |
-| `RESTART_DRAIN_TIMEOUT_SECONDS` | int | `20` | Drain timeout for controlled restart. |
-| `RESTART_DRAIN_POLL_SECONDS` | int | `2` | Drain poll interval. |
 | `RESTART_COMMAND` | str | `` | Host restart command. |
 
 ### Channel/Auth Providers
@@ -146,6 +159,10 @@ Source of truth: `src/jarvis/config.py`.
 | `BAILEYS_WEBHOOK_BY_EVENTS` | int | `1` | Callback metadata flag for event-filtered delivery mode. |
 | `BAILEYS_WEBHOOK_EVENTS` | str | `messages.upsert` | Comma-separated webhook event names expected from sidecar forwarding. |
 | `BAILEYS_WEBHOOK_SECRET_HEADER` | str | `X-WhatsApp-Secret` | Header name sidecar uses to send webhook secret. |
+| `TELEGRAM_BOT_TOKEN` | str | `` | Telegram bot token for Bot API integration. |
+| `TELEGRAM_ALLOWED_CHAT_IDS` | str | `` | Comma-separated Telegram chat IDs allowed for inbound/outbound routing. |
+| `GOOGLE_OAUTH_CLIENT_ID` | str | `` | Optional Google OAuth client ID for auth integrations. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | str | `` | Optional Google OAuth client secret for auth integrations. |
 | `PRIMARY_PROVIDER` | str | `openrouter` | Primary chat provider (`openrouter`, `sglang`, or `lmstudio`). |
 | `FALLBACK_PROVIDER` | str | `` | Optional explicit fallback provider (`openrouter`, `sglang`, or `lmstudio`); when unset, fallback is derived from primary. |
 | `OPENROUTER_API_KEY` | str | `` | OpenRouter API key. |
@@ -189,6 +206,7 @@ Provider admin runtime note:
 | `MEMORY_SECRET_SCAN_ENABLED` | int | `1` | Enable secret-pattern scanning before persistence. |
 | `MEMORY_PII_REDACT_MODE` | str | `mask` | PII handling mode for memory text persistence. |
 | `MEMORY_RETENTION_DAYS` | int | `180` | Retention horizon for memory maintenance/archival decisions. |
+| `EVENT_RETENTION_DAYS` | int | `90` | Retention horizon for event records. |
 | `MEMORY_TIERS_ENABLED` | int | `0` | Enable tiered memory lifecycle (`working/episodic/semantic`). |
 | `MEMORY_IMPORTANCE_ENABLED` | int | `0` | Enable score-based promotion/demotion decisions. |
 | `MEMORY_GRAPH_ENABLED` | int | `0` | Enable graph relation extraction and traversal surfaces. |
@@ -205,6 +223,18 @@ Provider admin runtime note:
 | `SEARXNG_API_KEY` | str | `` | SearXNG API key. |
 | `SEARXNG_API_KEY_HEADER` | str | `X-API-Key` | SearXNG API key header name. |
 | `WEB_SEARCH_USER_AGENT` | str | `Mozilla/5.0 (compatible; Jarvis/1.0; +https://localhost)` | Outbound user agent for web search requests. |
+
+### Governance and Approval
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `GOVERNANCE_ENFORCE` | int | `1` | Enable governance enforcement checks in runtime decision paths. |
+| `APPROVAL_TTL_MINUTES` | int | `30` | Default TTL for approval tokens in the approvals system. |
+| `DEPENDENCY_STEWARD_ENABLED` | int | `0` | Enable dependency steward governance agent workflows. |
+| `DEPENDENCY_STEWARD_MAX_UPGRADES` | int | `10` | Max dependency upgrade candidates processed per steward run. |
+| `RELEASE_CANDIDATE_AGENT_ENABLED` | int | `0` | Enable release-candidate governance agent workflows. |
+| `USER_SIMULATOR_ENABLED` | int | `0` | Enable user-simulator governance workflows. |
+| `USER_SIMULATOR_REQUIRED_PACK` | str | `p0` | Required simulator story pack when user simulator is enabled. |
 
 ### Admin and Backup
 
@@ -232,6 +262,7 @@ Provider admin runtime note:
 |---|---|---|---|
 | `GITHUB_TOKEN` | str | `` | GitHub App installation token or PAT for API calls. |
 | `GITHUB_WEBHOOK_SECRET` | str | `` | Secret used to verify `X-Hub-Signature-256`. |
+| `WEBHOOK_REPLAY_WINDOW_MINUTES` | int | `15` | Replay-detection window for GitHub delivery IDs. |
 | `GITHUB_API_BASE_URL` | str | `https://api.github.com` | GitHub API base URL. |
 | `GITHUB_REPO_ALLOWLIST` | str | `` | Optional CSV allowlist (supports globs, e.g. `my-org/*`). |
 | `GITHUB_BOT_LOGIN` | str | `jarvis` | Bot login used for `@mention` trigger matching and self-reply guard. |

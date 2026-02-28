@@ -15,6 +15,7 @@ from jarvis.tasks.agent_attempts import (
     finish_attempt,
     is_attempt_stale,
     next_attempt_number,
+    resolve_existing_trace_message_id,
 )
 
 
@@ -66,6 +67,7 @@ def reap_stale_agent_runs() -> dict[str, int]:
     stale = 0
     recovered = 0
     exhausted = 0
+    duplicate_skipped = 0
 
     with get_conn() as conn:
         rows = conn.execute(
@@ -83,6 +85,32 @@ def reap_stale_agent_runs() -> dict[str, int]:
             thread_id = str(row["thread_id"])
             actor_id = str(row["actor_id"])
             attempt = int(row["attempt"])
+
+            existing_message_id = resolve_existing_trace_message_id(
+                conn, trace_id=trace_id, thread_id=thread_id
+            )
+            if existing_message_id:
+                duplicate_skipped += 1
+                finish_attempt(
+                    conn,
+                    trace_id=trace_id,
+                    attempt=attempt,
+                    status="succeeded",
+                    final_message_id=existing_message_id,
+                )
+                _notify_trace_event(
+                    conn=conn,
+                    thread_id=thread_id,
+                    trace_id=trace_id,
+                    event_type="agent.step.recovery_skipped_duplicate",
+                    payload={
+                        "stale_attempt": attempt,
+                        "resolved_message_id": existing_message_id,
+                        "failure_kind": "stale_timeout",
+                        "reason": "response_already_emitted",
+                    },
+                )
+                continue
 
             finish_attempt(
                 conn,
@@ -142,4 +170,5 @@ def reap_stale_agent_runs() -> dict[str, int]:
         "stale": stale,
         "recovered": recovered,
         "exhausted": exhausted,
+        "duplicate_skipped": duplicate_skipped,
     }

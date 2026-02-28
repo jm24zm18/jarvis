@@ -17,7 +17,7 @@ from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
 from jarvis.tasks.agent import _git_changed_files, agent_step
-from jarvis.tasks.agent_attempts import start_attempt
+from jarvis.tasks.agent_attempts import resolve_existing_trace_message_id, start_attempt
 from jarvis.tasks.agent_recovery import reap_stale_agent_runs
 
 
@@ -33,6 +33,25 @@ class _StubRunner:
     ) -> bool:
         self.calls.append((name, kwargs or {}, queue))
         return True
+
+
+def _emit_trace_step_end_event(conn, *, trace_id: str, thread_id: str, message_id: str) -> None:
+    payload = {"message_id": message_id, "lane": "primary"}
+    emit_event(
+        conn,
+        EventInput(
+            trace_id=trace_id,
+            span_id=new_id("spn"),
+            parent_span_id=None,
+            thread_id=thread_id,
+            event_type="agent.step.end",
+            component="orchestrator",
+            actor_type="agent",
+            actor_id="main",
+            payload_json=json.dumps(payload),
+            payload_redacted_json=json.dumps(redact_payload(payload)),
+        ),
+    )
 
 
 def test_agent_step_retries_and_records_attempt_lifecycle(monkeypatch) -> None:
@@ -137,6 +156,102 @@ def test_reaper_marks_stale_and_requeues_attempt(monkeypatch) -> None:
     assert str(row["status"]) == "abandoned"
     assert str(row["failure_kind"]) == "stale_timeout"
     assert recovered_note is not None
+
+
+def test_resolve_existing_trace_message_id_falls_back_to_agent_step_end_event() -> None:
+    trace_id = "trc_existing_via_event"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550777")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        message_id = insert_message(conn, thread_id, "assistant", "already emitted")
+        _emit_trace_step_end_event(conn, trace_id=trace_id, thread_id=thread_id, message_id=message_id)
+        resolved = resolve_existing_trace_message_id(conn, trace_id=trace_id, thread_id=thread_id)
+    assert resolved == message_id
+
+
+def test_agent_step_returns_existing_event_message_without_new_attempt(monkeypatch) -> None:
+    async def should_not_run(*_args, **_kwargs) -> str:
+        raise AssertionError("run_agent_step should not execute when trace output already exists")
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", should_not_run)
+
+    trace_id = "trc_event_short_circuit"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550778")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "what date is today")
+        message_id = insert_message(conn, thread_id, "assistant", "Today is **February 28, 2026**.")
+        _emit_trace_step_end_event(conn, trace_id=trace_id, thread_id=thread_id, message_id=message_id)
+
+    returned = agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+    assert returned == message_id
+    with get_conn() as conn:
+        attempt_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM agent_run_attempts WHERE trace_id=?",
+                (trace_id,),
+            ).fetchone()["n"]
+        )
+    assert attempt_count == 0
+
+
+def test_reaper_skips_duplicate_when_message_already_emitted(monkeypatch) -> None:
+    runner = _StubRunner()
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: runner)
+
+    trace_id = "trc_stale_duplicate_skip"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550779")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        message_id = insert_message(conn, thread_id, "assistant", "already sent")
+        _emit_trace_step_end_event(conn, trace_id=trace_id, thread_id=thread_id, message_id=message_id)
+        start_attempt(
+            conn,
+            trace_id=trace_id,
+            thread_id=thread_id,
+            actor_id="main",
+            attempt=1,
+        )
+        stale_at = (datetime.now(UTC) - timedelta(minutes=20)).isoformat()
+        conn.execute(
+            (
+                "UPDATE agent_run_attempts SET phase='state.extract', started_at=?, "
+                "last_heartbeat_at=? WHERE trace_id=? AND attempt=1"
+            ),
+            (stale_at, stale_at, trace_id),
+        )
+
+    result = reap_stale_agent_runs()
+    assert result["stale"] == 1
+    assert result["recovered"] == 0
+    assert result["exhausted"] == 0
+    assert result["duplicate_skipped"] == 1
+    assert runner.calls == []
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, failure_kind, final_message_id FROM agent_run_attempts WHERE trace_id=? AND attempt=1",
+            (trace_id,),
+        ).fetchone()
+        duplicate_note = conn.execute(
+            (
+                "SELECT payload_json FROM web_notifications "
+                "WHERE thread_id=? AND event_type='trace.agent.step.recovery_skipped_duplicate' "
+                "ORDER BY id DESC LIMIT 1"
+            ),
+            (thread_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["status"]) == "succeeded"
+    assert str(row["failure_kind"] or "") == ""
+    assert str(row["final_message_id"]) == message_id
+    assert duplicate_note is not None
 
 
 def test_git_changed_files_subtracts_baseline(monkeypatch) -> None:

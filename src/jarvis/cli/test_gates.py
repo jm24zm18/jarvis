@@ -7,6 +7,8 @@ import subprocess
 import sys
 import time
 
+from jarvis.formatting import format_duration_human, supports_utf8, symbol
+
 GATES: list[tuple[str, list[str]]] = [
     ("Lint", ["uv", "run", "ruff", "check", "src", "tests"]),
     ("Typecheck", ["uv", "run", "mypy", "src"]),
@@ -30,6 +32,7 @@ GATES: list[tuple[str, list[str]]] = [
         ["uv", "run", "python", "scripts/check_coverage.py", "/tmp/jarvis_coverage.json"],
     ),
 ]
+_ASCII_ONLY = not supports_utf8(sys.stdout)
 
 
 def _green(text: str) -> str:
@@ -58,15 +61,19 @@ def run_test_gates(
         raise ValueError("mode must be 'warn' or 'enforce'")
 
     for name, cmd in GATES:
-        print(f"\n{_bold(name)}")
-        print(f"  $ {' '.join(cmd)}")
+        if not json_output:
+            print(f"\n{_bold(name)}")
+            print(f"  $ {' '.join(cmd)}")
         gate_t0 = time.monotonic()
         proc = subprocess.run(cmd, check=False)
         elapsed = round(time.monotonic() - gate_t0, 1)
         passed = proc.returncode == 0
 
-        icon = _green("\u2713") if passed else _red("\u2717")
-        print(f"  {icon} {name} ({elapsed}s)")
+        if not json_output:
+            icon = _green(symbol("check", ascii_only=_ASCII_ONLY)) if passed else _red(
+                symbol("cross", ascii_only=_ASCII_ONLY)
+            )
+            print(f"  {icon} {name} ({format_duration_human(elapsed)})")
 
         results.append(
             {
@@ -79,20 +86,28 @@ def run_test_gates(
         if not passed:
             failed += 1
             if fail_fast:
-                print(f"\n{_red('Stopping early (--fail-fast)')}")
+                if not json_output:
+                    print(f"\n{_red('Stopping early (--fail-fast)')}")
                 break
 
     total = round(time.monotonic() - t0, 1)
     ran = len(results)
 
-    print()
-    if failed == 0:
-        print(_green(f"All {ran} gates passed ({total}s)"))
-    else:
-        print(_red(f"{failed}/{ran} gate(s) failed ({total}s)"))
-
     if json_output:
-        print("\n" + json.dumps(results, indent=2))
+        payload = {
+            "ok": failed == 0,
+            "failed": failed,
+            "ran": ran,
+            "seconds": total,
+            "results": results,
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        print()
+        if failed == 0:
+            print(_green(f"All {ran} gates passed ({format_duration_human(total)})"))
+        else:
+            print(_red(f"{failed}/{ran} gate(s) failed ({format_duration_human(total)})"))
 
     if failed and gate_mode == "enforce":
         sys.exit(1)

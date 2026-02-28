@@ -159,9 +159,12 @@ Periodic health visibility:
 1. State extraction is queued asynchronously after assistant message persistence.
 2. Trace lifecycle to expect:
    - `trace.state.extraction.queued`
+   - `trace.state.extraction.retry_scheduled` (timeout retry only)
    - `trace.state.extraction.complete` or `trace.state.extraction.failed`
 3. If failures spike, inspect recent events:
+   - `state.extraction.retry_scheduled` payload `attempt`, `max_attempts`, `retry_in_seconds`
    - `state.extraction.failed` payload `primary_failure_kind`
+   - `state.extraction.failed` payload retry metadata (`attempt_count`, `max_attempts`, `retry_attempted`)
    - `state.extraction.complete` payload `skipped_reason`
 4. Quota cooldown is reported as `skipped_reason=provider_quota_cooldown`.
 
@@ -324,7 +327,11 @@ Repo-side automation is complete; execution remains operator-owned. Capture all 
 3. Confirm recovery telemetry:
    - `trace.agent.step.retried`
    - `trace.agent.step.recovered`
+   - `trace.agent.step.recovery_skipped_duplicate`
    - `trace.agent.step.retry_exhausted`
+   - If `trace.agent.step.recovery_skipped_duplicate` appears, stale recovery found an already-emitted
+     assistant response (`message_id`) for that `trace_id` and intentionally skipped replay to prevent
+     duplicate user-visible replies.
 4. CLI status includes recovery counters:
    - `uv run jarvis maintenance status --json`
 

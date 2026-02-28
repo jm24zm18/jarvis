@@ -133,16 +133,21 @@ async def extract_state_items(
     if int(settings.state_extraction_enabled) != 1:
         return ExtractResult(skipped_reason="disabled")
     timeout_seconds = max(1, int(settings.state_extraction_timeout_seconds))
-    return await asyncio.wait_for(
-        _extract_state_items_impl(
-            conn=conn,
-            thread_id=thread_id,
-            router=router,
-            memory=memory,
-            actor_id=actor_id,
-        ),
-        timeout=timeout_seconds,
-    )
+    try:
+        return await asyncio.wait_for(
+            _extract_state_items_impl(
+                conn=conn,
+                thread_id=thread_id,
+                router=router,
+                memory=memory,
+                actor_id=actor_id,
+            ),
+            timeout=timeout_seconds,
+        )
+    except TimeoutError as exc:
+        raise TimeoutError(
+            f"state extraction timed out after {timeout_seconds}s"
+        ) from exc
 
 
 async def _extract_state_items_impl(

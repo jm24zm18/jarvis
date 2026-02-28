@@ -34,18 +34,18 @@ function CreateFeatureModal({ onClose }: { onClose: () => void }) {
 
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-            <div className="bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-xl p-6 w-full max-w-md space-y-4 shadow-xl">
-                <h2 className="text-lg font-semibold text-[var(--text-primary)]">New Feature Request</h2>
+            <div className="bg-bg border border-[var(--color-border)] rounded-lg p-6 w-full max-w-md space-y-4 shadow-xl">
+                <h2 className="text-lg font-mono text-xs font-semibold uppercase tracking-widest text-text2">New Feature Request</h2>
                 <Input placeholder="Title" value={title} onChange={e => setTitle(e.target.value)} />
                 <textarea
-                    className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-primary)] p-2 text-sm resize-none"
+                    className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-text p-2 text-sm resize-none"
                     rows={4}
                     placeholder="Description"
                     value={description}
                     onChange={e => setDescription(e.target.value)}
                 />
                 <select
-                    className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-primary)] p-2 text-sm"
+                    className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-text p-2 text-sm"
                     value={priority}
                     onChange={e => setPriority(e.target.value)}
                 >
@@ -91,11 +91,11 @@ function ApprovalModal({
 
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-            <div className="bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-xl p-6 w-full max-w-md space-y-4 shadow-xl">
-                <h2 className="text-lg font-semibold text-[var(--text-primary)]">
+            <div className="bg-bg border border-[var(--color-border)] rounded-lg p-6 w-full max-w-md space-y-4 shadow-xl">
+                <h2 className="text-lg font-mono text-xs font-semibold uppercase tracking-widest text-text2">
                     {decision === "approved" ? "Approve" : "Reject"} Feature Request
                 </h2>
-                <p className="text-sm text-[var(--text-muted)]">{feature.title}</p>
+                <p className="text-sm text-text3">{feature.title}</p>
                 <Input
                     placeholder="Note (optional)"
                     value={note}
@@ -245,14 +245,14 @@ function BuildRunsPanel({ feature, onClose }: { feature: FeatureRequest; onClose
 
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-            <div className="bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-xl p-6 w-full max-w-6xl h-[85vh] shadow-xl flex flex-col gap-4">
+            <div className="bg-bg border border-[var(--color-border)] rounded-lg p-6 w-full max-w-6xl h-[85vh] shadow-xl flex flex-col gap-4">
                 <div className="flex items-center justify-between">
-                    <h2 className="text-lg font-semibold text-[var(--text-primary)]">Build Runs</h2>
-                    <button onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                    <h2 className="text-lg font-mono text-xs font-semibold uppercase tracking-widest text-text2">Build Runs</h2>
+                    <button onClick={onClose} className="text-text3 hover:text-text">
                         <X size={16} />
                     </button>
                 </div>
-                <p className="text-sm text-[var(--text-muted)] truncate">{feature.title}</p>
+                <p className="text-sm text-text3 truncate">{feature.title}</p>
                 <Button
                     variant="primary"
                     icon={<Play className="h-4 w-4" />}
@@ -270,16 +270,16 @@ function BuildRunsPanel({ feature, onClose }: { feature: FeatureRequest; onClose
                     <p className="text-xs text-red-500">Failed to queue build</p>
                 )}
                 <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 flex-1 min-h-0">
-                    <div className="border border-[var(--border-default)] rounded-lg overflow-hidden min-h-0 flex flex-col">
-                        <div className="px-3 py-2 text-xs font-semibold text-[var(--text-muted)] border-b border-[var(--border-default)]">
+                    <div className="border border-[var(--color-border)] rounded-lg overflow-hidden min-h-0 flex flex-col">
+                        <div className="px-3 py-2 text-xs font-semibold text-text3 border-b border-[var(--color-border)]">
                             Runs
                         </div>
                         <div className="flex-1 overflow-y-auto p-2 space-y-2">
                             {runsLoading && runs.length === 0 && (
-                                <p className="text-xs text-[var(--text-muted)] text-center py-4">Loading runs…</p>
+                                <p className="text-xs text-text3 text-center py-4">Loading runs…</p>
                             )}
                             {runs.length === 0 && !runsLoading && (
-                                <p className="text-xs text-[var(--text-muted)] text-center py-4">No build runs yet</p>
+                                <p className="text-xs text-text3 text-center py-4">No build runs yet</p>
                             )}
                             {runs.map(run => (
                                 <div
@@ -295,8 +295,8 @@ function BuildRunsPanel({ feature, onClose }: { feature: FeatureRequest; onClose
                                     }}
                                     className={`w-full text-left text-xs border rounded-lg p-2 transition cursor-pointer ${
                                         selectedRunId === run.id
-                                            ? "border-[var(--color-brand)] bg-[var(--bg-surface)]"
-                                            : "border-[var(--border-default)] hover:bg-[var(--bg-surface)]"
+                                            ? "border-accent bg-[var(--color-surface)]"
+                                            : "border-[var(--color-border)] hover:bg-[var(--color-surface)]"
                                     }`}
                                 >
                                     <div className="flex items-center justify-between gap-2">
@@ -304,33 +304,33 @@ function BuildRunsPanel({ feature, onClose }: { feature: FeatureRequest; onClose
                                         {run.trace_id && (
                                             <Link
                                                 to={`/admin/events?trace_id=${encodeURIComponent(run.trace_id)}`}
-                                                className="text-[var(--color-brand)] hover:underline flex items-center gap-1"
+                                                className="text-accent hover:underline flex items-center gap-1"
                                             >
                                                 <ExternalLink size={12} /> Trace
                                             </Link>
                                         )}
                                     </div>
-                                    <div className="text-[var(--text-muted)] font-mono mt-1">
+                                    <div className="text-text3 font-mono mt-1">
                                         {runMetaTimestamp(run.created_at)}
                                     </div>
                                     {run.summary && (
-                                        <div className="text-[var(--text-muted)] mt-1 line-clamp-2">{run.summary}</div>
+                                        <div className="text-text3 mt-1 line-clamp-2">{run.summary}</div>
                                     )}
                                 </div>
                             ))}
                         </div>
                     </div>
 
-                    <div className="border border-[var(--border-default)] rounded-lg overflow-hidden min-h-0 flex flex-col">
-                        <div className="px-3 py-2 border-b border-[var(--border-default)] bg-[var(--bg-surface)]">
+                    <div className="border border-[var(--color-border)] rounded-lg overflow-hidden min-h-0 flex flex-col">
+                        <div className="px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
                             <div className="flex items-center justify-between gap-2">
-                                <h3 className="text-sm font-semibold text-[var(--text-primary)]">Build Chat</h3>
+                                <h3 className="text-sm font-semibold text-text">Build Chat</h3>
                                 {selectedRun && (
                                     <div className="flex items-center gap-2">
                                         {selectedRun.trace_id && (
                                             <Link
                                                 to={`/admin/events?trace_id=${encodeURIComponent(selectedRun.trace_id)}`}
-                                                className="text-xs text-[var(--color-brand)] hover:underline"
+                                                className="text-xs text-accent hover:underline"
                                             >
                                                 Open full Events trace
                                             </Link>
@@ -338,7 +338,7 @@ function BuildRunsPanel({ feature, onClose }: { feature: FeatureRequest; onClose
                                         {selectedThreadId && (
                                             <Link
                                                 to={`/chat/${selectedThreadId}`}
-                                                className="text-xs text-[var(--color-brand)] hover:underline"
+                                                className="text-xs text-accent hover:underline"
                                             >
                                                 Open Chat thread
                                             </Link>
@@ -347,7 +347,7 @@ function BuildRunsPanel({ feature, onClose }: { feature: FeatureRequest; onClose
                                 )}
                             </div>
                             {selectedRun && (
-                                <div className="mt-2 text-xs text-[var(--text-muted)] flex flex-wrap gap-2 items-center">
+                                <div className="mt-2 text-xs text-text3 flex flex-wrap gap-2 items-center">
                                     {statusBadge(selectedRun.status)}
                                     <span>trace: <span className="font-mono">{selectedRun.trace_id?.slice(0, 12) || "n/a"}</span></span>
                                     <span>created: <span className="font-mono">{runMetaTimestamp(selectedRun.created_at)}</span></span>
@@ -356,23 +356,23 @@ function BuildRunsPanel({ feature, onClose }: { feature: FeatureRequest; onClose
                             )}
                         </div>
 
-                        <div className="px-3 py-2 border-b border-[var(--border-default)]">
+                        <div className="px-3 py-2 border-b border-[var(--color-border)]">
                             {selectedRun?.summary ? (
-                                <p className="text-xs text-[var(--text-muted)]">{selectedRun.summary}</p>
+                                <p className="text-xs text-text3">{selectedRun.summary}</p>
                             ) : (
-                                <p className="text-xs text-[var(--text-muted)]">Build progress stream.</p>
+                                <p className="text-xs text-text3">Build progress stream.</p>
                             )}
                         </div>
 
                         <div ref={chatScrollRef} onScroll={onChatScroll} className="flex-1 overflow-y-auto p-3 space-y-3">
                             {!selectedRun && (
-                                <div className="text-xs text-[var(--text-muted)] text-center py-8">
+                                <div className="text-xs text-text3 text-center py-8">
                                     Select a build run to monitor live progress.
                                 </div>
                             )}
 
                             {selectedRun && !selectedThreadId && (
-                                <div className="text-xs text-[var(--text-muted)] text-center py-8">
+                                <div className="text-xs text-text3 text-center py-8">
                                     No thread attached yet. This run is likely still queued.
                                 </div>
                             )}
@@ -386,7 +386,7 @@ function BuildRunsPanel({ feature, onClose }: { feature: FeatureRequest; onClose
                             )}
 
                             {selectedRun && selectedThreadId && messagesQuery.isLoading && mergedMessages.length === 0 && (
-                                <div className="text-xs text-[var(--text-muted)] text-center py-8">Loading messages…</div>
+                                <div className="text-xs text-text3 text-center py-8">Loading messages…</div>
                             )}
 
                             {selectedRun && selectedThreadId && (messagesQuery.isError || chatError) && (
@@ -405,7 +405,7 @@ function BuildRunsPanel({ feature, onClose }: { feature: FeatureRequest; onClose
                                 !messagesQuery.isLoading &&
                                 !messagesQuery.isError &&
                                 mergedMessages.length === 0 && (
-                                    <div className="text-xs text-[var(--text-muted)] text-center py-8">
+                                    <div className="text-xs text-text3 text-center py-8">
                                         Build has not produced messages yet.
                                     </div>
                                 )}
@@ -419,7 +419,7 @@ function BuildRunsPanel({ feature, onClose }: { feature: FeatureRequest; onClose
                                         className={`max-w-[80%] rounded-lg px-3 py-2 text-xs ${
                                             msg.role === "user"
                                                 ? "bg-blue-100 dark:bg-blue-900/30 text-blue-900 dark:text-blue-100"
-                                                : "bg-[var(--bg-surface)] border border-[var(--border-default)] text-[var(--text-primary)]"
+                                                : "bg-[var(--color-surface)] border border-[var(--color-border)] text-text"
                                         }`}
                                     >
                                         <div className="font-semibold mb-1">
@@ -455,13 +455,13 @@ function FeatureCard({ item }: { item: FeatureRequest }) {
     return (
         <>
             <Card className="space-y-2">
-                <div className="text-sm font-semibold text-[var(--text-primary)]">{item.title}</div>
+                <div className="text-sm font-mono text-xs font-semibold uppercase tracking-widest text-text2">{item.title}</div>
                 <div className="flex justify-between items-center text-xs flex-wrap gap-1">
                     <Badge variant={item.priority === "critical" || item.priority === "high" ? "danger" : "info"}>
                         {item.priority}
                     </Badge>
                     <Badge variant={approvalColor}>{item.approval_status}</Badge>
-                    <span className="text-[var(--text-muted)] font-mono">{item.id.slice(0, 8)}</span>
+                    <span className="text-text3 font-mono">{item.id.slice(0, 8)}</span>
                 </div>
                 <div className="flex gap-1 flex-wrap">
                     {item.approval_status === "pending" && (
@@ -522,10 +522,10 @@ export default function AdminRoadmapPage() {
     });
 
     const columns = [
-        { key: "open", label: "Open Backlog", bg: "bg-surface" },
+        { key: "open", label: "Open Backlog", bg: "bg-[var(--color-surface)]" },
         { key: "in_progress", label: "In Progress", bg: "bg-blue-50 dark:bg-blue-900/10" },
         { key: "resolved", label: "Resolved", bg: "bg-emerald-50 dark:bg-emerald-900/10" },
-        { key: "closed", label: "Closed", bg: "bg-surface" },
+        { key: "closed", label: "Closed", bg: "bg-[var(--color-surface)]" },
     ];
 
     const items: FeatureRequest[] = (data?.items ?? []).filter(
@@ -557,7 +557,7 @@ export default function AdminRoadmapPage() {
                     />
                 </div>
                 <select
-                    className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-primary)] px-3 py-2 text-sm"
+                    className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-text px-3 py-2 text-sm"
                     value={approvalFilter}
                     onChange={e => setApprovalFilter(e.target.value)}
                 >
@@ -567,7 +567,7 @@ export default function AdminRoadmapPage() {
                     <option value="rejected">Rejected</option>
                 </select>
                 <select
-                    className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-primary)] px-3 py-2 text-sm"
+                    className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-text px-3 py-2 text-sm"
                     value={statusFilter}
                     onChange={e => setStatusFilter(e.target.value)}
                 >
@@ -586,9 +586,9 @@ export default function AdminRoadmapPage() {
                     return (
                         <div
                             key={col.key}
-                            className={`flex-1 min-w-[280px] rounded-xl flex flex-col border border-[var(--border-default)] ${col.bg}`}
+                            className={`flex-1 min-w-[280px] rounded-lg flex flex-col border border-[var(--color-border)] ${col.bg}`}
                         >
-                            <div className="p-3 border-b border-[var(--border-default)] flex justify-between items-center font-semibold text-sm">
+                            <div className="p-3 border-b border-[var(--color-border)] flex justify-between items-center font-semibold text-sm">
                                 <span>{col.label}</span>
                                 <Badge variant="default">{colItems.length}</Badge>
                             </div>
@@ -597,7 +597,7 @@ export default function AdminRoadmapPage() {
                                     <FeatureCard key={item.id} item={item} />
                                 ))}
                                 {colItems.length === 0 && (
-                                    <div className="text-center p-4 text-xs text-[var(--text-muted)] border-2 border-dashed border-[var(--border-strong)] rounded-lg">
+                                    <div className="text-center p-4 text-xs text-text3 border-2 border-dashed border-[var(--color-border-2)] rounded-lg">
                                         No features {col.label.toLowerCase()}
                                     </div>
                                 )}

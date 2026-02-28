@@ -42,7 +42,7 @@ function Protected({ children }: { children: JSX.Element }) {
     if (authCheck.isError) clearAuth();
   }, [authCheck.data, authCheck.isError, authCheck.isSuccess, clearAuth, setAuth]);
 
-  if (authCheck.isLoading) return <div className="p-4 text-sm text-ink/70">Checking session...</div>;
+  if (authCheck.isLoading) return <div className="p-4 font-mono text-xs text-text3">Checking session...</div>;
   if (authCheck.isError || !isAuthenticated) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }

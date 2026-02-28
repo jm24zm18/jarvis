@@ -86,25 +86,25 @@ export default function AdminChannelsPage() {
     <div>
       <Header title="Channels" subtitle="Manage configured messaging channels" />
 
-      <h2 className="mb-4 font-display text-xl text-[var(--text-primary)]">Telegram (Bot API)</h2>
+      <h2 className="mb-4 font-mono text-xl text-text">Telegram (Bot API)</h2>
       <Card className="mb-8">
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-2">
             Status: <Badge variant={tgEnabled ? "success" : "warning"}>{tgEnabled ? "enabled" : "disabled"}</Badge>
           </div>
-          <div className="text-sm text-[var(--text-secondary)]">
+          <div className="text-sm text-text2">
             <p className="mb-1"><strong>Bot Token:</strong> {tgToken ? "Configured (Hidden)" : "Not configured in environment"}</p>
             <p><strong>Allowed Chat IDs:</strong> {tgChats || "None configured"}</p>
           </div>
           {!tgEnabled && (
-            <p className="text-xs text-[var(--text-muted)]">
+            <p className="text-xs text-text3">
               Set TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_IDS in your production environment to enable.
             </p>
           )}
         </div>
       </Card>
 
-      <h2 className="mb-4 font-display text-xl text-[var(--text-primary)]">WhatsApp (Baileys Node Server)</h2>
+      <h2 className="mb-4 font-mono text-xl text-text">WhatsApp (Baileys Node Server)</h2>
       <Card className="mb-6">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={status === "open" || status === "connected" ? "success" : "warning"}>
@@ -154,18 +154,18 @@ export default function AdminChannelsPage() {
           </Button>
         </div>
         {status !== "open" && (disconnectCode !== null || disconnectReason) ? (
-          <p className="mt-3 text-sm text-[var(--text-secondary)]">
+          <p className="mt-3 text-sm text-text2">
             Last disconnect: {disconnectCode !== null ? `HTTP ${disconnectCode}` : "unknown"}{disconnectReason ? ` (${disconnectReason})` : ""}{pairingRequired ? ". Re-pair required." : "."}
           </p>
         ) : null}
         {pairingRequired ? (
-          <p className="mt-2 text-sm text-[var(--text-secondary)]">
+          <p className="mt-2 text-sm text-text2">
             Session logged out; run Force Re-pair and scan a new QR code.
           </p>
         ) : null}
       </Card>
 
-      <Card className="mb-6" header={<h3 className="font-display text-base text-[var(--text-primary)]">Pairing Code</h3>}>
+      <Card className="mb-6" header={<h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Pairing Code</h3>}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Input
             label="Phone Number"
@@ -179,7 +179,7 @@ export default function AdminChannelsPage() {
             </Button>
           </div>
           <div className="flex items-end">
-            <div className="rounded border border-[var(--border-default)] px-3 py-2 text-sm text-[var(--text-secondary)]">
+            <div className="rounded border border-[var(--color-border)] px-3 py-2 text-sm text-text2">
               {pairMutation.isPending
                 ? "Generating..."
                 : pairMutation.isError
@@ -194,11 +194,11 @@ export default function AdminChannelsPage() {
         </div>
       </Card>
 
-      <Card header={<h3 className="font-display text-base text-[var(--text-primary)]">QR Code</h3>}>
+      <Card header={<h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">QR Code</h3>}>
         {qr ? (
-          <img src={qr.startsWith("data:") ? qr : `data:image/png;base64,${qr}`} alt="WhatsApp QR" className="max-w-xs rounded border border-[var(--border-default)]" />
+          <img src={qr.startsWith("data:") ? qr : `data:image/png;base64,${qr}`} alt="WhatsApp QR" className="max-w-xs rounded border border-[var(--color-border)]" />
         ) : (
-          <p className="text-sm text-[var(--text-muted)]">No QR loaded.</p>
+          <p className="text-sm text-text3">No QR loaded.</p>
         )}
       </Card>
     </div>

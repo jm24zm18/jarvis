@@ -329,7 +329,7 @@ class Settings(BaseSettings):
     )
     state_max_active_items: int = Field(alias="STATE_MAX_ACTIVE_ITEMS", default=40)
     state_extraction_timeout_seconds: int = Field(
-        alias="STATE_EXTRACTION_TIMEOUT_SECONDS", default=30
+        alias="STATE_EXTRACTION_TIMEOUT_SECONDS", default=90
     )
     state_extraction_backoff_base_seconds: int = Field(
         alias="STATE_EXTRACTION_BACKOFF_BASE_SECONDS",

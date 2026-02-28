@@ -8,12 +8,14 @@ interface HeaderProps {
 
 export default function Header({ title, subtitle, icon }: HeaderProps) {
   return (
-    <header className="mb-4 border-b border-[var(--border-default)] pb-3">
+    <header className="mb-6">
       <div className="flex items-center gap-2">
-        {icon ? <span className="text-[var(--text-muted)]">{icon}</span> : null}
-        <h2 className="font-display text-2xl text-[var(--text-primary)]">{title}</h2>
+        {icon ? <span className="text-accent">{icon}</span> : null}
+        <h2 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">
+          {title}
+        </h2>
       </div>
-      {subtitle ? <p className="mt-0.5 text-sm text-[var(--text-secondary)]">{subtitle}</p> : null}
+      {subtitle ? <p className="mt-1 text-sm text-text3">{subtitle}</p> : null}
     </header>
   );
 }

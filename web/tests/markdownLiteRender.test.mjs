@@ -75,6 +75,16 @@ test("MarkdownLite preserves composed emoji graphemes in rendered HTML", async (
   assert.match(html, /👩🏽‍💻/);
 });
 
+test("MarkdownLite renders spaced list markers as proper ordered list", async () => {
+  const MarkdownLite = await loadMarkdownLite();
+  const content = "Options:\n1 . **Direct Edit** (if you have admin access).\n2 . **Request Change**.";
+  const html = renderToStaticMarkup(React.createElement(MarkdownLite, { content }));
+  assert.match(html, /<ol/);
+  assert.match(html, /<li/);
+  assert.match(html, /<strong/);
+  assert.doesNotMatch(html, /1 \. /);
+});
+
 test("MarkdownLite strips harmful control markers without breaking emoji", async () => {
   const MarkdownLite = await loadMarkdownLite();
   const content = "Status <|analysis|> ok\u202E family 👨‍👩‍👧‍👦";

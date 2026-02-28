@@ -1,30 +1,39 @@
+import { cva, type VariantProps } from "class-variance-authority";
 import type { PropsWithChildren } from "react";
+import { cn } from "../../lib/utils";
 
-type Variant = "default" | "success" | "warning" | "danger" | "info";
+const badgeVariants = cva(
+  "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+  {
+    variants: {
+      variant: {
+        default: "bg-surface-2 text-text3",
+        success: "bg-success-dim text-success",
+        warning: "bg-warning-dim text-warning",
+        danger: "bg-danger-dim text-danger",
+        info: "bg-accent-dim text-accent",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+);
 
-const variantClasses: Record<Variant, string> = {
-  default: "bg-[var(--bg-mist)] text-[var(--text-primary)] border border-[var(--border-default)]",
-  success: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-  warning: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  danger: "bg-[var(--color-danger)]/20 text-[var(--color-danger)] dark:bg-[var(--color-danger)]/30 dark:text-red-300",
-  info: "bg-[var(--color-brand)]/20 text-[var(--color-brand)] dark:bg-[var(--color-brand)]/30 dark:text-blue-300",
-};
-
-interface BadgeProps {
-  variant?: Variant;
+interface BadgeProps extends VariantProps<typeof badgeVariants> {
   className?: string;
 }
 
 export default function Badge({
-  variant = "default",
-  className = "",
+  variant,
+  className,
   children,
 }: PropsWithChildren<BadgeProps>) {
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${variantClasses[variant]} ${className}`}
-    >
+    <span className={cn(badgeVariants({ variant }), className)}>
       {children}
     </span>
   );
 }
+
+export { badgeVariants };

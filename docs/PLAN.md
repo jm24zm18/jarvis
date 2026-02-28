@@ -18,6 +18,179 @@
 - [ ] Implement RLM decomposition + child build pipeline for large feature scopes
       Accept: new `rlm` package + migration 077, `feature_request_build_runs` gains `decomposed` status, RLM config/docs updated, admin `/split` route implemented, and unit tests (`test_rlm_*`, `test_feature_split`, `test_feature_build_rlm_routing`) cover the new behavior.
 
+## Execution Update (2026-02-28, start-dev dependency + SearXNG health alignment)
+
+- Completed:
+  - Updated `start-dev.sh` to start full dependency services via `make dev` before launching API/web.
+  - Kept explicit `jarvis-baileys` restart behavior in `start-dev.sh` to preserve session reset ergonomics.
+  - Added bounded SearXNG readiness gate in `start-dev.sh`:
+    - health probe: `${SEARXNG_BASE_URL}/healthz`
+    - fallback probe: `${SEARXNG_BASE_URL}/search?q=ping&format=json`
+    - on failure: prints `docker compose ps/logs` diagnostics and actionable remediation.
+  - Updated docs to reflect the new `start-dev.sh` contract:
+    - `README.md`
+    - `docs/getting-started.md`
+    - `docs/local-development.md`
+  - Verified syntax and docs consistency:
+    - `bash -n start-dev.sh`
+    - `make docs-check`
+
+- Missing tasks discovered during implementation:
+  - Add a lightweight automated smoke check for `start-dev.sh` that validates dependency startup contract and SearXNG readiness path in CI-safe mode.
+
+- Remaining tasks before handoff:
+  - Optional runtime verification (local environment):
+    - `./start-dev.sh`
+    - `curl -fsS http://localhost:8080/healthz`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+
+## Execution Update (2026-02-28, Duplicate Reply Prevention for Stale Recovery)
+
+- Completed:
+  - Added trace-level emitted-message resolver in:
+    - `src/jarvis/tasks/agent_attempts.py`
+    - `resolve_existing_trace_message_id(...)` now returns a prior response from either:
+      - `agent_run_attempts.final_message_id` (`succeeded` attempts), or
+      - `events.event_type='agent.step.end'` payload `message_id` validated against `messages`.
+  - Updated `agent_step` idempotency checks to use emitted-message resolver before attempt start and before duplicate-guard finalization:
+    - `src/jarvis/tasks/agent.py`
+  - Hardened stale reaper to skip replay when response was already emitted:
+    - `src/jarvis/tasks/agent_recovery.py`
+    - marks stale attempt as `succeeded` with resolved `final_message_id`
+    - emits `trace.agent.step.recovery_skipped_duplicate`
+    - does not enqueue a new recovery attempt
+  - Added unit/regression coverage in:
+    - `tests/unit/test_agent_recovery.py`
+    - resolver event-fallback behavior
+    - `agent_step` short-circuit without creating attempts
+    - stale reaper duplicate-skip path with no requeue
+  - Updated operator docs for new telemetry/event semantics:
+    - `docs/runbook.md`
+
+- Missing tasks discovered during implementation:
+  - Add dedicated admin observability counters for duplicate-skip recoveries (currently visible via trace events only).
+
+- Remaining tasks before handoff:
+  - Run focused verification:
+    - `uv run pytest tests/unit/test_agent_recovery.py -q`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
+## Execution Update (2026-02-28, Standardized Number/Text Formatting in Human Output)
+
+- Completed:
+  - Added shared backend display formatting helpers in `src/jarvis/formatting/display.py` and exports in `src/jarvis/formatting/__init__.py`.
+  - Updated CLI human output paths to use consistent formatting and UTF-8-safe symbol fallback:
+    - `src/jarvis/cli/doctor.py`
+    - `src/jarvis/cli/main.py` (maintenance status/readouts)
+    - `src/jarvis/cli/test_gates.py`
+  - Enforced strict machine-only JSON mode for:
+    - `jarvis doctor --json`
+    - `jarvis test-gates --json`
+  - Added explicit UTF-8 encoding for CLI text exports in:
+    - `src/jarvis/cli/main.py` (`export`, `memory export`)
+  - Added shared frontend display formatting helpers in `web/src/lib/format.ts`.
+  - Applied shared web formatting helpers to key chat/admin surfaces:
+    - `web/src/pages/chat/index.tsx`
+    - `web/src/components/ui/ThinkingPanel.tsx`
+    - `web/src/pages/admin/events/index.tsx`
+    - `web/src/pages/admin/threads/index.tsx`
+    - `web/src/pages/admin/governance/index.tsx`
+  - Added/updated tests:
+    - `tests/unit/test_display_formatting.py`
+    - `tests/unit/test_cli_doctor.py`
+    - `tests/unit/test_cli_test_gates_cmd.py`
+
+- Missing tasks discovered during implementation:
+  - Expand timestamp/number helper adoption across additional admin pages still rendering raw timestamp strings.
+
+- Remaining tasks before handoff:
+  - Run focused verification:
+    - `uv run pytest tests/unit/test_display_formatting.py tests/unit/test_cli_doctor.py tests/unit/test_cli_test_gates_cmd.py -q`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
+## Execution Update (2026-02-28, Thread Logs Permission + State Extraction Retry + Web Number Rendering)
+
+- Completed:
+  - Added `thread_logs` to `agents/main/identity.md` `allowed_tools` so main-agent policy no longer denies the tool with `R4`.
+  - Updated main-agent seed identity template to include `thread_logs`:
+    - `src/jarvis/agents/seed.py`
+  - Implemented bounded timeout retry for state extraction execution in:
+    - `src/jarvis/tasks/memory.py`
+  - Added timeout retry scheduling events for observability:
+    - `state.extraction.retry_scheduled`
+    - `trace.state.extraction.retry_scheduled`
+  - Added retry metadata on extraction success/failure payloads when retries occur:
+    - `attempt_count`, `max_attempts`, `retry_attempted`
+    - terminal timeout failures additionally include `retry_delays_seconds`
+  - Hardened web display sanitization and numeric rendering normalization in:
+    - `web/src/components/ui/textSanitizer.js`
+    - `web/src/lib/format.ts`
+    - Added format-control stripping (while preserving emoji ZWJ sequences) and broader Unicode-space normalization for timestamp-like numeric clusters.
+  - Applied tabular numeric rendering to timestamp-heavy UI surfaces:
+    - `web/src/components/ui/ThinkingPanel.tsx`
+    - `web/src/pages/chat/index.tsx`
+    - `web/src/pages/admin/events/index.tsx`
+  - Added/updated tests:
+    - `tests/unit/test_memory_tasks.py`
+    - `tests/unit/test_agent_seed.py`
+    - `web/tests/textSanitizer.test.mjs`
+    - `web/tests/thinkingFormat.test.mjs`
+    - Added regression for Unicode format-control number splitting in `web/tests/textSanitizer.test.mjs`.
+  - Updated operations documentation for new extraction retry lifecycle:
+    - `docs/runbook.md`
+
+- Missing tasks discovered during implementation:
+  - Add retry-attempt counters/filters for state extraction in admin observability pages (currently available via raw events only).
+
+- Remaining tasks before handoff:
+  - Run focused verification:
+    - `uv run pytest tests/unit/test_memory_tasks.py tests/unit/test_agent_seed.py -q`
+    - `npm --prefix web run test -- textSanitizer.test.mjs thinkingFormat.test.mjs`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
+## Execution Update (2026-02-28, Docs Remediation for Approvals + LM Studio + Config Drift)
+
+- Completed:
+  - Added dedicated operator workflow doc:
+    - `docs/channel-reply-approvals.md`
+  - Expanded API usage semantics for:
+    - provider config validation/constraints
+    - `/api/v1/system/status` payload contract
+    - non-web reply approval status transitions and endpoint caveats
+  - Linked approval workflow doc across docs surfaces:
+    - `docs/README.md`
+    - `docs/api-usage-guide.md`
+    - `docs/web-admin-guide.md`
+  - Reconciled configuration docs with runtime/config source of truth:
+    - added missing vars from `src/jarvis/config.py` + `.env.example`
+    - removed stale doc-only vars not present in runtime config
+  - Updated LM Studio local-dev setup guidance in `docs/local-development.md`.
+  - Added CLI setup-wizard env group reference in `docs/cli-reference.md`.
+  - Synced migration-range drift in `AGENTS.md` and `CLAUDE.md` (`001..081`).
+  - Updated generated API docs preface in `scripts/generate_api_docs.py`.
+  - Updated `README.md` implemented-feature summary for provider set and approval-gate schema.
+
+- Missing tasks discovered during implementation:
+  - None.
+
+- Remaining tasks before handoff:
+  - None. Validation complete (`make docs-generate`, `make docs-check`).
+
 ## Execution Update (2026-02-27, Think-Tag Sanitization Hardening)
 
 - Completed:

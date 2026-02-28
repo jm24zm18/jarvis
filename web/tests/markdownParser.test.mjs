@@ -210,6 +210,25 @@ test("preserves composed emoji graphemes in parsed text", () => {
   assert.match(blocks[0].text, /👩🏽‍💻/);
 });
 
+test("recognizes spaced ordered list markers as ol", () => {
+  const content = "1 . **Direct Edit**\n2 . **Request Change**";
+  const blocks = parseBlocks(content);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].type, "ol");
+  assert.equal(blocks[0].items.length, 2);
+  assert.equal(blocks[0].items[0], "**Direct Edit**");
+  assert.equal(blocks[0].items[1], "**Request Change**");
+});
+
+test("normalizes spaced bold markers to proper bold", () => {
+  const content = "* *Direct Edit* * and * *Request* * are options.";
+  const blocks = parseBlocks(content);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].type, "paragraph");
+  assert.match(blocks[0].text, /\*\*Direct Edit\*\*/);
+  assert.match(blocks[0].text, /\*\*Request\*\*/);
+});
+
 test("strips harmful control markers while preserving flags and keycaps", () => {
   const content = "hello <|analysis|>\u202E flag 🇺🇸 keycap 1️⃣";
   const blocks = parseBlocks(content);

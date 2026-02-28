@@ -45,6 +45,7 @@ Unknown routes redirect to `/chat` after auth.
 - Approvals can be managed from:
   - API: `/api/v1/channel-reply-approvals*`, `/api/v1/channel-reply-permissions*`
   - Chat commands in an admin thread: `/channel-approve*`, `/channel-deny`, `/channel-allow-list`, `/channel-allow-revoke`
+- Full workflow and payload contract: `docs/channel-reply-approvals.md`
 
 ## Provider Admin Page
 
@@ -143,6 +144,12 @@ Rendering guardrails:
 - Chat bubbles use min-width and character-based width constraints to avoid horizontal bleed on dense responses.
 - Markdown tables use fixed layout and cell wrapping defaults.
 - Prose and table cells use overflow-wrap safeguards to keep long tokens inside bubble bounds.
+
+## Timestamp and Number Display Standards
+
+- Human-facing timestamps are rendered through shared frontend formatting helpers (`web/src/lib/format.ts`) instead of ad-hoc `toLocale*` calls.
+- Byte values are rendered as human-readable units (for example `1.2 MB`) via shared helpers.
+- Raw API payload timestamps and numeric values remain unchanged; formatting is applied only at render-time.
 
 ## Related Docs
 

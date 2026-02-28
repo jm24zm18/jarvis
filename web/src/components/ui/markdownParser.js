@@ -38,6 +38,10 @@ const HR_RULE = /^\s*([-*_])\s*\1\s*\1[\s\-*_]*$/;
 
 function normalizeMarkdown(markdown) {
   let text = sanitizeForDisplay(markdown);
+  // Normalize spaced bold markers that some models emit: "* *text* *" → "**text**"
+  text = text.replace(/\* \*([^*\n]+)\* \*/g, "**$1**");
+  // Normalize spaced ordered list markers: "1 . Item" → "1. Item"
+  text = text.replace(/^(\s*)(\d+) \. /gm, "$1$2. ");
   text = text.replace(/([^\n])\s+(---|\*\*\*|___)\s+(#{1,6}\s+)/g, "$1\n$2\n$3");
   text = text.replace(/:\s+(#{1,6}\s+)/g, ":\n$1");
   text = text.replace(/:\s+\*\s+/g, ":\n* ");

@@ -1,4 +1,7 @@
 import asyncio
+from unittest.mock import patch
+
+import pytest
 
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import ensure_channel, ensure_open_thread, ensure_system_state, ensure_user
@@ -174,6 +177,43 @@ def test_extractor_supersedes_with_guardrails() -> None:
     assert old_row["status"] == "superseded"
     assert old_row["replaced_by"] is not None
     assert "instead" in str(old_row["supersession_evidence"])
+
+
+def test_extractor_timeout_has_descriptive_message() -> None:
+    """asyncio.wait_for raises bare TimeoutError(); verify it is re-raised with message."""
+
+    class _SlowRouter:
+        async def generate(self, *_args, **_kwargs):
+            await asyncio.sleep(999)
+
+    with get_conn() as conn:
+        thread_id = _seed_thread(conn, "15555550155")
+        store = StateStore()
+        base_stamp = "2026-02-01T00:00:00+00:00"
+        store.set_extraction_watermark(conn, thread_id, base_stamp, "msg_0")
+        conn.execute(
+            "INSERT INTO messages(id, thread_id, role, content, created_at) VALUES(?,?,?,?,?)",
+            ("msg_1", thread_id, "user", "hello", "2026-02-02T00:00:00+00:00"),
+        )
+        with patch("jarvis.memory.state_extractor.get_settings") as mock_settings:
+            mock_settings.return_value.state_extraction_enabled = 1
+            mock_settings.return_value.state_extraction_timeout_seconds = 5
+            mock_settings.return_value.state_extraction_max_messages = 50
+            mock_settings.return_value.state_max_active_items = 40
+            mock_settings.return_value.state_extraction_merge_threshold = 0.92
+            mock_settings.return_value.state_extraction_conflict_threshold = 0.85
+            with pytest.raises(TimeoutError) as exc_info:
+                asyncio.run(
+                    extract_state_items(
+                        conn,
+                        thread_id=thread_id,
+                        router=_SlowRouter(),
+                        memory=_Memory(),
+                    )
+                )
+    msg = str(exc_info.value)
+    assert "timed out" in msg
+    assert "5s" in msg
 
 
 def test_extractor_skips_for_provider_quota_cooldown() -> None:

@@ -36,6 +36,12 @@ make dev
 
 This starts Ollama, SearXNG, and SGLang from `docker-compose.yml`.
 
+If you want one command that starts dependencies and launches API + web dev servers:
+
+```bash
+./start-dev.sh
+```
+
 ## 3. Start API
 
 In terminal A:

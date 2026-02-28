@@ -1,4 +1,5 @@
 import type { PropsWithChildren, ReactNode } from "react";
+import { cn } from "../../lib/utils";
 
 interface CardProps {
   header?: ReactNode;
@@ -10,20 +11,27 @@ interface CardProps {
 export default function Card({
   header,
   footer,
-  className = "",
+  className,
   noPadding = false,
   children,
 }: PropsWithChildren<CardProps>) {
   return (
     <div
-      className={`rounded-xl border border-[var(--border-default)] bg-surface shadow-sm transition-all duration-200 hover:shadow-md ${className}`}
+      className={cn(
+        "rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] transition-colors",
+        className,
+      )}
     >
       {header ? (
-        <div className="border-b border-[var(--border-default)] px-4 py-3 bg-[var(--bg-mist)]/50 rounded-t-xl">{header}</div>
+        <div className="border-b border-[var(--color-border)] px-4 py-3 bg-transparent rounded-t-lg">
+          {header}
+        </div>
       ) : null}
       <div className={noPadding ? "" : "px-4 py-3"}>{children}</div>
       {footer ? (
-        <div className="border-t border-[var(--border-default)] px-4 py-3 bg-[var(--bg-mist)]/30 rounded-b-xl">{footer}</div>
+        <div className="border-t border-[var(--color-border)] px-4 py-3 rounded-b-lg">
+          {footer}
+        </div>
       ) : null}
     </div>
   );

@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import sqlite3
+import time
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
@@ -21,6 +22,8 @@ from jarvis.providers.factory import build_fallback_provider, build_primary_prov
 from jarvis.providers.router import ProviderRouter
 
 _STATE_EXTRACTION_BACKOFF: dict[str, dict[str, object]] = {}
+_STATE_EXTRACTION_TIMEOUT_RETRY_MAX_ATTEMPTS = 3
+_STATE_EXTRACTION_TIMEOUT_RETRY_DELAYS_SECONDS = (1, 2)
 logger = logging.getLogger(__name__)
 
 
@@ -189,16 +192,81 @@ def extract_thread_state(
             build_fallback_provider(settings),
         )
         memory = MemoryService()
-        try:
-            result = asyncio.run(
-                extract_state_items(
-                    conn=conn,
-                    thread_id=thread_id,
-                    router=router,
-                    memory=memory,
-                    actor_id=actor_id,
+        max_attempts = max(1, _STATE_EXTRACTION_TIMEOUT_RETRY_MAX_ATTEMPTS)
+        retry_delays = list(_STATE_EXTRACTION_TIMEOUT_RETRY_DELAYS_SECONDS)
+        attempt_count = 0
+        retry_attempted = False
+        retry_delays_used: list[int] = []
+        final_exc: Exception | None = None
+        result = None
+
+        while attempt_count < max_attempts:
+            attempt_count += 1
+            try:
+                result = asyncio.run(
+                    extract_state_items(
+                        conn=conn,
+                        thread_id=thread_id,
+                        router=router,
+                        memory=memory,
+                        actor_id=actor_id,
+                    )
                 )
-            )
+                final_exc = None
+                break
+            except TimeoutError as exc:
+                final_exc = exc
+                if attempt_count >= max_attempts:
+                    break
+                retry_attempted = True
+                delay_index = min(attempt_count - 1, len(retry_delays) - 1)
+                retry_in_seconds = (
+                    int(retry_delays[delay_index]) if delay_index >= 0 else 1
+                )
+                retry_delays_used.append(retry_in_seconds)
+                retry_payload: dict[str, object] = {
+                    "thread_id": thread_id,
+                    "actor_id": actor_id,
+                    "attempt": attempt_count + 1,
+                    "max_attempts": max_attempts,
+                    "retry_in_seconds": retry_in_seconds,
+                    "reason": "timeout",
+                }
+                if trace_id:
+                    retry_payload["trace_id"] = trace_id
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id or new_id("trc"),
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="state.extraction.retry_scheduled",
+                        component="memory",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(retry_payload),
+                        payload_redacted_json=json.dumps(redact_payload(retry_payload)),
+                    ),
+                )
+                if trace_id:
+                    _notify_trace_event(
+                        conn,
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        event_type="state.extraction.retry_scheduled",
+                        payload=retry_payload,
+                    )
+                time.sleep(max(1, retry_in_seconds))
+            except Exception as exc:
+                final_exc = exc
+                break
+
+        try:
+            if result is None and final_exc is not None:
+                raise final_exc
+            if result is None:
+                raise RuntimeError("state extraction returned no result")
             payload.update(
                 {
                     "items_extracted": result.items_extracted,
@@ -218,6 +286,10 @@ def extract_thread_state(
             else:
                 _clear_state_backoff(thread_id)
                 event_type = "state.extraction.complete"
+            if retry_attempted:
+                payload["attempt_count"] = attempt_count
+                payload["max_attempts"] = max_attempts
+                payload["retry_attempted"] = True
             emit_event(
                 conn,
                 EventInput(
@@ -246,6 +318,11 @@ def extract_thread_state(
             error = f"{type(exc).__name__}: {exc}"
             payload["error"] = error
             payload.update(_extract_primary_failure_fields(error))
+            if retry_attempted:
+                payload["attempt_count"] = attempt_count
+                payload["max_attempts"] = max_attempts
+                payload["retry_attempted"] = True
+                payload["retry_delays_seconds"] = retry_delays_used
             if (
                 payload.get("primary_failure_kind") in {"quota_retryable", "quota_terminal"}
                 and "skipping primary until" in error.lower()

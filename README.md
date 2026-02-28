@@ -8,7 +8,7 @@ Multi-agent async framework with WhatsApp and Telegram integration, event-source
 - In-process asyncio task runner and task routing.
 - SQLite DB connection + ordered SQL migrations.
 - Event system with trace-aware event emission.
-- Provider interface with Gemini + SGLang adapters and fallback routing.
+- Provider interface with OpenRouter, SGLang, and LM Studio adapters and fallback routing.
 - Tool registry/runtime with deny-by-default policy hooks and audit events.
 - Memory service with embeddings, semantic retrieval, FTS fallback, and thread compaction.
 - Agent orchestrator loop with bounded tool-call iterations.
@@ -16,6 +16,7 @@ Multi-agent async framework with WhatsApp and Telegram integration, event-source
 - Agent bundle loader (`agents/*`) with startup validation and tool-permission seeding.
 - Role-aware web auth (`user` / `admin`) with ownership-scoped APIs and WebSocket checks.
 - Managed skill package support with install metadata and CLI management.
+- Non-web outbound reply approval gate with admin approvals and sender/channel allowlist persistence (`081_channel_reply_approvals.sql`).
 
 ## Quick start
 
@@ -25,6 +26,12 @@ uv sync
 make migrate
 make dev
 make api
+```
+
+Or run everything for local API + web development in one command:
+
+```bash
+./start-dev.sh
 ```
 
 ## Web UI

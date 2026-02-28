@@ -87,7 +87,7 @@ export default function AdminSelfUpdatePage() {
       <Header
         title="Self-Update"
         subtitle="Review proposed and tested patches, then issue approval"
-        icon={<RefreshCw className="h-6 w-6" />}
+        icon={<RefreshCw className="h-5 w-5" />}
       />
       <Card className="mb-6">
         <div className="flex flex-wrap items-center gap-2">
@@ -98,7 +98,7 @@ export default function AdminSelfUpdatePage() {
           >
             SLO {String(slo.data?.status ?? "unknown")}
           </Badge>
-          <span className="text-xs text-[var(--text-secondary)]">
+          <span className="font-mono text-xs text-text2">
             {Array.isArray(slo.data?.reasons) && slo.data?.reasons.length > 0
               ? slo.data?.reasons.join(" | ")
               : "No active SLO degradation reasons."}
@@ -111,7 +111,7 @@ export default function AdminSelfUpdatePage() {
         <Card
           header={
             <div className="flex items-center justify-between">
-              <span className="font-display text-sm font-semibold text-[var(--text-primary)]">
+              <span className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">
                 Patches
               </span>
               <Badge variant="info">{allPatches.length} total</Badge>
@@ -123,7 +123,7 @@ export default function AdminSelfUpdatePage() {
         >
           <div className="space-y-2">
             {pagedPatches.length === 0 && (
-              <p className="py-8 text-center text-sm text-[var(--text-muted)]">
+              <p className="py-8 text-center font-mono text-xs text-text3">
                 No patches found.
               </p>
             )}
@@ -133,8 +133,8 @@ export default function AdminSelfUpdatePage() {
                 onClick={() => setSelectedTraceId(patch.trace_id)}
                 className={`w-full rounded-lg border px-3 py-2.5 text-left transition-colors ${
                   selectedTraceId === patch.trace_id
-                    ? "border-ember/40 bg-ember/5"
-                    : "border-[var(--border-default)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-mist)]"
+                    ? "border-accent/30 bg-accent-dim"
+                    : "border-[var(--color-border)] hover:border-[var(--color-border-2)] hover:bg-surface-2"
                 }`}
               >
                 <div className="flex items-center justify-between">
@@ -143,11 +143,11 @@ export default function AdminSelfUpdatePage() {
                     <Badge variant={patchStateVariant(patch.state)}>{patch.state}</Badge>
                   </div>
                 </div>
-                <p className="mt-1.5 truncate text-xs text-[var(--text-muted)]">
+                <p className="mt-1.5 truncate font-mono text-xs text-text3">
                   {patch.trace_id}
                 </p>
                 {patch.detail && (
-                  <p className="mt-1 line-clamp-2 text-xs text-[var(--text-secondary)]">
+                  <p className="mt-1 line-clamp-2 font-mono text-xs text-text2">
                     {patch.detail}
                   </p>
                 )}
@@ -161,8 +161,8 @@ export default function AdminSelfUpdatePage() {
           header={
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <RefreshCw className="h-4 w-4 text-[var(--text-muted)]" />
-                <span className="font-display text-sm font-semibold text-[var(--text-primary)]">
+                <RefreshCw className="h-4 w-4 text-accent" />
+                <span className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">
                   Patch Detail
                 </span>
               </div>
@@ -176,28 +176,28 @@ export default function AdminSelfUpdatePage() {
         >
           {!selectedTraceId ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
-              <RefreshCw className="mb-3 h-10 w-10 text-[var(--text-muted)]" />
-              <p className="text-sm text-[var(--text-muted)]">
+              <RefreshCw className="mb-3 h-10 w-10 text-text4" />
+              <p className="font-mono text-xs text-text3">
                 Select a patch from the list to review
               </p>
             </div>
           ) : detail.isLoading ? (
-            <p className="py-12 text-center text-sm text-[var(--text-muted)]">Loading patch...</p>
+            <p className="py-12 text-center font-mono text-xs text-text3">Loading patch...</p>
           ) : detail.data ? (
             <div className="space-y-4">
               {/* Patch Meta */}
               <div className="flex flex-wrap items-center gap-3">
-                <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-mist)] px-3 py-1.5">
-                  <span className="text-xs text-[var(--text-muted)]">Trace ID</span>
-                  <p className="text-sm font-medium text-[var(--text-primary)]">
+                <div className="rounded-lg border border-[var(--color-border)] bg-surface-2 px-3 py-1.5">
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-text3">Trace ID</span>
+                  <p className="font-mono text-xs text-text">
                     {detail.data.trace_id}
                   </p>
                 </div>
-                <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-mist)] px-3 py-1.5">
-                  <span className="text-xs text-[var(--text-muted)]">State</span>
+                <div className="rounded-lg border border-[var(--color-border)] bg-surface-2 px-3 py-1.5">
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-text3">State</span>
                   <div className="mt-0.5 flex items-center gap-1.5">
                     {patchStateIcon(detail.data.state)}
-                    <span className="text-sm font-medium text-[var(--text-primary)]">
+                    <span className="font-mono text-xs text-text">
                       {detail.data.state}
                     </span>
                   </div>
@@ -212,7 +212,7 @@ export default function AdminSelfUpdatePage() {
                   {approve.isPending ? "Approving..." : "Approve Tested Patch"}
                 </Button>
                 <Link
-                  className="rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-xs hover:bg-[var(--bg-mist)]"
+                  className="rounded-md border border-[var(--color-border)] px-2.5 py-1 font-mono text-xs hover:bg-surface-2"
                   to={`/admin/events?trace_id=${encodeURIComponent(detail.data.trace_id)}`}
                 >
                   View In Events
@@ -224,15 +224,15 @@ export default function AdminSelfUpdatePage() {
               </div>
 
               {detail.data.detail && (
-                <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-mist)] px-3 py-2">
-                  <span className="text-xs text-[var(--text-muted)]">Detail</span>
-                  <p className="mt-0.5 text-sm text-[var(--text-primary)]">{detail.data.detail}</p>
+                <div className="rounded-lg border border-[var(--color-border)] bg-surface-2 px-3 py-2">
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-text3">Detail</span>
+                  <p className="mt-0.5 font-mono text-xs text-text">{detail.data.detail}</p>
                 </div>
               )}
 
               {/* Diff Viewer */}
               <div>
-                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                <h4 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-widest text-text3">
                   Diff
                 </h4>
                 <DiffViewer diff={detail.data.diff} />
