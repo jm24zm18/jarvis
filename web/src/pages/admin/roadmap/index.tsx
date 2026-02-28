@@ -373,7 +373,9 @@ function BuildRunsPanel({ feature, onClose }: { feature: FeatureRequest; onClose
 
                             {selectedRun && !selectedThreadId && (
                                 <div className="text-xs text-text3 text-center py-8">
-                                    No thread attached yet. This run is likely still queued.
+                                    {selectedRun.status === "decomposed"
+                                        ? "This parent run was decomposed into child builds. Open child feature runs to monitor execution."
+                                        : "No thread attached yet. This run is likely still queued."}
                                 </div>
                             )}
 

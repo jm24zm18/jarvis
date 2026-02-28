@@ -252,7 +252,7 @@ export interface FeatureBuildRun {
   feature_id: string;
   trace_id: string;
   thread_id: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
+  status: "queued" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled" | "decomposed";
   summary: string;
   attempt_count: number;
   max_attempts: number;

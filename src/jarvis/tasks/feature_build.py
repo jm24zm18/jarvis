@@ -421,32 +421,37 @@ def run_feature_build(
         rlm_config = build_rlm_config(settings)
         with get_conn() as conn:
             feature_row = conn.execute(
-                "SELECT title, description FROM bug_reports WHERE id=? AND kind='feature' LIMIT 1",
+                (
+                    "SELECT title, description, parent_id "
+                    "FROM bug_reports WHERE id=? AND kind='feature' LIMIT 1"
+                ),
                 (feature_id,),
             ).fetchone()
         feature_title = str(feature_row["title"] or title) if feature_row is not None else title
         feature_description = (
             str(feature_row["description"] or "") if feature_row is not None else ""
         )
-        broad_scope = _is_broad_scope_feature(title=feature_title, description=feature_description)
-        force_decompose = (
-            not rlm_config.active
-            and broad_scope
-            and int(settings.feature_build_auto_decompose) == 1
-        )
-        rlm_result = _decompose_and_split(
-            run_id=run_id,
-            feature_id=feature_id,
-            trace_id=trace_id,
-            actor_id=actor_id,
-            settings=settings,
-            rlm_config=rlm_config,
-            force=force_decompose,
-            use_fallback=int(settings.feature_build_decompose_fallback) == 1,
-            layer_strict=int(settings.feature_build_subtask_layer_strict) == 1,
-        )
-        if rlm_result is not None:
-            return rlm_result
+        parent_id = str(feature_row["parent_id"] or "").strip() if feature_row is not None else ""
+        if not parent_id:
+            broad_scope = _is_broad_scope_feature(title=feature_title, description=feature_description)
+            force_decompose = (
+                not rlm_config.active
+                and broad_scope
+                and int(settings.feature_build_auto_decompose) == 1
+            )
+            rlm_result = _decompose_and_split(
+                run_id=run_id,
+                feature_id=feature_id,
+                trace_id=trace_id,
+                actor_id=actor_id,
+                settings=settings,
+                rlm_config=rlm_config,
+                force=force_decompose,
+                use_fallback=int(settings.feature_build_decompose_fallback) == 1,
+                layer_strict=int(settings.feature_build_subtask_layer_strict) == 1,
+            )
+            if rlm_result is not None:
+                return rlm_result
         with get_conn() as conn:
             run_row = get_feature_build_run(conn, run_id)
             if run_row is None:
@@ -867,10 +872,15 @@ def _decompose_and_split(
         return None
     with get_conn() as conn:
         feature_row = conn.execute(
-            "SELECT id, title, description FROM bug_reports WHERE id=? AND kind='feature' LIMIT 1",
+            (
+                "SELECT id, title, description, parent_id "
+                "FROM bug_reports WHERE id=? AND kind='feature' LIMIT 1"
+            ),
             (feature_id,),
         ).fetchone()
     if feature_row is None:
+        return None
+    if str(feature_row["parent_id"] or "").strip():
         return None
     feature_title = str(feature_row["title"] or "")
     feature_description = str(feature_row["description"] or "")

@@ -55,6 +55,7 @@ test("roadmap build chat has events and thread quick links", () => {
 
 test("roadmap build chat contains expected empty states", () => {
   assert.match(source, /No thread attached yet/);
+  assert.match(source, /parent run was decomposed into child builds/i);
   assert.match(source, /Build has not produced messages yet/);
   assert.match(source, /Load older/);
 });

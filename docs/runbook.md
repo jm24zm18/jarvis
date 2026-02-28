@@ -69,6 +69,20 @@ Periodic health visibility:
    - `feature.build.retry.manual_enqueued`
    - a new `feature_request_build_runs` row in `queued` state.
 
+### Recover Child Runs After Parent Decomposition
+
+Use this when a parent run is `decomposed` and one or more child runs failed before execution due to historical re-decomposition crashes.
+
+1. Identify parent feature and decomposed run ID in `/admin/roadmap`.
+2. Trigger recovery:
+   - `POST /api/v1/feature-requests/{feature_id}/build-runs/{run_id}/recover-children`
+3. Inspect response counters:
+   - `attempted`: eligible child runs considered for re-enqueue
+   - `queued`: successfully re-enqueued
+   - `skipped`: already active or not eligible
+   - `errors`: enqueue failures
+4. Re-open Build Runs modal on each child feature and verify new queued/running rows.
+
 ## GitHub Integration Ops
 
 1. PR automation:

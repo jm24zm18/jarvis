@@ -1,6 +1,7 @@
 """Integration tests for feature request approval and build-run API."""
 
 import os
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -9,7 +10,11 @@ from fastapi.testclient import TestClient
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import create_feature_build_run
+from jarvis.events.models import EventInput
+from jarvis.events.writer import emit_event
+from jarvis.ids import new_id
 from jarvis.main import app
+from jarvis.services.feature_requests import split_feature_request
 
 _MANAGED_CLIENTS: list[TestClient] = []
 
@@ -289,6 +294,141 @@ def test_non_admin_cannot_reconcile_stale_feature_build_runs() -> None:
 
     r = client.post(
         "/api/v1/feature-requests/build-runs/reconcile",
+        headers=_headers(user_token),
+    )
+    assert r.status_code == 403
+
+
+def test_admin_can_recover_decomposed_child_build_runs() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    admin_token, _ = _setup(client)
+    feature_id = _create_feature(client, admin_token, title="Parent Recoverable")
+    approved = client.patch(
+        f"/api/v1/feature-requests/{feature_id}/approval",
+        headers=_headers(admin_token),
+        json={"decision": "approved"},
+    )
+    assert approved.status_code == 200
+
+    with get_conn() as conn:
+        child_ids = split_feature_request(
+            conn,
+            parent_id=feature_id,
+            subtasks=[
+                {
+                    "title": "Child A",
+                    "description": "desc",
+                    "acceptance_criteria": "tests",
+                    "target_files": ["src/jarvis/tasks/feature_build.py"],
+                },
+                {
+                    "title": "Child B",
+                    "description": "desc",
+                    "acceptance_criteria": "tests",
+                    "target_files": ["src/jarvis/routes/api/bugs.py"],
+                },
+                {
+                    "title": "Child C",
+                    "description": "desc",
+                    "acceptance_criteria": "tests",
+                    "target_files": ["docs/runbook.md"],
+                },
+            ],
+            actor_id="usr_admin",
+            split_reason="fallback_split",
+        )
+        parent_run_id = create_feature_build_run(
+            conn,
+            feature_id=feature_id,
+            created_by="usr_admin",
+            trace_id="trc_parent_recover",
+        )
+        conn.execute(
+            "UPDATE feature_request_build_runs SET status='decomposed' WHERE id=?",
+            (parent_run_id,),
+        )
+        create_feature_build_run(conn, feature_id=child_ids[0], created_by="usr_admin")
+        conn.execute(
+            "UPDATE feature_request_build_runs SET status='failed', summary=? WHERE feature_id=?",
+            (
+                (
+                    "feature build task crashed: HTTPException: 400: Cannot split a child "
+                    "feature request (no grandchildren allowed)"
+                ),
+                child_ids[0],
+            ),
+        )
+        create_feature_build_run(conn, feature_id=child_ids[1], created_by="usr_admin")
+        conn.execute(
+            "UPDATE feature_request_build_runs SET status='failed', summary=? WHERE feature_id=?",
+            ("some unrelated failure", child_ids[1]),
+        )
+        create_feature_build_run(conn, feature_id=child_ids[2], created_by="usr_admin")
+        conn.execute(
+            "UPDATE feature_request_build_runs SET status='running' WHERE feature_id=?",
+            (child_ids[2],),
+        )
+        emit_event(
+            conn,
+            EventInput(
+                trace_id="trc_parent_recover",
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=None,
+                event_type="feature.build.decomposed",
+                component="feature_build",
+                actor_type="system",
+                actor_id="feature_build",
+                payload_json=json.dumps(
+                    {
+                        "run_id": parent_run_id,
+                        "feature_id": feature_id,
+                        "child_ids": child_ids,
+                        "decomposition_mode": "fallback_split",
+                    }
+                ),
+                payload_redacted_json=json.dumps(
+                    {
+                        "run_id": parent_run_id,
+                        "feature_id": feature_id,
+                        "child_ids": child_ids,
+                        "decomposition_mode": "fallback_split",
+                    }
+                ),
+            ),
+        )
+
+    recover = client.post(
+        f"/api/v1/feature-requests/{feature_id}/build-runs/{parent_run_id}/recover-children",
+        headers=_headers(admin_token),
+    )
+    assert recover.status_code == 200
+    body = recover.json()
+    assert body["attempted"] == 1
+    assert body["skipped"] == 2
+    assert (body["queued"] + body["errors"]) == 1
+    actions = {item["child_feature_id"]: item["action"] for item in body["items"]}
+    assert actions[child_ids[0]] in {"queued", "error"}
+    assert actions[child_ids[1]] == "skipped"
+    assert actions[child_ids[2]] == "skipped"
+
+
+def test_non_admin_cannot_recover_decomposed_child_build_runs() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = _managed_client()
+    admin_token, user_token = _setup(client)
+    feature_id = _create_feature(client, admin_token, title="Parent Not Allowed")
+    with get_conn() as conn:
+        run_id = create_feature_build_run(conn, feature_id=feature_id, created_by="usr_admin")
+        conn.execute(
+            "UPDATE feature_request_build_runs SET status='decomposed' WHERE id=?",
+            (run_id,),
+        )
+    r = client.post(
+        f"/api/v1/feature-requests/{feature_id}/build-runs/{run_id}/recover-children",
         headers=_headers(user_token),
     )
     assert r.status_code == 403

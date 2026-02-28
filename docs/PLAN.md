@@ -18,6 +18,39 @@
 - [ ] Implement RLM decomposition + child build pipeline for large feature scopes
       Accept: new `rlm` package + migration 077, `feature_request_build_runs` gains `decomposed` status, RLM config/docs updated, admin `/split` route implemented, and unit tests (`test_rlm_*`, `test_feature_split`, `test_feature_build_rlm_routing`) cover the new behavior.
 
+## Execution Update (2026-02-28, Child build recovery + decomposed run UX clarity)
+
+- Completed:
+  - Fixed child feature build routing to skip decomposition for non-root features (`bug_reports.parent_id` set).
+  - Added defensive guard in `_decompose_and_split(...)` to no-op for child features.
+  - Added admin recovery API for decomposed parent runs:
+    - `POST /api/v1/feature-requests/{feature_id}/build-runs/{run_id}/recover-children`
+    - re-enqueues eligible failed child runs (historical re-decomposition crash signature) and reports per-child actions.
+  - Updated roadmap Build Runs modal empty-state copy:
+    - decomposed parent runs without `thread_id` now explicitly direct operators to child feature runs instead of implying queued state.
+  - Added regression coverage:
+    - `tests/unit/test_feature_build_task.py` child builds skip decomposition path.
+    - `tests/integration/test_feature_approval_api.py` recovery endpoint admin path + authorization.
+    - `web/tests/adminRoadmapContracts.test.mjs` decomposed-state copy contract.
+  - Updated docs:
+    - `docs/api-usage-guide.md`
+    - `docs/web-admin-guide.md`
+    - `docs/runbook.md`
+
+- Missing tasks discovered during implementation:
+  - Add direct parent->child navigation links/actions in roadmap admin UI for decomposed runs (currently copy-only guidance).
+  - Add operator-facing filter for recoverable child failures by signature in Build Runs view.
+
+- Remaining tasks before handoff:
+  - Run focused verification:
+    - `uv run pytest tests/unit/test_feature_build_task.py tests/integration/test_feature_approval_api.py -v`
+    - `node --test web/tests/adminRoadmapContracts.test.mjs`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
 ## Execution Update (2026-02-28, Cross-thread memory recall hardening)
 
 - Completed:

@@ -15,6 +15,7 @@ from jarvis.db.queries import (
     update_feature_build_run,
 )
 from jarvis.rlm.config import build_rlm_config
+from jarvis.services.feature_requests import split_feature_request
 from jarvis.tasks.feature_build import (
     _build_attempt_capsule,
     _capsule_stable_hash,
@@ -343,3 +344,83 @@ def test_decompose_and_split_uses_deterministic_fallback(monkeypatch) -> None:
     assert row is not None
     assert str(row["status"]) == "decomposed"
     assert str(row["execution_mode"]) == "fallback_split"
+
+
+def test_run_feature_build_skips_decomposition_for_child_feature(monkeypatch) -> None:
+    queued: list[tuple[str, dict[str, object], str]] = []
+
+    class _Runner:
+        def send_task(self, name: str, kwargs: dict[str, object], queue: str) -> bool:
+            queued.append((name, kwargs, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+
+    called = {"count": 0}
+
+    def _capture_decompose(**_kwargs):
+        called["count"] += 1
+        return None
+
+    monkeypatch.setattr("jarvis.tasks.feature_build._decompose_and_split", _capture_decompose)
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        reporter_id = ensure_user(conn, "child_feature_reporter")
+        source_channel = ensure_channel(conn, reporter_id, "web")
+        source_thread = create_thread(conn, reporter_id, source_channel)
+        parent_id, _ = create_feature_request(
+            conn,
+            title="Parent feature",
+            description="big scope touching api and web",
+            priority="medium",
+            reporter_id=reporter_id,
+            thread_id=source_thread,
+            trace_id="trc_parent",
+        )
+        set_feature_request_approval(conn, parent_id, decision="approved", actor_id=reporter_id)
+        child_ids = split_feature_request(
+            conn,
+            parent_id=parent_id,
+            subtasks=[
+                {
+                    "title": "Child feature",
+                    "description": "Implement API updates",
+                    "acceptance_criteria": "tests added",
+                    "target_files": ["src/jarvis/routes/api/bugs.py"],
+                },
+                {
+                    "title": "Child docs",
+                    "description": "Document behavior",
+                    "acceptance_criteria": "docs updated",
+                    "target_files": ["docs/api-usage-guide.md"],
+                },
+                {
+                    "title": "Child tests",
+                    "description": "Add regression tests",
+                    "acceptance_criteria": "tests pass",
+                    "target_files": ["tests/unit/test_feature_build_task.py"],
+                },
+            ],
+            actor_id=reporter_id,
+            split_reason="fallback_split",
+        )
+        child_id = child_ids[0]
+        run_id = create_feature_build_run(
+            conn,
+            feature_id=child_id,
+            created_by=reporter_id,
+            source_thread_id=source_thread,
+        )
+
+    result = run_feature_build(
+        run_id=run_id,
+        feature_id=child_id,
+        trace_id="trc_child",
+        title="Child feature",
+        actor_id=reporter_id,
+    )
+
+    assert result["status"] == "running"
+    assert called["count"] == 0
+    assert queued

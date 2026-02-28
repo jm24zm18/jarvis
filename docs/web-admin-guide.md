@@ -122,7 +122,8 @@ Retry metadata (feature builds with auto-retry enabled):
 - `retry_state=exhausted` means retry budget was consumed and the run is terminally failed.
 
 Empty/error states:
-- `No thread attached yet` when run has no `thread_id` yet.
+- `No thread attached yet` when run has no `thread_id` yet and has not started execution.
+- `This parent run was decomposed into child builds...` when a parent run is terminally decomposed and execution continues in child runs.
 - `Build has not produced messages yet` when thread history is still empty.
 - Retry action on message fetch error.
 

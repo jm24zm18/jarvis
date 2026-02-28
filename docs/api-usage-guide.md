@@ -169,6 +169,9 @@ POST  /api/v1/feature-requests/{id}/build      # admin only, requires approval_s
 GET   /api/v1/feature-requests/{id}/build-runs  # admin only
   Returns: { items: [...], feature_id }
 
+POST  /api/v1/feature-requests/{id}/build-runs/{run_id}/recover-children  # admin only
+  Re-enqueues eligible failed child runs for a decomposed parent run.
+
 GET   /api/v1/feature-requests?approval_status=pending|approved|rejected  # filter by approval
 ```
 
@@ -177,6 +180,10 @@ Build-runs payload fields include:
 - `source_thread_id`: original feature-request thread that build routing prefers when configured
 - `execution_mode`: `direct`, `decomposed`, or `fallback_split`
 - `updated_at`: run row freshness timestamp (used by roadmap live monitor)
+
+Child recovery endpoint response includes:
+- `attempted`, `queued`, `skipped`, `errors`: aggregate recovery results.
+- `items[]`: per-child action details (`queued`, `skipped`, `error`) with reasons/run IDs.
 
 Idempotent create behavior:
 - `POST /api/v1/feature-requests` dedupes retries when `trace_id` is provided and

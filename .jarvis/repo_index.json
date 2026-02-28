@@ -313,7 +313,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-28T19:02:14.131614+00:00",
+  "generated_at": "2026-02-28T19:34:53.439522+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",

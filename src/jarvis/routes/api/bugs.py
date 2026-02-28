@@ -414,3 +414,22 @@ def reconcile_feature_build_runs_endpoint(
             limit=limit,
         )
     return result
+
+
+@router.post("/feature-requests/{feature_id}/build-runs/{run_id}/recover-children")
+def recover_feature_build_children_endpoint(
+    feature_id: str,
+    run_id: str,
+    ctx: UserContext = Depends(require_admin),  # noqa: B008
+) -> dict[str, object]:
+    from jarvis.services.feature_requests import recover_decomposed_child_builds
+
+    with get_conn() as conn:
+        result = recover_decomposed_child_builds(
+            conn,
+            feature_id=feature_id,
+            run_id=run_id,
+            actor_id=ctx.user_id,
+            task_runner=get_task_runner(),
+        )
+    return result

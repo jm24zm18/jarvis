@@ -21,6 +21,8 @@ from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
 
+_CHILD_DECOMPOSE_CRASH_SIGNATURE = "Cannot split a child feature request (no grandchildren allowed)"
+
 
 def approve_feature_request(
     conn: sqlite3.Connection,
@@ -272,3 +274,151 @@ def split_feature_request(
         ),
     )
     return child_ids
+
+
+def recover_decomposed_child_builds(
+    conn: sqlite3.Connection,
+    *,
+    feature_id: str,
+    run_id: str,
+    actor_id: str,
+    task_runner: object,
+) -> dict[str, object]:
+    parent = conn.execute(
+        "SELECT id, kind FROM bug_reports WHERE id=? LIMIT 1",
+        (feature_id,),
+    ).fetchone()
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Feature request not found")
+    if str(parent["kind"]) != "feature":
+        raise HTTPException(status_code=400, detail="Record is not a feature request")
+
+    run_row = conn.execute(
+        (
+            "SELECT id, trace_id, status, execution_mode FROM feature_request_build_runs "
+            "WHERE id=? AND feature_id=? LIMIT 1"
+        ),
+        (run_id, feature_id),
+    ).fetchone()
+    if run_row is None:
+        raise HTTPException(status_code=404, detail="Build run not found for feature")
+    if str(run_row["status"]) != "decomposed":
+        raise HTTPException(status_code=409, detail="Build run must be decomposed")
+
+    trace_id = str(run_row["trace_id"] or "").strip()
+    child_ids: list[str] = []
+    if trace_id:
+        event_row = conn.execute(
+            (
+                "SELECT payload_json FROM events "
+                "WHERE trace_id=? AND event_type='feature.build.decomposed' "
+                "AND json_extract(payload_json, '$.run_id')=? "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (trace_id, run_id),
+        ).fetchone()
+        if event_row is not None:
+            try:
+                payload = json.loads(str(event_row["payload_json"] or "{}"))
+            except json.JSONDecodeError:
+                payload = {}
+            raw_child_ids = payload.get("child_ids", [])
+            if isinstance(raw_child_ids, list):
+                child_ids = [str(item).strip() for item in raw_child_ids if str(item).strip()]
+    if not child_ids:
+        raise HTTPException(status_code=404, detail="No child feature builds found for parent run")
+
+    items: list[dict[str, object]] = []
+    attempted = 0
+    queued = 0
+    skipped = 0
+    errors = 0
+
+    for child_id in child_ids:
+        child_row = conn.execute(
+            "SELECT id, parent_id FROM bug_reports WHERE id=? AND kind='feature' LIMIT 1",
+            (child_id,),
+        ).fetchone()
+        if child_row is None or str(child_row["parent_id"] or "") != feature_id:
+            skipped += 1
+            items.append(
+                {
+                    "child_feature_id": child_id,
+                    "action": "skipped",
+                    "reason": "not_child_of_parent",
+                }
+            )
+            continue
+
+        latest = conn.execute(
+            (
+                "SELECT id, status, summary FROM feature_request_build_runs "
+                "WHERE feature_id=? ORDER BY created_at DESC LIMIT 1"
+            ),
+            (child_id,),
+        ).fetchone()
+        if latest is not None:
+            status = str(latest["status"] or "").strip()
+            summary = str(latest["summary"] or "")
+            if status in {"queued", "running"}:
+                skipped += 1
+                items.append(
+                    {
+                        "child_feature_id": child_id,
+                        "action": "skipped",
+                        "reason": "already_active",
+                        "existing_run_id": str(latest["id"]),
+                    }
+                )
+                continue
+            if status != "failed" or _CHILD_DECOMPOSE_CRASH_SIGNATURE not in summary:
+                skipped += 1
+                items.append(
+                    {
+                        "child_feature_id": child_id,
+                        "action": "skipped",
+                        "reason": "not_eligible",
+                        "existing_run_id": str(latest["id"]),
+                    }
+                )
+                continue
+
+        attempted += 1
+        queued_result = enqueue_feature_build(
+            conn,
+            child_id,
+            actor_id=actor_id,
+            task_runner=task_runner,
+        )
+        if bool(queued_result.get("queued")):
+            queued += 1
+            items.append(
+                {
+                    "child_feature_id": child_id,
+                    "action": "queued",
+                    "new_run_id": str(queued_result.get("run_id") or ""),
+                    "trace_id": str(queued_result.get("trace_id") or ""),
+                }
+            )
+        else:
+            errors += 1
+            items.append(
+                {
+                    "child_feature_id": child_id,
+                    "action": "error",
+                    "reason": "enqueue_failed",
+                    "new_run_id": str(queued_result.get("run_id") or ""),
+                }
+            )
+
+    return {
+        "feature_id": feature_id,
+        "parent_run_id": run_id,
+        "trace_id": trace_id,
+        "execution_mode": str(run_row["execution_mode"] or ""),
+        "attempted": attempted,
+        "queued": queued,
+        "skipped": skipped,
+        "errors": errors,
+        "items": items,
+    }

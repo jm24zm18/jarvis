@@ -50,6 +50,7 @@ Auth levels:
 | `PATCH` | `/api/v1/feature-requests/{feature_id}/approval` | `admin` | `set_feature_approval_api_v1_feature_requests__feature_id__approval_patch` | `application/json` | `200, 422` |
 | `POST` | `/api/v1/feature-requests/{feature_id}/build` | `admin` | `trigger_feature_build_api_v1_feature_requests__feature_id__build_post` | `-` | `200, 422` |
 | `GET` | `/api/v1/feature-requests/{feature_id}/build-runs` | `admin` | `list_feature_build_runs_endpoint_api_v1_feature_requests__feature_id__build_runs_get` | `-` | `200, 422` |
+| `POST` | `/api/v1/feature-requests/{feature_id}/build-runs/{run_id}/recover-children` | `admin` | `recover_feature_build_children_endpoint_api_v1_feature_requests__feature_id__build_runs__run_id__recover_children_post` | `-` | `200, 422` |
 | `POST` | `/api/v1/feature-requests/{feature_id}/split` | `admin` | `split_feature_request_endpoint_api_v1_feature_requests__feature_id__split_post` | `application/json` | `200, 422` |
 | `GET` | `/api/v1/followups/threads/{thread_id}` | `auth` | `get_followup_status_api_v1_followups_threads__thread_id__get` | `-` | `200, 422` |
 | `POST` | `/api/v1/followups/threads/{thread_id}/disable` | `auth` | `disable_followups_api_v1_followups_threads__thread_id__disable_post` | `-` | `200, 422` |
