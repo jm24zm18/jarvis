@@ -84,7 +84,7 @@ def test_split_feature_request_fails_on_child_parent():
 
 def test_split_route_dry_run_does_not_persist():
     feature_id = _setup_feature()
-    admin_ctx = UserContext(user_id="admin", role="admin", scopes=frozenset({"*"}))
+    admin_ctx = UserContext(user_id="admin")
     subtotal = FeatureSplitSubtask(
         title="Dry run",
         description="Desc",

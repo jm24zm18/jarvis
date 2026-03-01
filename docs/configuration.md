@@ -176,7 +176,7 @@ Source of truth: `src/jarvis/config.py`.
 | `SGLANG_TOOL_CHOICE` | str | `auto` | Tool choice mode for SGLang provider (`auto`, `none`, or a specific function). |
 | `OPENROUTER_TOOL_CHOICE` | str | `auto` | Tool choice mode for OpenRouter provider (`auto`, `none`, or a specific function). |
 | `OPENROUTER_PARALLEL_TOOL_CALLS` | int | `1` | When `1` (default), allows parallel tool calls for OpenRouter/frontier models. Set to `0` to disable. |
-| `LMSTUDIO_BASE_URL` | str | `http://127.0.0.1:1234/v1` | LM Studio OpenAI-compatible endpoint. |
+| `LMSTUDIO_BASE_URL` | str | `http://127.0.0.1:1234` | LM Studio base URL (runtime normalizes to `/v1` automatically). |
 | `LMSTUDIO_MODEL` | str | `local-model` | LM Studio model name. |
 | `LMSTUDIO_API_KEY` | str | `` | Optional LM Studio API key. |
 | `LMSTUDIO_TIMEOUT_SECONDS` | int | `600` | LM Studio request timeout. |
@@ -293,6 +293,15 @@ Provider admin runtime note:
 | `MAINTENANCE_TIMEOUT_SECONDS` | int | `1800` | Per-command timeout in seconds. |
 | `MAINTENANCE_CREATE_BUGS` | int | `1` | Create bug reports on command failures. |
 | `MAINTENANCE_WORKDIR` | str | `` | Optional override working directory for maintenance commands. |
+| `DEVSWARM_MONITOR_INTERVAL_SECONDS` | int | `600` | In-process deterministic DevSwarm monitor interval (`0` disables). |
+| `DEVSWARM_WORKTREES_ROOT` | str | `` | Optional absolute root for DevSwarm worktree directories (default `.jarvis/worktrees`). |
+| `DEVSWARM_LOGS_ROOT` | str | `` | Optional absolute root for worker log files (default `.jarvis/logs`). |
+| `DEVSWARM_PROMPTS_ROOT` | str | `` | Optional absolute root for persisted worker prompts (default `.jarvis/prompts`). |
+| `DEVSWARM_MAX_ATTEMPTS` | int | `3` | Max spawn attempts per swarm task before terminal failure. |
+| `DEVSWARM_OPENCODE_COMMAND_TEMPLATE` | str | `` | Optional worker command template override (`{model}`, `{prompt_file}`, `{task_id}` placeholders). When empty, Jarvis auto-detects compatible `opencode run` flags; swarm create/spawn fail fast if OpenCode binary/config preflight fails. Bare model IDs are normalized to `lmstudio/<model>` for OpenCode compatibility. |
+| `DEVSWARM_BLOCKED_ENV_KEYS` | str | `GITHUB_TOKEN,...` | Comma-delimited env keys explicitly removed from worker process environment. |
+| `DEVSWARM_WHATSAPP_NOTIFY_ENABLED` | int | `1` | Enable WhatsApp notifications on `needs_attention`/`ready_for_review` transitions. |
+| `DEVSWARM_WHATSAPP_TARGETS` | str | `` | Optional CSV target override (falls back to `HUMAN_ESCALATION_TARGETS`). |
 
 ### API and Web UI Security
 

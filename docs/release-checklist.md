@@ -20,14 +20,12 @@ Use this checklist for each staging->production release candidate.
   - test-integration
   - coverage
 
-## Security and RBAC verification
-- [ ] Non-admin user cannot read/update other users' threads.
-- [ ] Non-admin user cannot subscribe to other users' threads via WebSocket.
-- [ ] Non-admin user cannot call admin-only APIs:
+## Security and Auth verification
+- [ ] Unauthenticated requests are rejected on protected endpoints.
+- [ ] Authenticated sessions can execute protected admin/control-plane APIs:
   - `POST /api/v1/system/lockdown`
   - `/api/v1/permissions/*`
   - `/api/v1/selfupdate/patches/*/approve`
-- [ ] Admin user can execute admin-only APIs.
 - [ ] `tests/integration/test_authorization.py` passes in CI and locally.
 
 ## 24h Readiness Soak

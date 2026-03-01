@@ -17,6 +17,7 @@ def _register_tasks(runner: TaskRunner) -> None:
         backup,
         channel,
         dependency_steward,
+        devswarm,
         events,
         feature_build,
         followups,
@@ -41,6 +42,7 @@ def _register_tasks(runner: TaskRunner) -> None:
     runner.register("jarvis.tasks.channel.send_channel_message", channel.send_channel_message)
     runner.register("jarvis.tasks.channel.send_whatsapp_message", channel.send_whatsapp_message)
     runner.register("jarvis.tasks.channel.cleanup_stale_typing", channel.cleanup_stale_typing)
+    runner.register("jarvis.tasks.devswarm.monitor_tasks", devswarm.monitor_tasks)
     runner.register(
         "jarvis.tasks.github.github_issue_sync_bug_report",
         github.github_issue_sync_bug_report,
@@ -156,6 +158,11 @@ def get_periodic_scheduler() -> PeriodicScheduler:
         scheduler.add("jarvis.tasks.events.run_event_maintenance", 604800)
         scheduler.add("jarvis.tasks.system.db_vacuum", 2592000)
         scheduler.add("jarvis.tasks.channel.cleanup_stale_typing", 10)
+        if settings.devswarm_monitor_interval_seconds > 0:
+            scheduler.add(
+                "jarvis.tasks.devswarm.monitor_tasks",
+                float(max(10, int(settings.devswarm_monitor_interval_seconds))),
+            )
         scheduler.add("jarvis.tasks.feature_build.reconcile_stale_feature_build_runs", 60)
         scheduler.add(
             "jarvis.tasks.feature_build.dispatch_due_feature_build_retries",

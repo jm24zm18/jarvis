@@ -296,9 +296,7 @@ def create_trigger(
     payload: dict[str, object],
     ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, str]:
-    """Create a new webhook trigger (admin only)."""
-    if not ctx.is_admin:
-        raise HTTPException(status_code=403, detail="admin required")
+    """Create a new webhook trigger."""
 
     thread_id = str(payload.get("thread_id", "")).strip()
     if not thread_id:
@@ -320,9 +318,7 @@ def create_trigger(
 
 @router.get("/webhooks/triggers")
 def list_triggers(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
-    """List all webhook triggers (admin only)."""
-    if not ctx.is_admin:
-        raise HTTPException(status_code=403, detail="admin required")
+    """List all webhook triggers."""
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT id, thread_id, agent_id, prompt_template, enabled, created_at "

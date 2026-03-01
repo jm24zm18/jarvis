@@ -8,40 +8,14 @@ import secrets
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
-from jarvis.auth.dependencies import UserContext
 from jarvis.auth.service import mint_restricted_token, validate_token
 from jarvis.policy.engine import SCOPE_TOOL_MAP, decision
-
-# ---------------------------------------------------------------------------
-# UserContext.has_scope
-# ---------------------------------------------------------------------------
-
-def test_has_scope_wildcard_grants_any() -> None:
-    ctx = UserContext(user_id="usr_1", role="admin", scopes=frozenset({"*"}))
-    assert ctx.has_scope("memory:read") is True
-    assert ctx.has_scope("media:write") is True
-    assert ctx.has_scope("exec_host") is True
-
-
-def test_has_scope_namespace_wildcard_grants_namespace() -> None:
-    ctx = UserContext(user_id="usr_1", role="user", scopes=frozenset({"memory:*"}))
-    assert ctx.has_scope("memory:read") is True
-    assert ctx.has_scope("memory:write") is True
-    assert ctx.has_scope("media:read") is False
-
-
-def test_has_scope_exact_match_and_miss() -> None:
-    ctx = UserContext(user_id="usr_1", role="user", scopes=frozenset({"memory:read"}))
-    assert ctx.has_scope("memory:read") is True
-    assert ctx.has_scope("memory:write") is False
-    assert ctx.has_scope("media:read") is False
-
 
 # ---------------------------------------------------------------------------
 # mint_restricted_token + validate_token
 # ---------------------------------------------------------------------------
 
-def test_mint_restricted_token_inserts_correct_scopes(tmp_path) -> None:
+def test_mint_restricted_token_creates_valid_session(tmp_path) -> None:
     db_path = str(tmp_path / "test.db")
     os.environ["APP_DB"] = db_path
     from jarvis.config import get_settings
@@ -52,8 +26,8 @@ def test_mint_restricted_token_inserts_correct_scopes(tmp_path) -> None:
 
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO users(id, external_id, role, scopes, created_at) VALUES(?,?,?,?,?)",
-            ("usr_test", "ext_test", "user", '["memory:read"]', datetime.now(UTC).isoformat()),
+            "INSERT INTO users(id, external_id, created_at) VALUES(?,?,?)",
+            ("usr_test", "ext_test", datetime.now(UTC).isoformat()),
         )
         raw_token = mint_restricted_token(conn, "usr_test", ["memory:read"], ttl_minutes=15)
 
@@ -63,11 +37,7 @@ def test_mint_restricted_token_inserts_correct_scopes(tmp_path) -> None:
         result = validate_token(conn, raw_token)
 
     assert result is not None
-    user_id, role, scopes = result
-    assert user_id == "usr_test"
-    assert role == "user"
-    assert "memory:read" in scopes
-    assert "*" not in scopes
+    assert result == "usr_test"
 
     get_settings.cache_clear()
 
@@ -83,8 +53,8 @@ def test_expired_restricted_token_returns_none(tmp_path) -> None:
 
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO users(id, external_id, role, scopes, created_at) VALUES(?,?,?,?,?)",
-            ("usr_exp", "ext_exp", "user", '["memory:read"]', datetime.now(UTC).isoformat()),
+            "INSERT INTO users(id, external_id, created_at) VALUES(?,?,?)",
+            ("usr_exp", "ext_exp", datetime.now(UTC).isoformat()),
         )
         raw_token = secrets.token_urlsafe(48)
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
@@ -92,17 +62,15 @@ def test_expired_restricted_token_returns_none(tmp_path) -> None:
         conn.execute(
             (
                 "INSERT INTO web_sessions("
-                "id, user_id, role, token_hash, created_at, expires_at, scopes"
-                ") VALUES(?,?,?,?,?,?,?)"
+                "id, user_id, token_hash, created_at, expires_at"
+                ") VALUES(?,?,?,?,?)"
             ),
             (
                 "wss_exp",
                 "usr_exp",
-                "user",
                 token_hash,
                 datetime.now(UTC).isoformat(),
                 past,
-                '["memory:read"]',
             ),
         )
 

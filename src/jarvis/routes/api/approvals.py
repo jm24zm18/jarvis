@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from jarvis.auth.dependencies import UserContext, require_admin
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.db.connection import get_conn
 from jarvis.services.approvals import (
     ALLOWED_ACTIONS,
@@ -25,7 +25,7 @@ class CreateApprovalBody(BaseModel):
 
 @router.get("/approvals")
 def list_approvals_endpoint(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     action: str | None = None,
     status: str | None = None,
     target_ref: str | None = None,
@@ -47,7 +47,7 @@ def list_approvals_endpoint(
 @router.post("/approvals")
 def create_approval_endpoint(
     body: CreateApprovalBody,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     with get_conn() as conn:
         result = create_approval_record(
@@ -63,7 +63,7 @@ def create_approval_endpoint(
 @router.post("/approvals/{approval_id}/revoke")
 def revoke_approval_endpoint(
     approval_id: str,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     with get_conn() as conn:
         result = revoke_approval_record(conn, approval_id, actor_id=ctx.user_id)

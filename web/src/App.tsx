@@ -19,6 +19,7 @@ import AdminChannelsPage from "./pages/admin/channels";
 import AdminRepoPage from "./pages/admin/repo";
 import AdminRoadmapPage from "./pages/admin/roadmap";
 import AdminApprovalsPage from "./pages/admin/approvals";
+import AdminSwarmPage from "./pages/admin/swarm";
 import { me } from "./api/endpoints";
 import { useAuthStore } from "./stores/auth";
 
@@ -36,7 +37,7 @@ function Protected({ children }: { children: JSX.Element }) {
 
   useEffect(() => {
     if (authCheck.isSuccess) {
-      setAuth(authCheck.data.user_id, authCheck.data.role);
+      setAuth(authCheck.data.user_id);
       return;
     }
     if (authCheck.isError) clearAuth();
@@ -76,6 +77,7 @@ export default function App() {
                 <Route path="admin/repo" element={<AdminRepoPage />} />
                 <Route path="admin/roadmap" element={<AdminRoadmapPage />} />
                 <Route path="admin/approvals" element={<AdminApprovalsPage />} />
+                <Route path="admin/swarm" element={<AdminSwarmPage />} />
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Routes>
             </Shell>

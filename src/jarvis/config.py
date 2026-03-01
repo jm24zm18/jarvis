@@ -308,7 +308,7 @@ class Settings(BaseSettings):
     sglang_tool_choice: str = Field(alias="SGLANG_TOOL_CHOICE", default="auto")
     openrouter_tool_choice: str = Field(alias="OPENROUTER_TOOL_CHOICE", default="auto")
     openrouter_parallel_tool_calls: int = Field(alias="OPENROUTER_PARALLEL_TOOL_CALLS", default=1)
-    lmstudio_base_url: str = Field(alias="LMSTUDIO_BASE_URL", default="http://127.0.0.1:1234/v1")
+    lmstudio_base_url: str = Field(alias="LMSTUDIO_BASE_URL", default="http://127.0.0.1:1234")
     lmstudio_model: str = Field(alias="LMSTUDIO_MODEL", default="local-model")
     lmstudio_api_key: str = Field(alias="LMSTUDIO_API_KEY", default="")
     lmstudio_timeout_seconds: int = Field(alias="LMSTUDIO_TIMEOUT_SECONDS", default=600)
@@ -453,6 +453,30 @@ class Settings(BaseSettings):
     maintenance_timeout_seconds: int = Field(alias="MAINTENANCE_TIMEOUT_SECONDS", default=1800)
     maintenance_create_bugs: int = Field(alias="MAINTENANCE_CREATE_BUGS", default=1)
     maintenance_workdir: str = Field(alias="MAINTENANCE_WORKDIR", default="")
+    devswarm_monitor_interval_seconds: int = Field(
+        alias="DEVSWARM_MONITOR_INTERVAL_SECONDS",
+        default=600,
+    )
+    devswarm_worktrees_root: str = Field(alias="DEVSWARM_WORKTREES_ROOT", default="")
+    devswarm_logs_root: str = Field(alias="DEVSWARM_LOGS_ROOT", default="")
+    devswarm_prompts_root: str = Field(alias="DEVSWARM_PROMPTS_ROOT", default="")
+    devswarm_max_attempts: int = Field(alias="DEVSWARM_MAX_ATTEMPTS", default=3)
+    devswarm_opencode_command_template: str = Field(
+        alias="DEVSWARM_OPENCODE_COMMAND_TEMPLATE",
+        default="",
+    )
+    devswarm_blocked_env_keys: str = Field(
+        alias="DEVSWARM_BLOCKED_ENV_KEYS",
+        default=(
+            "GITHUB_TOKEN,WHATSAPP_ACCESS_TOKEN,WHATSAPP_VERIFY_TOKEN,WHATSAPP_WEBHOOK_SECRET,"
+            "WEB_AUTH_SETUP_PASSWORD,LMSTUDIO_API_KEY,OPENROUTER_API_KEY"
+        ),
+    )
+    devswarm_whatsapp_notify_enabled: int = Field(
+        alias="DEVSWARM_WHATSAPP_NOTIFY_ENABLED",
+        default=1,
+    )
+    devswarm_whatsapp_targets: str = Field(alias="DEVSWARM_WHATSAPP_TARGETS", default="")
     github_token: str = Field(alias="GITHUB_TOKEN", default="")
     github_webhook_secret: str = Field(alias="GITHUB_WEBHOOK_SECRET", default="")
     webhook_replay_window_minutes: int = Field(

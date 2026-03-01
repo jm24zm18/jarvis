@@ -131,12 +131,12 @@ Use this when a parent run is `decomposed` and one or more child runs failed bef
 4. Rotate unlock code with `jarvis.tasks.system.rotate_unlock_code`.
 5. Manual lockdown API is admin-only: `POST /api/v1/system/lockdown`.
 
-## Auth and RBAC Ops
+## Auth Ops
 
-1. Web sessions carry role (`user` or `admin`).
-2. Admin-only APIs include lockdown, permissions, and self-update approval surfaces.
-3. Non-admin users are ownership-scoped to their own resources.
-4. Validate boundaries: `uv run pytest tests/integration/test_authorization.py -v`.
+1. Web sessions are single-admin and map to `system:root`.
+2. Protected APIs require a valid authenticated session token.
+3. Validate auth boundaries (unauthenticated rejected; authenticated allowed):
+   `uv run pytest tests/integration/test_authorization.py -v`.
 
 ## Memory Governance Ops
 

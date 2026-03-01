@@ -20,6 +20,7 @@ from jarvis.routes.api import (
     schedules,
     selfupdate,
     stories,
+    swarm,
     system,
     threads,
     webhooks,
@@ -36,6 +37,7 @@ router.include_router(followups.router)
 router.include_router(memory.router)
 router.include_router(media.router)
 router.include_router(schedules.router)
+router.include_router(swarm.router)
 router.include_router(selfupdate.router)
 router.include_router(permissions.router)
 router.include_router(approvals.router)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from jarvis.auth.dependencies import UserContext, require_admin
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.db.connection import get_conn
 from jarvis.ids import new_id
 from jarvis.services.channel_reply_approval import (
@@ -35,7 +35,7 @@ class RevokePermissionBody(BaseModel):
 
 @router.get("/channel-reply-approvals")
 def list_channel_reply_approvals(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     status: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -50,7 +50,7 @@ def list_channel_reply_approvals(
 def approve_channel_reply(
     request_id: str,
     body: ApproveBody,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     mode = str(body.mode or "once").strip().lower()
     if mode not in {"once", "always"}:
@@ -69,7 +69,7 @@ def approve_channel_reply(
 def reject_channel_reply(
     request_id: str,
     body: RejectBody,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     with get_conn() as conn:
         return reject_request(
@@ -83,7 +83,7 @@ def reject_channel_reply(
 
 @router.get("/channel-reply-permissions")
 def list_channel_reply_permissions(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     status: str | None = "active",
 ) -> dict[str, object]:
     del ctx
@@ -94,7 +94,7 @@ def list_channel_reply_permissions(
 @router.post("/channel-reply-permissions/revoke")
 def revoke_channel_reply_permission(
     body: RevokePermissionBody,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     with get_conn() as conn:
         return revoke_permission(

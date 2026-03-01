@@ -211,6 +211,7 @@ def test_provider_factory_builds_openrouter_as_primary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PRIMARY_PROVIDER", "openrouter")
+    monkeypatch.setenv("FALLBACK_PROVIDER", "")
     monkeypatch.setenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
     get_settings.cache_clear()
     try:
@@ -242,6 +243,7 @@ def test_provider_factory_supports_switching_primary_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PRIMARY_PROVIDER", "sglang")
+    monkeypatch.setenv("FALLBACK_PROVIDER", "")
     monkeypatch.setenv("SGLANG_MODEL", "openai/gpt-oss-120b")
     monkeypatch.setenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
     get_settings.cache_clear()
@@ -259,6 +261,7 @@ def test_provider_factory_supports_lmstudio_primary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PRIMARY_PROVIDER", "lmstudio")
+    monkeypatch.setenv("FALLBACK_PROVIDER", "")
     monkeypatch.setenv("LMSTUDIO_MODEL", "qwen2.5-coder-7b-instruct")
     monkeypatch.setenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
     monkeypatch.setenv("SGLANG_MODEL", "openai/gpt-oss-120b")

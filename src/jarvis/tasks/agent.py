@@ -62,6 +62,7 @@ from jarvis.tasks.feature_build import (  # noqa: E402
     save_capsule,
 )
 from jarvis.tasks.human_escalation import request_human_escalation  # noqa: E402
+from jarvis.tools import devswarm as devswarm_tool  # noqa: E402
 from jarvis.tools.host import execute_host_command  # noqa: E402
 from jarvis.tools.persona import update_persona  # noqa: E402
 from jarvis.tools.registry import ToolRegistry  # noqa: E402
@@ -2349,6 +2350,64 @@ def _build_registry(
                 },
             },
             "required": ["query"],
+        },
+    )
+    registry.register(
+        "devswarm.spawn_worker",
+        "Create or spawn a DevSwarm worker in an isolated worktree+tmux session",
+        devswarm_tool.spawn_worker,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Existing task ID to spawn"},
+                "description": {"type": "string", "description": "Task description when creating"},
+                "repo_path": {"type": "string", "description": "Repo path for new task"},
+                "model": {"type": "string", "description": "Model override"},
+                "task_type": {
+                    "type": "string",
+                    "enum": ["feature", "bugfix", "refactor"],
+                    "description": "Task category",
+                },
+            },
+        },
+    )
+    registry.register(
+        "devswarm.send_tmux",
+        "Send a nudge message to a DevSwarm tmux session",
+        devswarm_tool.send_tmux,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Task ID"},
+                "message": {"type": "string", "description": "Nudge text"},
+            },
+            "required": ["task_id", "message"],
+        },
+    )
+    registry.register(
+        "devswarm.check_tasks",
+        "Run deterministic monitor checks across active DevSwarm tasks",
+        devswarm_tool.check_tasks,
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Max active tasks to evaluate"},
+            },
+        },
+    )
+    registry.register(
+        "devswarm.cleanup",
+        "Kill tmux sessions and clean up DevSwarm worktrees",
+        devswarm_tool.cleanup,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Optional single task ID"},
+                "keep_worktrees": {
+                    "type": "boolean",
+                    "description": "If true, keep worktree directories",
+                },
+            },
         },
     )
 

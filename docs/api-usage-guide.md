@@ -10,7 +10,7 @@ Human-oriented guide for common API workflows. For complete endpoint inventory, 
 
 Web UI uses an HTTP-only `jarvis_session` cookie for authenticated requests.
 Bearer headers remain supported for compatibility and CLI/test flows.
-`external_id` in login payload is bounded to 256 characters; oversized values are rejected.
+`external_id` in login payload is no longer supported and returns `422`.
 
 ## Provider Config Flow (Admin)
 
@@ -54,7 +54,7 @@ Runtime behavior:
 3. Post message: `POST /api/v1/threads/{thread_id}/messages`
 4. Read message history: `GET /api/v1/threads/{thread_id}/messages`
 
-Ownership is enforced for non-admin users across thread and message APIs.
+All authenticated sessions are treated as the root admin identity.
 
 ## Media Flow
 
@@ -81,13 +81,33 @@ Scope enforcement:
 - Update: `PATCH /api/v1/schedules/{schedule_id}`
 - Dispatch history: `GET /api/v1/schedules/{schedule_id}/dispatches`
 
+## DevSwarm Tasks
+
+- List tasks: `GET /api/v1/swarm/tasks`
+- Create task: `POST /api/v1/swarm/tasks`
+- Nudge worker: `POST /api/v1/swarm/tasks/{task_id}/nudge`
+- Cleanup task: `POST /api/v1/swarm/tasks/{task_id}/cleanup`
+
+Create payload:
+- `description` (required)
+- `task_type` (`feature|bugfix|refactor`)
+- `model` (optional)
+
+Cleanup payload:
+- `remove_worktrees` (optional, default `false` in API/UI)
+
+Notes:
+- Task creation always uses the current Jarvis workspace repository path.
+- Task rows include deterministic gate/check payload under `checks`.
+- System WebSocket subscribers receive `system.swarm.*` events for create/update/nudge/cleanup/tick updates.
+
 ## Follow-Up Heartbeats
 
 - Enable thread follow-ups: `POST /api/v1/followups/threads/{thread_id}/enable`
 - Disable thread follow-ups: `POST /api/v1/followups/threads/{thread_id}/disable`
 - Read thread follow-up status: `GET /api/v1/followups/threads/{thread_id}`
 
-Ownership boundaries apply for non-admin users; only thread owners can manage follow-ups.
+Follow-up management is available to authenticated root-admin sessions.
 
 ## Self-Update Governance
 

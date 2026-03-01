@@ -53,6 +53,22 @@
 4. Dispatcher persists an escalation assistant message on the target thread and enqueues channel send.
 5. Success/failure is recorded via `human.escalation.dispatch.end|failed` and persisted status updates.
 
+## DevSwarm Flow
+
+1. `jarvis swarm create` inserts a `devswarm_tasks` row and allocates `worktree_path`, `branch`, and `tmux_session`.
+2. Worker spawn creates an isolated git worktree (`origin/dev` base), writes prompt/log artifacts under `.jarvis/`, and launches OpenCode in detached tmux.
+3. Periodic monitor task (`jarvis.tasks.devswarm.monitor_tasks`) runs deterministic checks only:
+   - tmux alive
+   - branch exists
+   - PR exists
+   - PR base is `dev`
+   - CI checks are green
+   - branch mergeability/up-to-date gate
+4. Monitor persists `checks_json`, transitions task status (`running|needs_attention|ready_for_review`), upserts a single PR comment marker (`jarvis:swarm-status`), and emits trace-aware events.
+5. On transitions to `needs_attention` or `ready_for_review`, monitor dispatches WhatsApp notifications using configured escalation targets.
+6. Admin HTTP routes (`/api/v1/swarm/tasks*`) provide web operators parity controls for list/create/nudge/cleanup.
+7. Swarm state transitions enqueue `web_notifications` as `system.swarm.*` events for live web UI updates via `/ws` `subscribe_system`.
+
 ## Orchestrator Reliability Hardening
 
 1. Embedded tool payload parsing supports `tool_calls`, `tool+tool_input`, and `tool_name+arguments` JSON shapes in assistant text.
@@ -116,7 +132,7 @@
 - Primary pages:
   - Chat: `web/src/pages/chat/index.tsx`
   - Admin dashboard: `web/src/pages/admin/dashboard/index.tsx`
-  - Admin domains: agents, events, memory, schedules, threads, selfupdate, permissions, providers, bugs
+  - Admin domains: agents, events, memory, schedules, threads, selfupdate, permissions, providers, bugs, swarm
 - Real-time updates: WebSocket hub route `/ws` (`src/jarvis/routes/ws.py`) backed by `web_notifications` polling.
 
 ## Provider Compatibility Layer
@@ -160,23 +176,19 @@ The orchestrator (`src/jarvis/orchestrator/step.py`) uses `ensure_tool_ids` + `b
 - `src/jarvis/scheduler/*`: schedule evaluation and task enqueue.
 - `src/jarvis/selfupdate/*`: propose/validate/test/apply/rollback pipeline.
 - `src/jarvis/tasks/*`: task handlers + in-process runner registration.
+- `src/jarvis/tasks/devswarm.py`: worktree/tmux worker lifecycle + deterministic monitor loop.
 - `src/jarvis/tools/*`: tool registry/runtime/implementations.
+- `src/jarvis/tools/devswarm.py`: `devswarm.*` tool handlers bridged to task runtime.
 - `src/jarvis/ids.py`: ID generation conventions.
 - `src/jarvis/logging.py`: logging configuration.
 - `src/jarvis/errors.py`: shared error types.
 
 ## Auth and Authorization
 
-- Session tokens map to `UserContext(user_id, role, scopes, is_admin)`.
-- CBAC scope model:
-  - `*` grants all scopes.
-  - Exact match grants one capability (for example `media:read`).
-  - Namespace wildcard grants a family (`memory:*` -> `memory:read`, `memory:write`, etc.).
-- Restricted delegation tokens are minted via `mint_restricted_token(...)` and carry a short TTL plus explicit scope set.
-- Admin-only areas include lockdown controls, permissions, and self-update approvals.
-- Non-admin users are ownership-scoped for thread-linked resources.
-- WebSocket thread subscriptions enforce thread ownership for non-admin users.
-- Tool runtime policy includes scope gate `R9` (`cbac.scope_denied`) that intersects token scopes with allowed tool mappings before execution.
+- Session tokens map to `UserContext(user_id)` for the single authenticated root-admin identity.
+- CBAC scope branching and restricted delegation token behavior are retired from the web auth path.
+- Authenticated sessions have access to admin/control-plane APIs.
+- WebSocket thread and system subscriptions are available to authenticated sessions.
 
 ## Media Attachment Architecture
 

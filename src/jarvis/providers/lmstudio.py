@@ -40,7 +40,10 @@ class LMStudioProvider:
 
     @staticmethod
     def _normalize_base_url(base_url: str) -> str:
-        return base_url.rstrip("/")
+        normalized = base_url.rstrip("/")
+        if normalized.endswith("/v1"):
+            return normalized
+        return f"{normalized}/v1"
 
     @staticmethod
     def _to_tools(tools: list[dict[str, object]] | None) -> list[dict[str, object]] | None:

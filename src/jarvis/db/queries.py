@@ -208,34 +208,22 @@ def record_exec_host_result(
 
 
 def ensure_root_user(conn: sqlite3.Connection) -> str:
-    """Ensure a root admin user exists for system/agent operations."""
+    """Ensure a root user exists for system/agent operations."""
     external_id = "system:root"
-    row = conn.execute(
-        "SELECT id, role FROM users WHERE external_id=?", (external_id,)
-    ).fetchone()
-    if row:
-        user_id = str(row["id"])
-        if row["role"] != "admin":
-            conn.execute("UPDATE users SET role='admin' WHERE id=?", (user_id,))
-        return user_id
-    user_id = new_id("usr")
-    conn.execute(
-        "INSERT INTO users(id, external_id, role, created_at) VALUES(?,?,?,?)",
-        (user_id, external_id, "admin", now_iso()),
-    )
-    return user_id
-
-
-def ensure_user(conn: sqlite3.Connection, external_id: str) -> str:
     row = conn.execute("SELECT id FROM users WHERE external_id=?", (external_id,)).fetchone()
     if row:
         return str(row["id"])
     user_id = new_id("usr")
     conn.execute(
-        "INSERT INTO users(id, external_id, role, created_at) VALUES(?,?,?,?)",
-        (user_id, external_id, "user", now_iso()),
+        "INSERT INTO users(id, external_id, created_at) VALUES(?,?,?)",
+        (user_id, external_id, now_iso()),
     )
     return user_id
+
+
+def ensure_user(conn: sqlite3.Connection, external_id: str) -> str:
+    del external_id
+    return ensure_root_user(conn)
 
 
 def ensure_channel(conn: sqlite3.Connection, user_id: str, channel_type: str) -> str:
@@ -2256,3 +2244,139 @@ def revoke_approval(conn: sqlite3.Connection, approval_id: str, *, actor_id: str
         (f"revoked_by:{actor_id}", approval_id),
     )
     return True
+
+
+def create_devswarm_task(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    task_type: str,
+    description: str,
+    repo_path: str,
+    worktree_path: str,
+    branch: str,
+    base_branch: str,
+    tmux_session: str,
+    status: str,
+    max_attempts: int,
+    model: str,
+    provider: str,
+    checks_json: str = "{}",
+) -> None:
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO devswarm_tasks("
+            "id, task_type, description, repo_path, worktree_path, branch, base_branch, "
+            "tmux_session, status, attempt, max_attempts, model, provider, checks_json, "
+            "last_error, completed_at, created_at, updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ),
+        (
+            task_id,
+            task_type,
+            description,
+            repo_path,
+            worktree_path,
+            branch,
+            base_branch,
+            tmux_session,
+            status,
+            0,
+            max(1, int(max_attempts)),
+            model,
+            provider,
+            checks_json,
+            "",
+            None,
+            now,
+            now,
+        ),
+    )
+
+
+def get_devswarm_task(conn: sqlite3.Connection, task_id: str) -> dict[str, object] | None:
+    row = conn.execute(
+        "SELECT * FROM devswarm_tasks WHERE id=? LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def list_devswarm_tasks(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM devswarm_tasks WHERE status=? ORDER BY updated_at DESC LIMIT ?",
+            (status, max(1, min(500, int(limit)))),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM devswarm_tasks ORDER BY updated_at DESC LIMIT ?",
+            (max(1, min(500, int(limit))),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_active_devswarm_tasks(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 200,
+) -> list[dict[str, object]]:
+    rows = conn.execute(
+        (
+            "SELECT * FROM devswarm_tasks "
+            "WHERE status IN ('queued','running','needs_attention','ready_for_review') "
+            "ORDER BY updated_at ASC LIMIT ?"
+        ),
+        (max(1, min(500, int(limit))),),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_devswarm_task(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    status: str | None = None,
+    attempt: int | None = None,
+    pr_number: int | None = None,
+    pr_url: str | None = None,
+    checks_json: str | None = None,
+    last_error: str | None = None,
+    completed_at: str | None = None,
+) -> None:
+    fields: list[str] = []
+    params: list[object] = []
+    if status is not None:
+        fields.append("status=?")
+        params.append(status)
+    if attempt is not None:
+        fields.append("attempt=?")
+        params.append(max(0, int(attempt)))
+    if pr_number is not None:
+        fields.append("pr_number=?")
+        params.append(int(pr_number))
+    if pr_url is not None:
+        fields.append("pr_url=?")
+        params.append(pr_url)
+    if checks_json is not None:
+        fields.append("checks_json=?")
+        params.append(checks_json)
+    if last_error is not None:
+        fields.append("last_error=?")
+        params.append(last_error)
+    if completed_at is not None:
+        fields.append("completed_at=?")
+        params.append(completed_at)
+    fields.append("updated_at=?")
+    params.append(now_iso())
+    params.append(task_id)
+    conn.execute(
+        f"UPDATE devswarm_tasks SET {', '.join(fields)} WHERE id=?",
+        tuple(params),
+    )

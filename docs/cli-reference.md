@@ -32,6 +32,13 @@ uv run jarvis --help
 - `uv run jarvis maintenance run [--json]`
 - `uv run jarvis maintenance enqueue`
 
+### `swarm`
+
+- `uv run jarvis swarm create --task "<description>" --repo <path> [--model <id>] [--type feature|bugfix|refactor]`
+- `uv run jarvis swarm status [--json] [--limit 50]`
+- `uv run jarvis swarm nudge <task_id> --message "<text>"`
+- `uv run jarvis swarm cleanup [--task-id <id>] [--keep-worktrees]`
+
 ### `memory`
 
 - `uv run jarvis memory review --conflicts [--limit 50]`

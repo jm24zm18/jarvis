@@ -131,7 +131,7 @@ async def test_logs_trace_command_returns_ordered_events() -> None:
 
 
 @pytest.mark.asyncio
-async def test_restart_requires_admin() -> None:
+async def test_restart_command_runs_for_authenticated_actor() -> None:
     with get_conn() as conn:
         ensure_system_state(conn)
         user_id = ensure_user(conn, "15555550123")
@@ -156,7 +156,7 @@ async def test_restart_requires_admin() -> None:
             {"15555550123"},
         )
 
-    assert denied == "admin required"
+    assert denied == "restart flag set"
     assert allowed == "restart flag set"
 
 
@@ -198,7 +198,7 @@ async def test_logs_search_command_returns_matches() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unlock_requires_admin_and_correct_code(tmp_path) -> None:
+async def test_unlock_requires_correct_code(tmp_path) -> None:
     unlock_file = tmp_path / "admin_unlock_code"
     unlock_file.write_text("123456")
     os.environ["ADMIN_UNLOCK_CODE_PATH"] = str(unlock_file)
@@ -215,14 +215,6 @@ async def test_unlock_requires_admin_and_correct_code(tmp_path) -> None:
             thread_id = ensure_open_thread(conn, user_id, channel_id)
             router = ProviderRouter(StubProvider(), SGLangProvider("f"))
 
-            denied = await maybe_execute_command(
-                conn,
-                thread_id,
-                "/unlock 123456",
-                "15555550123",
-                router,
-                set(),
-            )
             invalid = await maybe_execute_command(
                 conn,
                 thread_id,
@@ -242,7 +234,6 @@ async def test_unlock_requires_admin_and_correct_code(tmp_path) -> None:
             state = conn.execute(
                 "SELECT lockdown FROM system_state WHERE id='singleton'"
             ).fetchone()
-        assert denied == "admin required"
         assert invalid == "invalid unlock code"
         assert allowed == "lockdown cleared"
         assert state is not None and int(state["lockdown"]) == 0
@@ -252,7 +243,7 @@ async def test_unlock_requires_admin_and_correct_code(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_approve_command_requires_admin_and_inserts_record() -> None:
+async def test_approve_command_inserts_record() -> None:
     with get_conn() as conn:
         ensure_system_state(conn)
         user_id = ensure_user(conn, "15555550123")
@@ -280,7 +271,7 @@ async def test_approve_command_requires_admin_and_inserts_record() -> None:
             "SELECT action, status FROM approvals ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
 
-    assert denied == "admin required"
+    assert denied == "approval created: host.exec.sudo"
     assert allowed == "approval created: host.exec.sudo"
     assert row is not None
     assert row["action"] == "host.exec.sudo"
@@ -307,7 +298,7 @@ async def test_approve_command_rejects_unknown_action() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wa_review_list_requires_admin() -> None:
+async def test_wa_review_list_authenticated() -> None:
     with get_conn() as conn:
         ensure_system_state(conn)
         user_id = ensure_user(conn, "15555550123")
@@ -330,7 +321,7 @@ async def test_wa_review_list_requires_admin() -> None:
             router,
             {"15555550123"},
         )
-    assert denied == "admin required"
+    assert denied is not None
     assert allowed is not None
     parsed = json.loads(allowed)
     assert parsed["status"] == "open"

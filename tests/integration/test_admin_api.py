@@ -133,6 +133,7 @@ def test_admin_endpoints_basic_coverage(tmp_path: Path) -> None:
     )
 
     assert client.get("/api/v1/agents", headers=headers).status_code == 200
+    assert client.get("/api/v1/swarm/tasks", headers=headers).status_code == 200
 
     events = client.get("/api/v1/events", headers=headers)
     assert events.status_code == 200

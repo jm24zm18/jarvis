@@ -23,6 +23,7 @@ From `web/src/App.tsx`:
 - `/admin/channels`
 - `/admin/repo`
 - `/admin/roadmap`
+- `/admin/swarm`
 
 Unknown routes redirect to `/chat` after auth.
 
@@ -30,14 +31,13 @@ Unknown routes redirect to `/chat` after auth.
 
 - `Protected` wrapper validates session via `GET /api/v1/auth/me` using an HTTP-only session cookie.
 - Missing/invalid session redirects to `/login`.
-- Session role is `user` or `admin`.
+- Session identity is single-admin (`system:root`).
 
-## RBAC and Ownership
+## Access Model
 
-- Admin pages depend on admin-only API endpoints (`permissions`, `selfupdate`, `channels`, governance surfaces).
-- Non-admin users are ownership-scoped for thread/message/event/memory reads.
-- WebSocket subscriptions enforce thread ownership unless role is `admin`.
-- Admin chat thread list loads all threads by default (no extra toggle required).
+- Authenticated sessions can access control-plane endpoints (`permissions`, `selfupdate`, `channels`, governance surfaces).
+- Thread/message/event/memory reads are no longer split by admin/non-admin ownership.
+- Chat thread list loads all threads by default (no extra toggle required).
 
 ## Non-Web Reply Approvals
 
@@ -66,6 +66,20 @@ Behavior:
   - Clearing requires explicit `clear_lmstudio_api_key=true`.
 - Chat rendering sanitizes leaked model wrappers (for example `<|analysis|>` and `<think>...</think>`) before display.
 
+## DevSwarm Admin Page
+
+`/admin/swarm` is admin-only and manages DevSwarm worker tasks through:
+
+- `GET /api/v1/swarm/tasks`
+- `POST /api/v1/swarm/tasks`
+- `POST /api/v1/swarm/tasks/{task_id}/nudge`
+- `POST /api/v1/swarm/tasks/{task_id}/cleanup`
+
+Behavior:
+- Task creation is pinned to the current Jarvis workspace repository path.
+- Cleanup defaults to keeping worktree directories unless `remove_worktrees=true` is provided.
+- The page subscribes to system WebSocket updates and refreshes on `system.swarm.*` events.
+
 ## WebSocket Model
 
 Endpoint: `/ws`
@@ -77,7 +91,7 @@ Client actions:
 
 - `subscribe` with `thread_id`
 - `unsubscribe` with `thread_id`
-- `subscribe_system` (admin only)
+- `subscribe_system`
 
 Event envelope includes `type`, `thread_id`, `created_at`, plus payload fields.
 
@@ -85,8 +99,8 @@ Event envelope includes `type`, `thread_id`, `created_at`, plus payload fields.
 
 1. Login on `/login`.
 2. Open `/chat`; send and receive one message.
-3. Open an admin page with admin token.
-4. Verify non-admin token cannot access admin-only actions.
+3. Open an admin page with authenticated token.
+4. Verify unauthenticated requests to admin/control endpoints are rejected.
 5. Subscribe to a thread over WS and confirm live updates.
 
 ## Trace Drill-Down Workflow

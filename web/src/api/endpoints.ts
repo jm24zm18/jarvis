@@ -35,15 +35,16 @@ import type {
   RepoStatus,
   RepoCommit,
   RepoBranchSet,
+  DevSwarmTask,
 } from "../types";
 
 export const login = (password: string) =>
-  apiFetch<{ session_id: string; user_id: string; role: string }>("/api/v1/auth/login", {
+  apiFetch<{ session_id: string; user_id: string }>("/api/v1/auth/login", {
     method: "POST",
     body: JSON.stringify({ password }),
   });
 
-export const me = () => apiFetch<{ user_id: string; role: string }>("/api/v1/auth/me");
+export const me = () => apiFetch<{ user_id: string }>("/api/v1/auth/me");
 export const logout = () => apiFetch<{ ok: boolean }>("/api/v1/auth/logout", { method: "POST" });
 
 export const listThreads = (all = false) =>
@@ -159,6 +160,44 @@ export const listMemory = (q = "", threadId = "") => {
 export const memoryStats = () => apiFetch<MemoryStats>("/api/v1/memory/stats");
 
 export const listSchedules = () => apiFetch<{ items: ScheduleItem[] }>("/api/v1/schedules");
+
+export const listSwarmTasks = (params?: { limit?: number; status?: string }) => {
+  const qs = new URLSearchParams();
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  if (params?.status) qs.set("status", params.status);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ ok: boolean; count: number; items: DevSwarmTask[] }>(
+    `/api/v1/swarm/tasks${suffix}`,
+  );
+};
+
+export const createSwarmTask = (payload: {
+  description: string;
+  task_type: "feature" | "bugfix" | "refactor";
+  model?: string;
+}) =>
+  apiFetch<{ ok: boolean; item: DevSwarmTask }>("/api/v1/swarm/tasks", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const nudgeSwarmTask = (taskId: string, message: string) =>
+  apiFetch<{ ok: boolean; task_id: string; session: string; task?: DevSwarmTask }>(
+    `/api/v1/swarm/tasks/${taskId}/nudge`,
+    {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    },
+  );
+
+export const cleanupSwarmTask = (taskId: string, removeWorktrees = false) =>
+  apiFetch<{ ok: boolean; removed: string[]; failures: Array<Record<string, string>>; task?: DevSwarmTask }>(
+    `/api/v1/swarm/tasks/${taskId}/cleanup`,
+    {
+      method: "POST",
+      body: JSON.stringify({ remove_worktrees: removeWorktrees }),
+    },
+  );
 
 export const createSchedule = (payload: {
   thread_id?: string;

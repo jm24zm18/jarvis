@@ -4,7 +4,7 @@ import json
 
 from fastapi import APIRouter, Depends, Query
 
-from jarvis.auth.dependencies import UserContext, require_admin
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.db.connection import get_conn
 from jarvis.tasks.story_runner import run_story_pack
 
@@ -14,13 +14,13 @@ router = APIRouter(prefix="/stories", tags=["api-stories"])
 @router.post("/run")
 def run_stories(
     pack: str = Query(default="p0"),
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     return run_story_pack(pack=pack, created_by=ctx.user_id)
 
 
 @router.get("/runs")
-def list_story_runs(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def list_story_runs(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     with get_conn() as conn:
         rows = conn.execute(
@@ -43,7 +43,7 @@ def list_story_runs(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
 
 
 @router.get("/runs/{run_id}")
-def get_story_run(run_id: str, ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def get_story_run(run_id: str, ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     with get_conn() as conn:
         row = conn.execute(

@@ -54,26 +54,24 @@ def _emit(
 
 
 def _resolve_admin_thread(conn: sqlite3.Connection) -> str | None:
+    root_user = conn.execute(
+        "SELECT id FROM users WHERE external_id='system:root' LIMIT 1"
+    ).fetchone()
+    if root_user is None:
+        return None
+    root_user_id = str(root_user["id"])
     row = conn.execute(
         "SELECT t.id FROM threads t "
         "JOIN channels c ON c.id=t.channel_id "
-        "JOIN users u ON u.id=t.user_id "
-        "WHERE c.channel_type='web' AND t.status='open' AND u.role='admin' "
+        "WHERE c.channel_type='web' AND t.status='open' AND t.user_id=? "
         "ORDER BY t.updated_at DESC LIMIT 1"
+        ,
+        (root_user_id,),
     ).fetchone()
     if row is not None:
         return str(row["id"])
-
-    admin_row = conn.execute(
-        "SELECT id FROM users WHERE role='admin' "
-        "ORDER BY CASE WHEN external_id='system:root' THEN 1 ELSE 0 END, created_at ASC "
-        "LIMIT 1"
-    ).fetchone()
-    if admin_row is None:
-        return None
-    admin_user_id = str(admin_row["id"])
-    channel_id = ensure_channel(conn, admin_user_id, "web")
-    return create_thread(conn, admin_user_id, channel_id)
+    channel_id = ensure_channel(conn, root_user_id, "web")
+    return create_thread(conn, root_user_id, channel_id)
 
 
 def _has_active_permission(conn: sqlite3.Connection, *, channel_type: str, recipient: str) -> bool:

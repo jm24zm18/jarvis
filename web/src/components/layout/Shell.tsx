@@ -23,6 +23,7 @@ import {
   PanelLeft,
   GitBranch,
   Map,
+  Rocket,
 } from "lucide-react";
 import { useThemeStore } from "../../stores/theme";
 import { useAuthStore } from "../../stores/auth";
@@ -51,6 +52,7 @@ const navGroups = [
       { label: "Channels", to: "/admin/channels", icon: Smartphone },
       { label: "Repo", to: "/admin/repo", icon: GitBranch },
       { label: "Roadmap", to: "/admin/roadmap", icon: Map },
+      { label: "Swarm", to: "/admin/swarm", icon: Rocket },
       { label: "Memory", to: "/admin/memory", icon: Brain },
       { label: "Schedules", to: "/admin/schedules", icon: Clock },
       { label: "Self-Update", to: "/admin/selfupdate", icon: RefreshCw },
