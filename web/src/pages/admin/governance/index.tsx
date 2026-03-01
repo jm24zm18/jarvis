@@ -18,6 +18,7 @@ import {
 import Header from "../../../components/layout/Header";
 import Card from "../../../components/ui/Card";
 import Badge from "../../../components/ui/Badge";
+import { formatPercent, formatTimestampHuman } from "../../../lib/format";
 
 function asNumber(value: unknown): number {
   return typeof value === "number" ? value : 0;
@@ -110,30 +111,30 @@ export default function AdminGovernancePage() {
             SLO {String(slo.data?.status ?? "unknown")}
           </Badge>
           {Array.isArray(slo.data?.reasons) && slo.data?.reasons.length > 0 ? (
-            <span className="text-xs text-[var(--text-secondary)]">{slo.data?.reasons.join(" | ")}</span>
+            <span className="text-xs text-text2">{slo.data?.reasons.join(" | ")}</span>
           ) : (
-            <span className="text-xs text-[var(--text-muted)]">No active SLO degradation reasons.</span>
+            <span className="text-xs text-text3">No active SLO degradation reasons.</span>
           )}
         </div>
       </Card>
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
-          <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Story Pass Rate</p>
-          <p className="mt-2 font-display text-3xl text-[var(--text-primary)]">{(storyPassRate * 100).toFixed(1)}%</p>
+          <p className="text-xs uppercase tracking-wide text-text3">Story Pass Rate</p>
+          <p className="mt-2 font-mono text-3xl text-text">{formatPercent(storyPassRate * 100, 2)}</p>
         </Card>
         <Card>
-          <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Self-Update Success</p>
-          <p className="mt-2 font-display text-3xl text-[var(--text-primary)]">{(selfupdateSuccessRate * 100).toFixed(1)}%</p>
+          <p className="text-xs uppercase tracking-wide text-text3">Self-Update Success</p>
+          <p className="mt-2 font-mono text-3xl text-text">{formatPercent(selfupdateSuccessRate * 100, 2)}</p>
         </Card>
         <Card>
-          <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Failure Recurrence</p>
-          <p className="mt-2 font-display text-3xl text-[var(--text-primary)]">{(recurrenceRate * 100).toFixed(1)}%</p>
+          <p className="text-xs uppercase tracking-wide text-text3">Failure Recurrence</p>
+          <p className="mt-2 font-mono text-3xl text-text">{formatPercent(recurrenceRate * 100, 2)}</p>
         </Card>
         <Card>
-          <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Memory Consistency</p>
-          <p className="mt-2 font-display text-3xl text-[var(--text-primary)]">
-            {(Number(memoryConsistency.data?.avg_consistency ?? 1) * 100).toFixed(1)}%
+          <p className="text-xs uppercase tracking-wide text-text3">Memory Consistency</p>
+          <p className="mt-2 font-mono text-3xl text-text">
+            {formatPercent(Number(memoryConsistency.data?.avg_consistency ?? 1) * 100, 2)}
           </p>
         </Card>
       </div>
@@ -142,15 +143,15 @@ export default function AdminGovernancePage() {
         <Card
           header={
             <div className="flex items-center justify-between">
-              <h3 className="font-display text-base text-[var(--text-primary)]">Release Candidate</h3>
+              <h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Release Candidate</h3>
               <Badge variant={releaseStatus === "ready" ? "success" : "warning"}>{releaseStatus}</Badge>
             </div>
           }
         >
           {blockers.length === 0 ? (
-            <p className="text-sm text-[var(--text-muted)]">No blockers reported.</p>
+            <p className="text-sm text-text3">No blockers reported.</p>
           ) : (
-            <ul className="space-y-2 text-sm text-[var(--text-secondary)]">
+            <ul className="space-y-2 text-sm text-text2">
               {blockers.map((item) => (
                 <li key={String(item)}>{String(item)}</li>
               ))}
@@ -161,15 +162,15 @@ export default function AdminGovernancePage() {
         <Card
           header={
             <div className="flex items-center justify-between">
-              <h3 className="font-display text-base text-[var(--text-primary)]">Dependency Steward</h3>
+              <h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Dependency Steward</h3>
               <Badge variant="info">{proposals.length} proposals</Badge>
             </div>
           }
         >
           {proposals.length === 0 ? (
-            <p className="text-sm text-[var(--text-muted)]">No upgrade proposals available.</p>
+            <p className="text-sm text-text3">No upgrade proposals available.</p>
           ) : (
-            <ul className="space-y-2 text-sm text-[var(--text-secondary)]">
+            <ul className="space-y-2 text-sm text-text2">
               {proposals.slice(0, 10).map((item, idx) => {
                 const proposal = item as Record<string, unknown>;
                 return (
@@ -188,11 +189,11 @@ export default function AdminGovernancePage() {
         </Card>
       </div>
 
-      <Card className="mt-6" header={<h3 className="font-display text-base text-[var(--text-primary)]">Fitness History</h3>}>
+      <Card className="mt-6" header={<h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Fitness History</h3>}>
         <div className="overflow-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[var(--border-default)] text-left text-xs uppercase tracking-wide text-[var(--text-muted)]">
+              <tr className="border-b border-[var(--color-border)] text-left text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">
                 <th className="px-2 py-2">Created</th>
                 <th className="px-2 py-2">Window</th>
                 <th className="px-2 py-2">Story</th>
@@ -203,11 +204,13 @@ export default function AdminGovernancePage() {
               {(history.data?.items ?? []).map((item) => {
                 const rowMetrics = item.metrics ?? {};
                 return (
-                  <tr key={item.id} className="border-b border-[var(--border-default)]">
-                    <td className="px-2 py-2">{item.created_at}</td>
-                    <td className="px-2 py-2">{item.period_start} .. {item.period_end}</td>
-                    <td className="px-2 py-2">{(asNumber(rowMetrics.story_pack_pass_rate) * 100).toFixed(1)}%</td>
-                    <td className="px-2 py-2">{(asNumber(rowMetrics.selfupdate_success_rate) * 100).toFixed(1)}%</td>
+                  <tr key={item.id} className="border-b border-[var(--color-border)]">
+                    <td className="px-2 py-2">{formatTimestampHuman(item.created_at)}</td>
+                    <td className="px-2 py-2">
+                      {formatTimestampHuman(item.period_start)} .. {formatTimestampHuman(item.period_end)}
+                    </td>
+                    <td className="px-2 py-2">{formatPercent(asNumber(rowMetrics.story_pack_pass_rate) * 100, 2)}</td>
+                    <td className="px-2 py-2">{formatPercent(asNumber(rowMetrics.selfupdate_success_rate) * 100, 2)}</td>
                   </tr>
                 );
               })}
@@ -216,11 +219,11 @@ export default function AdminGovernancePage() {
         </div>
       </Card>
 
-      <Card className="mt-6" header={<h3 className="font-display text-base text-[var(--text-primary)]">SLO History</h3>}>
-        <ul className="space-y-2 text-sm text-[var(--text-secondary)]">
+      <Card className="mt-6" header={<h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">SLO History</h3>}>
+        <ul className="space-y-2 text-sm text-text2">
           {(sloHistory.data?.items ?? []).slice(0, 10).map((item) => (
             <li key={item.snapshot_id}>
-              {item.created_at} • {item.status}
+              {formatTimestampHuman(item.created_at)} • {item.status}
               {item.reasons.length > 0 ? ` • ${item.reasons.join(", ")}` : ""}
             </li>
           ))}
@@ -228,17 +231,17 @@ export default function AdminGovernancePage() {
       </Card>
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Card header={<h3 className="font-display text-base text-[var(--text-primary)]">Decision Timeline</h3>}>
-          <ul className="space-y-2 text-sm text-[var(--text-secondary)]">
+        <Card header={<h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Decision Timeline</h3>}>
+          <ul className="space-y-2 text-sm text-text2">
             {timelineItems.slice(0, 8).map((item, idx) => (
               <li key={`${String(item.id ?? "evt")}-${idx}`}>
                 <div className="flex items-center justify-between gap-2">
                   <span>
-                    {String(item.created_at ?? "")} • {String(item.event_type ?? "")}
+                    {formatTimestampHuman(String(item.created_at ?? ""))} • {String(item.event_type ?? "")}
                   </span>
                   {typeof item.trace_id === "string" && item.trace_id ? (
                     <Link
-                      className="rounded border border-[var(--border-default)] px-2 py-0.5 text-xs hover:bg-[var(--bg-mist)]"
+                      className="rounded border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-surface-2"
                       to={traceHref(item.trace_id, typeof item.thread_id === "string" ? item.thread_id : undefined)}
                     >
                       Open Trace
@@ -253,8 +256,8 @@ export default function AdminGovernancePage() {
           </ul>
         </Card>
 
-        <Card header={<h3 className="font-display text-base text-[var(--text-primary)]">Learning Loop</h3>}>
-          <ul className="space-y-2 text-sm text-[var(--text-secondary)]">
+        <Card header={<h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Learning Loop</h3>}>
+          <ul className="space-y-2 text-sm text-text2">
             {((learning.data?.items as Array<Record<string, unknown>> | undefined) ?? []).slice(0, 8).map((item, idx) => {
               const remediations = Array.isArray(item.remediations)
                 ? (item.remediations as Array<Record<string, unknown>>)
@@ -266,9 +269,9 @@ export default function AdminGovernancePage() {
                   </div>
                   {remediations.slice(0, 1).map((remediation) => (
                     <div key={String(remediation.id ?? "rem")} className="mt-1 flex items-center gap-2 text-xs">
-                      <span className="text-[var(--text-muted)]">{String(remediation.remediation ?? "")}</span>
+                      <span className="text-text3">{String(remediation.remediation ?? "")}</span>
                       <button
-                        className="rounded border border-[var(--border-default)] px-1.5 py-0.5 hover:bg-[var(--bg-mist)]"
+                        className="rounded border border-[var(--color-border)] px-1.5 py-0.5 hover:bg-surface-2"
                         onClick={() =>
                           feedback.mutate({ remediationId: String(remediation.id), value: "accepted" })
                         }
@@ -276,7 +279,7 @@ export default function AdminGovernancePage() {
                         Accept
                       </button>
                       <button
-                        className="rounded border border-[var(--border-default)] px-1.5 py-0.5 hover:bg-[var(--bg-mist)]"
+                        className="rounded border border-[var(--color-border)] px-1.5 py-0.5 hover:bg-surface-2"
                         onClick={() =>
                           feedback.mutate({ remediationId: String(remediation.id), value: "rejected" })
                         }
@@ -295,10 +298,10 @@ export default function AdminGovernancePage() {
         </Card>
       </div>
 
-      <Card className="mt-6" header={<h3 className="font-display text-base text-[var(--text-primary)]">Evolution Items</h3>}>
+      <Card className="mt-6" header={<h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Evolution Items</h3>}>
         <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-4">
           <select
-            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm outline-none focus:border-accent"
             value={evolutionStatus}
             onChange={(event) => setEvolutionStatus(event.target.value)}
           >
@@ -308,37 +311,37 @@ export default function AdminGovernancePage() {
             <option value="blocked">blocked</option>
           </select>
           <input
-            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm outline-none focus:border-accent placeholder:text-text3"
             placeholder="Filter trace_id"
             value={evolutionTraceId}
             onChange={(event) => setEvolutionTraceId(event.target.value)}
           />
           <input
-            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm outline-none focus:border-accent text-text"
             type="datetime-local"
             value={evolutionFrom}
             onChange={(event) => setEvolutionFrom(event.target.value)}
           />
           <input
-            className="rounded border border-[var(--border-default)] bg-[var(--bg-card)] px-2 py-1 text-sm"
+            className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm outline-none focus:border-accent text-text"
             type="datetime-local"
             value={evolutionTo}
             onChange={(event) => setEvolutionTo(event.target.value)}
           />
         </div>
         {evolutionItems.isLoading ? (
-          <p className="text-sm text-[var(--text-muted)]">Loading evolution items...</p>
+          <p className="text-sm text-text3">Loading evolution items...</p>
         ) : (evolutionItems.data?.items ?? []).length === 0 ? (
-          <p className="text-sm text-[var(--text-muted)]">No evolution items found.</p>
+          <p className="text-sm text-text3">No evolution items found.</p>
         ) : (
-          <ul className="space-y-2 text-sm text-[var(--text-secondary)]">
+          <ul className="space-y-2 text-sm text-text2">
             {(evolutionItems.data?.items ?? []).map((item) => (
               <li key={item.item_id} className="flex items-center justify-between gap-2">
                 <span>
-                  {item.item_id} • {item.status} • {item.updated_at}
+                  {item.item_id} • {item.status} • {formatTimestampHuman(item.updated_at)}
                 </span>
                 <Link
-                  className="rounded border border-[var(--border-default)] px-2 py-0.5 text-xs hover:bg-[var(--bg-mist)]"
+                  className="rounded border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-surface-2"
                   to={traceHref(item.trace_id, item.thread_id ?? undefined)}
                 >
                   Open Trace
@@ -349,18 +352,18 @@ export default function AdminGovernancePage() {
         )}
       </Card>
 
-      <Card className="mt-6" header={<h3 className="font-display text-base text-[var(--text-primary)]">Patch Lifecycle</h3>}>
+      <Card className="mt-6" header={<h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Patch Lifecycle</h3>}>
         {latestTraceId ? (
           <div className="mb-2">
             <Link
-              className="rounded border border-[var(--border-default)] px-2 py-1 text-xs hover:bg-[var(--bg-mist)]"
+              className="rounded border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-surface-2"
               to={traceHref(latestTraceId)}
             >
               Open Latest Trace In Events
             </Link>
           </div>
         ) : null}
-        <pre className="overflow-auto rounded bg-[var(--bg-mist)] p-3 text-xs text-[var(--text-secondary)]">
+        <pre className="overflow-auto rounded bg-surface-2 p-3 text-xs text-text2">
           {JSON.stringify(lifecycle.data ?? { status: "no-trace-context" }, null, 2)}
         </pre>
       </Card>

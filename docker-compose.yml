@@ -7,7 +7,7 @@ services:
   searxng:
     image: searxng/searxng:latest
     ports:
-      - "8081:8080"
+      - "8080:8080"
     volumes:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml
 
@@ -25,7 +25,12 @@ services:
       - "8081:8081"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    tmpfs:
-      - /tmp/auth
+    volumes:
+      - jarvis-baileys-auth:/tmp/auth
     environment:
-      - API_KEY=${EVOLUTION_API_KEY}
+      - WEBHOOK_URL=${BAILEYS_WEBHOOK_URL:-http://host.docker.internal:8000/webhooks/whatsapp}
+      - WEBHOOK_SECRET=${WHATSAPP_WEBHOOK_SECRET}
+      - WEBHOOK_SECRET_HEADER=${BAILEYS_WEBHOOK_SECRET_HEADER:-X-WhatsApp-Secret}
+
+volumes:
+  jarvis-baileys-auth:

@@ -4,17 +4,23 @@ from fastapi import APIRouter
 
 from jarvis.routes.api import (
     agents,
+    approvals,
     auth,
     bugs,
+    channel_reply_approvals,
     channels,
     events,
+    followups,
     governance,
+    media,
     memory,
     messages,
     permissions,
+    repo,
     schedules,
     selfupdate,
     stories,
+    swarm,
     system,
     threads,
     webhooks,
@@ -27,12 +33,18 @@ router.include_router(threads.router)
 router.include_router(messages.router)
 router.include_router(agents.router)
 router.include_router(events.router)
+router.include_router(followups.router)
 router.include_router(memory.router)
+router.include_router(media.router)
 router.include_router(schedules.router)
+router.include_router(swarm.router)
 router.include_router(selfupdate.router)
 router.include_router(permissions.router)
+router.include_router(approvals.router)
+router.include_router(channel_reply_approvals.router)
 router.include_router(bugs.router)
 router.include_router(channels.router)
 router.include_router(webhooks.router)
 router.include_router(governance.router)
 router.include_router(stories.router)
+router.include_router(repo.router, prefix="/repo")

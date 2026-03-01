@@ -15,7 +15,7 @@ export default function TraceTree({ events }: TraceTreeProps) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const roots = useMemo(() => buildTree(events), [events]);
 
-  if (!events.length) return <p className="text-sm text-[var(--text-muted)]">No trace events.</p>;
+  if (!events.length) return <p className="font-mono text-xs text-text3">No trace events.</p>;
 
   return (
     <div className="space-y-1 text-xs">
@@ -50,18 +50,18 @@ function TraceNode({
     <div>
       <div className="flex items-start gap-2" style={{ paddingLeft: `${depth * 14}px` }}>
         <button
-          className="w-4 text-left text-[var(--text-muted)]"
+          className="w-4 text-left font-mono text-text3"
           onClick={() => hasChildren && onToggle(node.id)}
           disabled={!hasChildren}
         >
           {hasChildren ? (isCollapsed ? "+" : "-") : "\u2022"}
         </button>
-        <div className="flex-1 rounded-lg bg-mist px-2 py-1">
-          <div className="font-semibold text-[var(--text-primary)]">
+        <div className="flex-1 rounded-md bg-surface-2 px-2 py-1">
+          <div className="font-mono font-semibold text-text">
             {node.event.event_type}{" "}
-            <span className="font-normal text-[var(--text-muted)]">{node.event.component}</span>
+            <span className="font-normal text-text3">{node.event.component}</span>
           </div>
-          <div className="text-[11px] text-[var(--text-muted)]">
+          <div className="font-mono text-[10px] text-text3">
             span={node.event.span_id} parent={node.event.parent_span_id ?? "root"}
           </div>
         </div>

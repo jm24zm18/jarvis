@@ -30,6 +30,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks/telegram", tags=["telegram"])
 
 
+async def _download_telegram_media(file_id: str, bot_token: str) -> bytes | None:
+    """Download a Telegram file by file_id and return its bytes, or None on failure."""
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Get the file path from Telegram
+            r = await client.get(
+                f"https://api.telegram.org/bot{bot_token}/getFile",
+                params={"file_id": file_id},
+            )
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            file_path = data.get("result", {}).get("file_path")
+            if not file_path:
+                return None
+            # Download the actual file
+            dl = await client.get(
+                f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
+            )
+            if dl.status_code != 200:
+                return None
+            return dl.content
+    except Exception:
+        logger.debug("Failed to download Telegram media file_id=%s", file_id, exc_info=True)
+        return None
+
+
 def _safe_send_task(name: str, kwargs: dict[str, object], queue: str) -> bool:
     try:
         runner = get_task_runner()
@@ -115,6 +144,25 @@ async def inbound(request: Request) -> JSONResponse:
                 text = f"[{msg.message_type}]"
 
             message_id = insert_message(conn, thread_id, "user", text)
+
+            # Attempt to download and store media attachments for non-text messages.
+            _tg_file_id: str | None = getattr(msg, "file_id", None) or None
+            if _tg_file_id and msg.message_type != "text" and token:
+                try:
+                    _media_bytes = await _download_telegram_media(_tg_file_id, token)
+                    if _media_bytes:
+                        from jarvis.media.service import MediaService as _MediaService
+                        _mime = getattr(msg, "mime_type", None) or "application/octet-stream"
+                        _MediaService().upload(
+                            conn,
+                            owner_id=user_id,
+                            file_data=_media_bytes,
+                            filename=f"{_tg_file_id}.bin",
+                            mime_type=_mime,
+                            message_id=message_id,
+                        )
+                except Exception:
+                    logger.debug("Telegram media upload failed", exc_info=True)
 
             event_payload = {
                 "text": text,

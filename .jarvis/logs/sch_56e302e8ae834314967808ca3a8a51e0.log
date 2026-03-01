@@ -1,0 +1,18 @@
+[91m[1mError: [0mProviderModelNotFoundError
+1152 |     const provider = s.providers[providerID]
+1153 |     if (!provider) {
+1154 |       const availableProviders = Object.keys(s.providers)
+1155 |       const matches = fuzzysort.go(providerID, availableProviders, { limit: 3, threshold: -10000 })
+1156 |       const suggestions = matches.map((m) => m.target)
+1157 |       throw new ModelNotFoundError({ providerID, modelID, suggestions })
+                   ^
+ProviderModelNotFoundError: ProviderModelNotFoundError
+ data: {
+  providerID: "qwen3.5-122b-a10b",
+  modelID: "",
+  suggestions: [],
+},
+
+      at getModel (src/provider/provider.ts:1157:13)
+
+[91m[1mError: [0mModel not found: qwen3.5-122b-a10b/.

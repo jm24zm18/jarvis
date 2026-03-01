@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +14,8 @@ from jarvis.db.queries import now_iso
 from jarvis.providers.router import ProviderRouter
 
 logger = logging.getLogger(__name__)
+_THINK_BLOCK_RE = re.compile(r"<\s*(think|thinking)\s*>[\s\S]*?<\s*/\s*\1\s*>", re.IGNORECASE)
+_THINK_TAG_RE = re.compile(r"<\s*/?\s*(think|thinking)\s*>", re.IGNORECASE)
 
 
 class _OnboardingState(TypedDict):
@@ -731,6 +734,9 @@ def _sanitize_assistant_text(text: str) -> str:
         first_marker = idx if first_marker is None else min(first_marker, idx)
     if first_marker is not None:
         cleaned = cleaned[:first_marker].strip()
+    cleaned = _THINK_BLOCK_RE.sub(" ", cleaned)
+    cleaned = _THINK_TAG_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned
 
 

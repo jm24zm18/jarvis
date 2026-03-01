@@ -8,6 +8,7 @@ from jarvis.db.queries import (
     ensure_user,
     insert_message,
 )
+from jarvis.providers.base import ModelResponse
 from jarvis.tasks.agent import agent_step
 from jarvis.tasks.scheduler import scheduler_tick
 
@@ -37,6 +38,14 @@ def test_scheduler_tick_and_agent_step_flow(monkeypatch) -> None:
             return True
 
     monkeypatch.setattr("jarvis.tasks.agent.get_task_runner", lambda: _Runner())
+
+    class _FakeRouter:
+        async def generate(self, *args, **kwargs):
+            return ModelResponse(text="test response", tool_calls=[]), "primary", None
+
+    monkeypatch.setattr("jarvis.tasks.agent.ProviderRouter", lambda _p, _f: _FakeRouter())
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", lambda **kwargs: None)
 
     with get_conn() as conn:
         ensure_system_state(conn)
@@ -68,6 +77,16 @@ def test_scheduler_tick_and_agent_step_flow(monkeypatch) -> None:
     payload = enqueued_from_scheduler[0]
     message_id = agent_step(trace_id=payload["trace_id"], thread_id=payload["thread_id"])
     assert message_id.startswith("msg_")
-    assert len(enqueued_from_agent) == 1
-    assert enqueued_from_agent[0]["thread_id"] == payload["thread_id"]
-    assert enqueued_from_agent[0]["message_id"] == message_id
+    assert len(enqueued_from_agent) == 0
+    with get_conn() as conn:
+        req_row = conn.execute(
+            (
+                "SELECT status, source_thread_id, source_message_id FROM "
+                "channel_reply_approval_requests WHERE source_message_id=? LIMIT 1"
+            ),
+            (message_id,),
+        ).fetchone()
+    assert req_row is not None
+    assert str(req_row["status"]) == "pending"
+    assert str(req_row["source_thread_id"]) == str(payload["thread_id"])
+    assert str(req_row["source_message_id"]) == message_id

@@ -24,8 +24,6 @@ def list_threads(
 ) -> dict[str, object]:
     filters: list[str] = []
     params: list[object] = []
-    if all_threads and not ctx.is_admin:
-        raise HTTPException(status_code=403, detail="admin required")
     if not all_threads:
         filters.append("t.user_id=?")
         params.append(ctx.user_id)
@@ -82,8 +80,6 @@ def get_thread(thread_id: str, ctx: UserContext = Depends(require_auth)) -> dict
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="thread not found")
-        if not ctx.is_admin and str(row["user_id"]) != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
         settings_row = conn.execute(
             "SELECT verbose, active_agent_ids_json FROM thread_settings WHERE thread_id=?",
             (thread_id,),
@@ -120,8 +116,6 @@ def patch_thread(
         row = conn.execute("SELECT id, user_id FROM threads WHERE id=?", (thread_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="thread not found")
-        if not ctx.is_admin and str(row["user_id"]) != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
 
         if "status" in payload and isinstance(payload["status"], str):
             conn.execute(
@@ -217,8 +211,6 @@ def export_thread(
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="thread not found")
-        if not ctx.is_admin and str(row["user_id"]) != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
 
     return StreamingResponse(
         _stream_thread_jsonl(thread_id, include_events=include_events),
@@ -233,9 +225,7 @@ def export_bulk(
     status: str | None = None,
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> StreamingResponse:
-    """Admin-only: export multiple threads as JSONL."""
-    if not ctx.is_admin:
-        raise HTTPException(status_code=403, detail="admin required")
+    """Export multiple threads as JSONL."""
 
     def _generate() -> Iterator[str]:
         with get_conn() as conn:

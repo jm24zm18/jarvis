@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import threading
 from collections.abc import Callable
@@ -12,6 +13,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from jarvis.config import get_settings
+from jarvis.db.connection import get_conn
+from jarvis.events.models import EventInput
+from jarvis.events.writer import emit_event, redact_payload
+from jarvis.ids import new_id
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +77,12 @@ class TaskRunner:
 
     async def shutdown(self, timeout_s: float) -> None:
         self._shutdown.set()
-        if self._background_tasks:
+        current_loop = asyncio.get_running_loop()
+        current_loop_tasks = [t for t in self._background_tasks if t.get_loop() is current_loop]
+        if current_loop_tasks:
             try:
                 await asyncio.wait_for(
-                    asyncio.gather(*list(self._background_tasks), return_exceptions=True),
+                    asyncio.gather(*current_loop_tasks, return_exceptions=True),
                     timeout=max(1.0, float(timeout_s)),
                 )
             except TimeoutError:
@@ -154,8 +161,45 @@ class TaskRunner:
                     raise
                 if inspect.isawaitable(result):
                     await result
-            except Exception:
+            except Exception as exc:
                 logger.exception("Task failed: %s", name)
+                self._emit_task_failure(name, payload, exc=exc)
+
+    def _emit_task_failure(
+        self,
+        name: str,
+        payload: dict[str, Any],
+        *,
+        exc: Exception,
+    ) -> None:
+        try:
+            trace_id = str(payload.get("trace_id") or new_id("trc"))
+            thread_raw = payload.get("thread_id")
+            thread_id = str(thread_raw) if isinstance(thread_raw, str) and thread_raw else None
+            event_payload: dict[str, object] = {
+                "task_name": name,
+                "payload_keys": sorted(str(key) for key in payload.keys()),
+                "error_type": type(exc).__name__,
+                "error_message": str(exc)[:300],
+            }
+            with get_conn() as conn:
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id,
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="task.failed",
+                        component="tasks.runner",
+                        actor_type="system",
+                        actor_id="task_runner",
+                        payload_json=json.dumps(event_payload),
+                        payload_redacted_json=json.dumps(redact_payload(event_payload)),
+                    ),
+                )
+        except Exception:
+            logger.debug("Failed to emit task.failed event for %s", name, exc_info=True)
 
     def _ensure_loop_thread(self) -> _LoopThread | None:
         with self._lock:

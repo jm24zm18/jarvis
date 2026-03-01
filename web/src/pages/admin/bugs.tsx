@@ -32,6 +32,9 @@ const nextStatus: Record<string, string> = {
   resolved: "closed",
 };
 
+const selectCls =
+  "rounded-md border border-[var(--color-border-2)] bg-[var(--color-surface-2)] px-2 py-1.5 font-mono text-sm text-text outline-none focus:border-accent";
+
 export default function AdminBugsPage() {
   const queryClient = useQueryClient();
   const [filterStatus, setFilterStatus] = useState("");
@@ -96,16 +99,16 @@ export default function AdminBugsPage() {
 
   return (
     <div>
-      <Header title="Bug Tracker" subtitle="Track and manage bug reports" icon={<Bug size={24} />} />
+      <Header title="Bug Tracker" subtitle="Track and manage bug reports" icon={<Bug size={20} />} />
 
       {/* Filters */}
       <div className="mb-4 flex flex-wrap items-end gap-2">
         <div>
-          <label className="mb-1 block text-[11px] font-medium text-[var(--text-muted)]">Status</label>
+          <label className="mb-1 block font-mono text-[10px] font-medium text-text3">Status</label>
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            className="rounded-lg border border-[var(--border-strong)] bg-surface px-2 py-1.5 text-sm text-[var(--text-primary)] outline-none"
+            className={selectCls}
           >
             <option value="">All</option>
             {STATUS_OPTIONS.map((s) => (
@@ -114,11 +117,11 @@ export default function AdminBugsPage() {
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-[11px] font-medium text-[var(--text-muted)]">Priority</label>
+          <label className="mb-1 block font-mono text-[10px] font-medium text-text3">Priority</label>
           <select
             value={filterPriority}
             onChange={(e) => setFilterPriority(e.target.value)}
-            className="rounded-lg border border-[var(--border-strong)] bg-surface px-2 py-1.5 text-sm text-[var(--text-primary)] outline-none"
+            className={selectCls}
           >
             <option value="">All</option>
             {PRIORITY_OPTIONS.map((p) => (
@@ -141,12 +144,12 @@ export default function AdminBugsPage() {
         </Button>
       </div>
 
-      {/* Create form modal */}
+      {/* Create form */}
       {showCreate && (
         <Card className="mb-4" header={
           <div className="flex items-center justify-between">
-            <span className="font-semibold text-[var(--text-primary)]">Report a Bug</span>
-            <button onClick={() => setShowCreate(false)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+            <span className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Report a Bug</span>
+            <button onClick={() => setShowCreate(false)} className="text-text3 hover:text-text">
               <X size={16} />
             </button>
           </div>
@@ -154,22 +157,22 @@ export default function AdminBugsPage() {
           <div className="space-y-3">
             <Input label="Title" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Bug title" />
             <div>
-              <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">Description</label>
+              <label className="mb-1 block font-mono text-xs font-medium text-text2">Description</label>
               <textarea
                 value={newDesc}
                 onChange={(e) => setNewDesc(e.target.value)}
                 placeholder="Describe the bug..."
                 rows={3}
-                className="w-full rounded-lg border border-[var(--border-strong)] bg-surface px-3 py-2 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] focus:border-ember"
+                className="w-full rounded-lg border border-[var(--color-border-2)] bg-[var(--color-surface-2)] px-3 py-2 font-mono text-sm text-text outline-none placeholder:text-text3 focus:border-accent"
               />
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
-                <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">Priority</label>
+                <label className="mb-1 block font-mono text-xs font-medium text-text2">Priority</label>
                 <select
                   value={newPriority}
                   onChange={(e) => setNewPriority(e.target.value)}
-                  className="w-full rounded-lg border border-[var(--border-strong)] bg-surface px-2 py-2 text-sm text-[var(--text-primary)] outline-none"
+                  className={`w-full ${selectCls}`}
                 >
                   {PRIORITY_OPTIONS.map((p) => (
                     <option key={p} value={p}>{p}</option>
@@ -192,23 +195,23 @@ export default function AdminBugsPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_380px]">
         <div className="space-y-2">
           {items.length === 0 && (
-            <p className="py-8 text-center text-sm text-[var(--text-muted)]">No bugs found.</p>
+            <p className="py-8 text-center font-mono text-xs text-text3">No bugs found.</p>
           )}
           {items.map((bug) => (
             <button
               key={bug.id}
               onClick={() => setSelectedId(bug.id)}
-              className={`w-full rounded-xl border p-3 text-left transition ${
+              className={`w-full rounded-lg border p-3 text-left transition-colors ${
                 selectedId === bug.id
-                  ? "border-ember bg-mist"
-                  : "border-[var(--border-default)] bg-surface hover:border-[var(--border-strong)]"
+                  ? "border-accent/30 bg-accent-dim"
+                  : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-border-2)] hover:bg-surface-2"
               }`}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium text-[var(--text-primary)] truncate">{bug.title}</div>
+                  <div className="font-medium text-text truncate">{bug.title}</div>
                   {bug.description && (
-                    <div className="mt-0.5 text-xs text-[var(--text-muted)] line-clamp-1">{bug.description}</div>
+                    <div className="mt-0.5 line-clamp-1 font-mono text-xs text-text3">{bug.description}</div>
                   )}
                 </div>
                 <div className="flex shrink-0 gap-1.5">
@@ -216,7 +219,7 @@ export default function AdminBugsPage() {
                   <Badge variant={statusBadge[bug.status]}>{bug.status.replace("_", " ")}</Badge>
                 </div>
               </div>
-              <div className="mt-1.5 flex gap-3 text-[11px] text-[var(--text-muted)]">
+              <div className="mt-1.5 flex gap-3 font-mono text-[10px] text-text3">
                 <span>{bug.id}</span>
                 <span>{new Date(bug.created_at).toLocaleDateString()}</span>
                 {bug.assignee_agent && <span>assigned: {bug.assignee_agent}</span>}
@@ -230,24 +233,24 @@ export default function AdminBugsPage() {
           {selected ? (
             <Card className="sticky top-4" header={
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-[var(--text-primary)]">Bug Detail</span>
-                <button onClick={() => setSelectedId("")} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                <span className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Bug Detail</span>
+                <button onClick={() => setSelectedId("")} className="text-text3 hover:text-text">
                   <X size={16} />
                 </button>
               </div>
             }>
               <div className="space-y-3">
                 <div>
-                  <div className="text-lg font-semibold text-[var(--text-primary)]">{selected.title}</div>
+                  <div className="font-semibold text-text">{selected.title}</div>
                   <div className="mt-1 flex gap-2">
                     <Badge variant={statusBadge[selected.status]}>{selected.status.replace("_", " ")}</Badge>
                     <Badge variant={priorityBadge[selected.priority]}>{selected.priority}</Badge>
                   </div>
                 </div>
                 {selected.description && (
-                  <p className="text-sm text-[var(--text-secondary)] whitespace-pre-wrap">{selected.description}</p>
+                  <p className="whitespace-pre-wrap font-mono text-xs text-text2">{selected.description}</p>
                 )}
-                <div className="space-y-1 text-xs text-[var(--text-muted)]">
+                <div className="space-y-1 font-mono text-[10px] text-text3">
                   <div>ID: {selected.id}</div>
                   <div>Reporter: {selected.reporter_id ?? "—"}</div>
                   <div>Assignee: {selected.assignee_agent ?? "—"}</div>
@@ -272,8 +275,8 @@ export default function AdminBugsPage() {
 
                 {/* Edit priority */}
                 <div>
-                  <label className="mb-1 block text-[11px] font-medium text-[var(--text-muted)]">Change Priority</label>
-                  <div className="flex gap-1">
+                  <label className="mb-1 block font-mono text-[10px] font-medium text-text3">Change Priority</label>
+                  <div className="flex flex-wrap gap-1">
                     {PRIORITY_OPTIONS.map((p) => (
                       <Button
                         key={p}
@@ -289,8 +292,8 @@ export default function AdminBugsPage() {
 
                 {/* Edit assignee */}
                 <div>
-                  <label className="mb-1 block text-[11px] font-medium text-[var(--text-muted)]">Assign Agent</label>
-                  <div className="flex gap-1">
+                  <label className="mb-1 block font-mono text-[10px] font-medium text-text3">Assign Agent</label>
+                  <div className="flex flex-wrap gap-1">
                     {["main", "researcher", "planner", "coder", "tester", "lintfixer", "api_guardian", "data_migrator", "web_builder", "security_reviewer", "docs_keeper", "release_ops"].map((a) => (
                       <Button
                         key={a}
@@ -315,7 +318,7 @@ export default function AdminBugsPage() {
               </div>
             </Card>
           ) : (
-            <div className="rounded-xl border border-[var(--border-default)] bg-surface p-8 text-center text-sm text-[var(--text-muted)]">
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-8 text-center font-mono text-xs text-text3">
               Select a bug to view details
             </div>
           )}

@@ -39,13 +39,6 @@ def search_events(
     if thread_id:
         filters.append("e.thread_id=?")
         params.append(thread_id)
-    if not ctx.is_admin:
-        filters.append(
-            "(e.thread_id IS NULL OR EXISTS("
-            "SELECT 1 FROM threads t WHERE t.id=e.thread_id AND t.user_id=?"
-            "))"
-        )
-        params.append(ctx.user_id)
     if query:
         filters.append("e.payload_redacted_json LIKE ?")
         params.append(f"%{query}%")
@@ -95,13 +88,6 @@ def get_event(event_id: str, ctx: UserContext = Depends(require_auth)) -> dict[s
             ),
             (event_id,),
         ).fetchone()
-        if row is not None and not ctx.is_admin and row["thread_id"] is not None:
-            owner = conn.execute(
-                "SELECT user_id FROM threads WHERE id=? LIMIT 1",
-                (str(row["thread_id"]),),
-            ).fetchone()
-            if owner is None or str(owner["user_id"]) != ctx.user_id:
-                raise HTTPException(status_code=403, detail="forbidden")
     if row is None:
         raise HTTPException(status_code=404, detail="event not found")
     return {
@@ -127,29 +113,15 @@ def get_trace(
 ) -> dict[str, object]:  # noqa: B008
     raw_view = view == "raw"
     with get_conn() as conn:
-        if ctx.is_admin:
-            payload_column = "payload_json" if raw_view else "payload_redacted_json"
-            rows = conn.execute(
-                (
-                    "SELECT id, span_id, parent_span_id, thread_id, event_type, component, "
-                    f"actor_type, actor_id, {payload_column} AS payload, created_at "
-                    "FROM events WHERE trace_id=? ORDER BY created_at ASC"
-                ),
-                (trace_id,),
-            ).fetchall()
-        else:
-            payload_column = "e.payload_json" if raw_view else "e.payload_redacted_json"
-            rows = conn.execute(
-                (
-                    "SELECT e.id, e.span_id, e.parent_span_id, e.thread_id, e.event_type, "
-                    f"e.component, e.actor_type, e.actor_id, {payload_column} AS payload, "
-                    "e.created_at "
-                    "FROM events e LEFT JOIN threads t ON t.id=e.thread_id "
-                    "WHERE e.trace_id=? AND (e.thread_id IS NULL OR t.user_id=?) "
-                    "ORDER BY e.created_at ASC"
-                ),
-                (trace_id, ctx.user_id),
-            ).fetchall()
+        payload_column = "payload_json" if raw_view else "payload_redacted_json"
+        rows = conn.execute(
+            (
+                "SELECT id, span_id, parent_span_id, thread_id, event_type, component, "
+                f"actor_type, actor_id, {payload_column} AS payload, created_at "
+                "FROM events WHERE trace_id=? ORDER BY created_at ASC"
+            ),
+            (trace_id,),
+        ).fetchall()
     items = [
         {
             "id": str(row["id"]),

@@ -49,15 +49,15 @@ uv run jarvis skill install <path>
 ## Architecture Facts
 
 - Runtime process: API (`src/jarvis/main.py`) with in-process asyncio task runner.
-- Database: SQLite with ordered SQL migrations under `src/jarvis/db/migrations` (currently `001..055`).
+- Database: SQLite with ordered SQL migrations under `src/jarvis/db/migrations` (currently `001..081`).
 - Core request path: webhook -> DB dedup/persist -> `channel.inbound` event -> `agent_step` task -> orchestrator/provider/tools -> outbound.
 - Tool execution is deny-by-default and gated by policy + agent permissions.
 - Lockdown and restart state are enforced via `system_state`.
-- Web auth sessions carry `user`/`admin` role and routes enforce ownership scoping.
+- Web auth sessions are single-admin (`system:root`) and protected by session-token authentication.
 
 ## Invariants
 
-- ID prefixes: `usr_`, `thr_`, `msg_`, `trc_`, `spn_`, `sch_`.
+- ID prefixes: `usr_`, `thr_`, `msg_`, `trc_`, `spn_`, `sch_`, `mda_`.
 - Event types use dot notation (`agent.step.end`, `tool.call.start`, `channel.inbound`).
 - Every agent bundle in `agents/<id>/` must include `identity.md`, `soul.md`, `heartbeat.md`.
 - New DB migration files must be additive, ordered, and never renumber existing migrations.
@@ -70,7 +70,7 @@ uv run jarvis skill install <path>
 src/jarvis/
   main.py, config.py, tasks/runner.py
   agents/, auth/, channels/, cli/, commands/
-  db/ (connection.py, queries.py, migrations/001..055)
+  db/ (connection.py, queries.py, migrations/001..081)
   events/, memory/, models/, onboarding/
   orchestrator/, plugins/, policy/, providers/
   routes/, scheduler/, selfupdate/, tasks/, tools/

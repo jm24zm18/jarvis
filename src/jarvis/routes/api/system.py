@@ -6,19 +6,20 @@ from pathlib import Path
 from fastapi import APIRouter, Depends
 
 from jarvis.agents.loader import reset_loader_caches
-from jarvis.auth.dependencies import UserContext, require_admin, require_auth
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import ensure_system_state, get_system_state, now_iso
 from jarvis.providers.factory import (
     build_fallback_provider,
     build_primary_provider,
+    resolve_fallback_provider_name,
     resolve_primary_provider_name,
 )
 from jarvis.providers.router import ProviderRouter
 from jarvis.repo_index import read_repo_index, write_repo_index
 from jarvis.scheduler.service import estimate_schedule_backlog
-from jarvis.tasks import get_task_runner
+from jarvis.tasks import get_task_runner, stale_periodic_jobs
 
 router = APIRouter(prefix="/system", tags=["api-system"])
 
@@ -35,6 +36,10 @@ _RESET_DATA_TABLES = (
     "state_item_embeddings",
     "state_extraction_watermarks",
     "state_items",
+    "knowledge_graph",
+    "user_profile_history",
+    "user_profiles",
+    "user_reflection_watermarks",
     "failure_capsules",
     "webhook_triggers",
     "skill_install_log",
@@ -42,6 +47,7 @@ _RESET_DATA_TABLES = (
     "knowledge_docs",
     "skills",
     "onboarding_states",
+    "thread_followups",
     "web_notifications",
     "web_sessions",
     "thread_summaries",
@@ -75,7 +81,7 @@ async def system_status(ctx: UserContext = Depends(require_auth)) -> dict[str, o
     del ctx
     settings = get_settings()
     primary_provider_name = resolve_primary_provider_name(settings)
-    fallback_provider_name = "gemini" if primary_provider_name == "sglang" else "sglang"
+    fallback_provider_name = resolve_fallback_provider_name(settings, primary_provider_name)
     provider_status = await ProviderRouter(
         build_primary_provider(settings),
         build_fallback_provider(settings),
@@ -117,13 +123,14 @@ async def system_status(ctx: UserContext = Depends(require_auth)) -> dict[str, o
         "provider_errors": {"last_primary_failure": last_provider_error},
         "queue_depths": queue_depths,
         "scheduler": backlog,
+        "stale_periodic_jobs": stale_periodic_jobs(),
     }
 
 
 @router.post("/lockdown")
 def toggle_lockdown(
     payload: dict[str, object],
-    ctx: UserContext = Depends(require_admin),  # TODO: admin-only now  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # TODO: admin-only now  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     enabled = bool(payload.get("lockdown", False))
@@ -142,7 +149,7 @@ def toggle_lockdown(
 
 @router.post("/reset-db")
 def reset_db(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, bool]:
     del ctx
     with get_conn() as conn:
@@ -165,7 +172,7 @@ def reset_db(
 
 @router.post("/reload-agents")
 def reload_agents(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, bool]:
     del ctx
     reset_loader_caches()
@@ -174,7 +181,7 @@ def reload_agents(
 
 @router.get("/repo-index")
 def repo_index(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     root = Path.cwd()

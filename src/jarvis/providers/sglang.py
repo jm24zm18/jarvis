@@ -7,6 +7,7 @@ import httpx
 
 from jarvis.config import get_settings
 from jarvis.providers.base import ModelResponse
+from jarvis.providers.compat import ProviderCompat
 
 
 class SGLangProvider:
@@ -15,9 +16,11 @@ class SGLangProvider:
         model: str,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
+        compat: ProviderCompat | None = None,
     ) -> None:
         self.model = model
         self._transport = transport
+        self._compat = compat
 
     @staticmethod
     def _coerce_text(value: object) -> str:
@@ -100,18 +103,23 @@ class SGLangProvider:
                 elif isinstance(arguments, dict):
                     parsed_arguments = arguments
                 if isinstance(name, str) and name:
-                    tool_calls.append({"name": name, "arguments": parsed_arguments})
+                    tc: dict[str, Any] = {"name": name, "arguments": parsed_arguments}
+                    raw_id = call.get("id")
+                    if isinstance(raw_id, str) and raw_id:
+                        tc["id"] = raw_id
+                    tool_calls.append(tc)
         return ModelResponse(text=content, tool_calls=tool_calls, reasoning_text=reasoning)
 
     async def generate(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, object]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> ModelResponse:
         settings = get_settings()
         base_url = self._normalize_base_url(settings.sglang_base_url)
+        compat = self._compat
         body: dict[str, object] = {
             "model": self.model,
             "messages": messages,
@@ -122,6 +130,10 @@ class SGLangProvider:
         normalized_tools = self._to_tools(tools)
         if normalized_tools is not None:
             body["tools"] = normalized_tools
+            if compat is not None:
+                if compat.tool_choice is not None:
+                    body["tool_choice"] = compat.tool_choice
+                body["parallel_tool_calls"] = compat.parallel_tool_calls
         endpoint = f"{base_url}/chat/completions"
         timeout_seconds = max(10, int(settings.sglang_timeout_seconds))
         async with httpx.AsyncClient(timeout=timeout_seconds, transport=self._transport) as client:

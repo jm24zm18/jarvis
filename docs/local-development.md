@@ -7,6 +7,7 @@
 - Ollama: `11434`
 - SearXNG: `8080`
 - SGLang: `30000`
+- LM Studio (optional, external app): `1234`
 - `make dev` runs a host-port preflight first and fails early with remediation hints if
   any of these ports are occupied.
 
@@ -17,9 +18,10 @@ make api
 make web-dev
 make setup-smoke
 make setup-smoke-running
+./start-dev.sh
 ```
 
-- API reloads with `uvicorn --reload`.
+- API reloads with `uvicorn --reload` and excludes `.jarvis/worktrees/*`, `.jarvis/logs/*`, and `.jarvis/prompts/*` to avoid DevSwarm-triggered restarts.
 - Web UI reloads via Vite HMR.
 - Periodic tasks run in-process inside the API lifespan.
 - `make setup-smoke` validates a reproducible local bootstrap path:
@@ -27,8 +29,48 @@ make setup-smoke-running
   and web dependency install.
 - `make setup-smoke-running` is the same smoke path but skips the dev port preflight.
   Use it when local dependency services are intentionally already running.
+- `./start-dev.sh` runs dev preflight first, then:
+  - verifies `opencode` is installed, validates LM Studio reachability, discovers models, and writes valid JSON `opencode.json` (or `OPENCODE_CONFIG_PATH`) before dependency startup.
+  - with `DEV_USE_HOST_OLLAMA=1` (default): starts Docker `searxng` + `sglang` and reuses host Ollama (`OLLAMA_BASE_URL`, default `http://localhost:11434`)
+  - with `DEV_USE_HOST_OLLAMA=0`: runs full `make dev` (Docker Ollama + SearXNG + SGLang)
+  The script then restarts `jarvis-baileys`, verifies Ollama/SearXNG health, and launches API + web dev servers.
+  For `401 loggedOut`, run `Force Re-pair` in Admin UI (or `POST /api/v1/channels/whatsapp/reset`) to relink.
 
 ## Common Workflows
+
+### Configure LM Studio provider (optional)
+
+1. Start LM Studio locally and enable its OpenAI-compatible server.
+2. Set `.env` values:
+   - `LMSTUDIO_BASE_URL` (default: `http://127.0.0.1:1234`)
+   - optional `LMSTUDIO_OPENAI_BASE_URL` for OpenCode bootstrap (default: `${LMSTUDIO_BASE_URL}/v1`)
+   - `LMSTUDIO_MODEL`
+   - optional `LMSTUDIO_API_KEY`
+3. Restart API (`make api`).
+4. Verify model catalog from admin API:
+   - `GET /api/v1/auth/providers/models` should include `lmstudio_models`.
+5. Optionally set provider routing in admin API/UI:
+   - `GET /api/v1/auth/providers/config`
+   - `POST /api/v1/auth/providers/config`
+
+Notes:
+- Provider config saves update `.env` and reload API runtime provider settings immediately.
+- LM Studio health checks use `GET {LMSTUDIO_BASE_URL}/v1/models` (or `{LMSTUDIO_BASE_URL}/models` if URL already ends with `/v1`).
+
+### Run DevSwarm workers (optional)
+
+1. Ensure `GITHUB_TOKEN` is set and points to the target repo.
+2. Start API (`make api`) so the periodic monitor loop is active.
+3. Create a task:
+   - `uv run jarvis swarm create --task "implement X" --repo .`
+   - If OpenCode preflight fails (missing binary or invalid config JSON), create fails fast with explicit remediation error.
+   - Bare `LMSTUDIO_MODEL` values are normalized to `lmstudio/<model>` when launching OpenCode workers.
+4. Check monitor status:
+   - `uv run jarvis swarm status --json`
+5. Nudge active worker:
+   - `uv run jarvis swarm nudge <task_id> --message "re-run tests"`
+6. Optional web control plane:
+   - open `/admin/swarm` for task registry, gate diagnostics, nudge, and cleanup controls.
 
 ### Add a tool
 
@@ -77,6 +119,13 @@ make setup-smoke-running
    - `POST /api/v1/feature-requests` with body field `"sync_to_github": true`
 5. Confirm `github_issue_number`/`github_issue_url` are populated in `GET /api/v1/bugs`.
 
+### Validate isolated feature workspace (optional)
+
+1. Trigger a feature build run through the feature-request API flow.
+2. Validate the latest workspace snapshot for that feature:
+   - `uv run jarvis feature validate --id <feature_id>`
+3. The command updates build-run validation fields and prints the validation log path.
+
 ### Enable local maintenance loop (optional)
 
 1. In `.env`, set `MAINTENANCE_ENABLED=1` and `MAINTENANCE_INTERVAL_SECONDS` (for example `3600`).
@@ -114,6 +163,11 @@ make setup-smoke-running
 
 - Detect current listeners:
   - `ss -ltn '( sport = :11434 or sport = :30000 or sport = :8080 )'`
+- If port `11434` is occupied by host Ollama, use host mode for the one-command launcher:
+  - `DEV_USE_HOST_OLLAMA=1 ./start-dev.sh`
+  - validate host Ollama: `curl -fsS http://localhost:11434/api/tags`
+- To force Docker Ollama in the one-command launcher:
+  - `DEV_USE_HOST_OLLAMA=0 ./start-dev.sh`
 - If needed, run dependencies on alternate host ports with `docker compose` overrides.
   Example `docker-compose.override.yml`:
 
@@ -133,6 +187,7 @@ services:
 - When using alternate ports, update `.env` accordingly:
   - `OLLAMA_BASE_URL=http://localhost:21434`
   - `SGLANG_BASE_URL=http://localhost:31000/v1`
+  - `LMSTUDIO_BASE_URL=http://localhost:1234/v1` (or your custom LM Studio server URL)
   - `SEARXNG_BASE_URL=http://localhost:18080`
 
 ### Secret Hygiene Quick Checks

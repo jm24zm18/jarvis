@@ -147,3 +147,25 @@ def test_reload_agents() -> None:
     assert response.json() == {"ok": True}
     assert agent_loader._agent_ids_cache is None
     assert agent_loader._bundle_cache == {}
+
+
+def test_startup_clears_restarting_flag() -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        conn.execute(
+            "UPDATE system_state SET restarting=1 WHERE id='singleton'"
+        )
+        conn.commit()
+
+    with TestClient(app):
+        pass
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT restarting FROM system_state WHERE id='singleton'"
+        ).fetchone()
+        assert row is not None
+        assert int(row["restarting"]) == 0

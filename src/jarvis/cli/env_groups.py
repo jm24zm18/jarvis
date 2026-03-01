@@ -73,47 +73,40 @@ ENV_GROUPS: list[EnvGroup] = [
         ],
     ),
     EnvGroup(
-        title="Google / Gemini",
-        description="Google OAuth + Gemini model. Skip for local-only development.",
+        title="OpenRouter",
+        description="OpenRouter API. Set OPENROUTER_API_KEY to enable.",
         required=False,
         vars=[
             EnvVarDef(
                 "PRIMARY_PROVIDER",
-                "Primary model provider (gemini or sglang)",
-                default="gemini",
-            ),
-            EnvVarDef("GOOGLE_OAUTH_CLIENT_ID", "OAuth client ID", secret=True),
-            EnvVarDef("GOOGLE_OAUTH_CLIENT_SECRET", "OAuth client secret", secret=True),
-            EnvVarDef("GEMINI_MODEL", "Gemini model name", default="gemini-2.5-flash"),
-            EnvVarDef(
-                "GEMINI_CODE_ASSIST_PLAN_TIER",
-                "Plan tier (free, pro, ultra, standard, enterprise)",
-                default="free",
+                "Primary model provider (openrouter, sglang, or lmstudio)",
+                default="openrouter",
             ),
             EnvVarDef(
-                "GEMINI_CODE_ASSIST_REQUESTS_PER_MINUTE",
-                "Override requests/minute (0 uses tier default)",
-                default="0",
+                "FALLBACK_PROVIDER",
+                "Fallback model provider (openrouter, sglang, or lmstudio)",
+                default="sglang",
+            ),
+            EnvVarDef("OPENROUTER_API_KEY", "OpenRouter API key", default="", secret=True),
+            EnvVarDef(
+                "OPENROUTER_MODEL",
+                "OpenRouter model name",
+                default="google/gemini-2.5-flash",
             ),
             EnvVarDef(
-                "GEMINI_CODE_ASSIST_REQUESTS_PER_DAY",
-                "Override requests/day (0 uses tier default)",
-                default="0",
+                "OPENROUTER_BASE_URL",
+                "OpenRouter base URL",
+                default="https://openrouter.ai/api/v1",
             ),
             EnvVarDef(
-                "GEMINI_CODE_ASSIST_TOKEN_PATH",
-                "Code Assist token cache path",
-                default="~/.config/gemini-cli-oauth/token.json",
-            ),
-            EnvVarDef(
-                "GEMINI_CLI_TIMEOUT_SECONDS",
-                "Code Assist request timeout in seconds",
+                "OPENROUTER_TIMEOUT_SECONDS",
+                "Request timeout (seconds)",
                 default="120",
             ),
             EnvVarDef(
-                "GEMINI_QUOTA_COOLDOWN_DEFAULT_SECONDS",
-                "Fallback cooldown after quota errors when reset is unknown",
-                default="60",
+                "PROMPT_BUDGET_OPENROUTER_TOKENS",
+                "OpenRouter token budget",
+                default="200000",
             ),
         ],
     ),
@@ -139,6 +132,34 @@ ENV_GROUPS: list[EnvGroup] = [
                 "SGLang request timeout in seconds",
                 default="600",
                 required_for_dev=True,
+            ),
+        ],
+    ),
+    EnvGroup(
+        title="Local LLM (LM Studio)",
+        description="LM Studio OpenAI-compatible endpoint for local model routing.",
+        required=False,
+        vars=[
+            EnvVarDef(
+                "LMSTUDIO_BASE_URL",
+                "LM Studio OpenAI-compatible base URL",
+                default="http://127.0.0.1:1234",
+            ),
+            EnvVarDef(
+                "LMSTUDIO_MODEL",
+                "Model identifier for LM Studio",
+                default="local-model",
+            ),
+            EnvVarDef(
+                "LMSTUDIO_API_KEY",
+                "LM Studio API key (optional)",
+                default="",
+                secret=True,
+            ),
+            EnvVarDef(
+                "LMSTUDIO_TIMEOUT_SECONDS",
+                "LM Studio request timeout in seconds",
+                default="600",
             ),
         ],
     ),
@@ -276,6 +297,81 @@ ENV_GROUPS: list[EnvGroup] = [
                 default="300",
             ),
             EnvVarDef(
+                "FOLLOWUP_HEARTBEAT_INTERVAL_SECONDS",
+                "Thread follow-up heartbeat interval in seconds (0 disables)",
+                default="300",
+            ),
+            EnvVarDef(
+                "FOLLOWUP_MAX_THREADS_PER_TICK",
+                "Max enabled follow-up threads evaluated per heartbeat tick",
+                default="20",
+            ),
+            EnvVarDef(
+                "FOLLOWUP_MIN_IDLE_SECONDS",
+                "Minimum idle seconds since last thread message before evaluation",
+                default="300",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_RETRY_ON_DEGRADED",
+                "Feature-build degraded terminal retry switch (0/1)",
+                default="1",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_RETRY_MAX_ATTEMPTS",
+                "Maximum total feature-build attempts (initial + retries)",
+                default="5",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_RETRY_BACKOFF_SECONDS",
+                "Comma-separated backoff delays in seconds for feature-build retries",
+                default="30,120,300,600",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_RETRY_DISPATCH_INTERVAL_SECONDS",
+                "Interval in seconds for dispatching due feature-build retries",
+                default="15",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_ESCALATE_ON_EXHAUSTED",
+                "Escalate to configured humans when feature-build retries exhaust (0/1)",
+                default="1",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_FAIL_FAST_PLACEHOLDER_REPEAT",
+                "Fail fast when placeholder tool-loop degradation repeats consecutively (0/1)",
+                default="1",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_DELIVERABLE_GATE_ENABLED",
+                "Enable feature-build deliverable gate checks before marking success (0/1)",
+                default="1",
+            ),
+            EnvVarDef(
+                "FEATURE_BUILD_LOOP_CAP_THRESHOLD",
+                "Max repeated identical tool signature count per build attempt",
+                default="8",
+            ),
+            EnvVarDef(
+                "HUMAN_ESCALATION_CHANNEL_TYPE",
+                "Channel used for escalation delivery",
+                default="whatsapp",
+            ),
+            EnvVarDef(
+                "HUMAN_ESCALATION_TARGETS",
+                "CSV external IDs/chat IDs for human escalation targets",
+                default="",
+            ),
+            EnvVarDef(
+                "HUMAN_ESCALATION_DEFAULT_PRIORITY",
+                "Default priority when escalation request omits one",
+                default="normal",
+            ),
+            EnvVarDef(
+                "HUMAN_ESCALATION_DISPATCH_INTERVAL_SECONDS",
+                "Queued escalation dispatch interval in seconds (0 disables periodic dispatch)",
+                default="15",
+            ),
+            EnvVarDef(
                 "MAINTENANCE_INTERVAL_SECONDS",
                 "Maintenance schedule interval in seconds (0 disables schedule)",
                 default="0",
@@ -303,9 +399,6 @@ ENV_GROUPS: list[EnvGroup] = [
             EnvVarDef("COMPACTION_EVERY_N_EVENTS", "Event compaction interval", default="25"),
             EnvVarDef(
                 "COMPACTION_INTERVAL_SECONDS", "Compaction time interval", default="600"
-            ),
-            EnvVarDef(
-                "PROMPT_BUDGET_GEMINI_TOKENS", "Gemini token budget", default="200000"
             ),
             EnvVarDef(
                 "PROMPT_BUDGET_SGLANG_TOKENS", "SGLang token budget", default="110000"

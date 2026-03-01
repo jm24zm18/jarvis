@@ -2,9 +2,13 @@ import { apiFetch } from "./client";
 import type {
   AgentDetail,
   AgentSummary,
+  ApprovalRecord,
+  ChannelReplyApprovalRequest,
+  ChannelReplyPermission,
   BugReport,
   DispatchItem,
   EventItem,
+  FeatureBuildRun,
   MemoryItem,
   MemoryConsistencyReportItem,
   MemoryFailureItem,
@@ -20,20 +24,22 @@ import type {
   SystemStatus,
   ThreadItem,
   OnboardingStatus,
-  GoogleOAuthConfig,
   ProviderConfig,
   ProviderModelsCatalog,
   ProviderConfigUpdateResult,
-  GoogleOAuthStartResult,
-  GoogleOAuthStatus,
   FitnessSnapshot,
   GovernanceSlo,
   GovernanceSloHistoryItem,
   EvolutionItem,
+  FeatureRequest,
+  RepoStatus,
+  RepoCommit,
+  RepoBranchSet,
+  DevSwarmTask,
 } from "../types";
 
 export const login = (password: string) =>
-  apiFetch<{ session_id: string; user_id: string; role: string }>("/api/v1/auth/login", {
+  apiFetch<{ session_id: string; user_id: string }>("/api/v1/auth/login", {
     method: "POST",
     body: JSON.stringify({ password }),
   });
@@ -66,10 +72,15 @@ export const patchThread = (
 export const createThread = () =>
   apiFetch<{ id: string }>("/api/v1/threads", { method: "POST", body: "{}" });
 
-export const listMessages = (threadId: string, before?: string) =>
-  apiFetch<{ items: MessageItem[]; next_before?: string }>(
-    `/api/v1/threads/${threadId}/messages${before ? `?before=${encodeURIComponent(before)}` : ""}`,
+export const listMessages = (threadId: string, before?: string, limit?: number) => {
+  const qs = new URLSearchParams();
+  if (before) qs.set("before", before);
+  if (typeof limit === "number") qs.set("limit", String(limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ items: MessageItem[]; next_before?: string }>(
+    `/api/v1/threads/${threadId}/messages${suffix}`,
   );
+};
 
 export const sendMessage = (threadId: string, content: string) =>
   apiFetch<{ ok: boolean; message_id: string; onboarding: boolean; trace_id?: string }>(
@@ -150,6 +161,44 @@ export const memoryStats = () => apiFetch<MemoryStats>("/api/v1/memory/stats");
 
 export const listSchedules = () => apiFetch<{ items: ScheduleItem[] }>("/api/v1/schedules");
 
+export const listSwarmTasks = (params?: { limit?: number; status?: string }) => {
+  const qs = new URLSearchParams();
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  if (params?.status) qs.set("status", params.status);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ ok: boolean; count: number; items: DevSwarmTask[] }>(
+    `/api/v1/swarm/tasks${suffix}`,
+  );
+};
+
+export const createSwarmTask = (payload: {
+  description: string;
+  task_type: "feature" | "bugfix" | "refactor";
+  model?: string;
+}) =>
+  apiFetch<{ ok: boolean; item: DevSwarmTask }>("/api/v1/swarm/tasks", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const nudgeSwarmTask = (taskId: string, message: string) =>
+  apiFetch<{ ok: boolean; task_id: string; session: string; task?: DevSwarmTask }>(
+    `/api/v1/swarm/tasks/${taskId}/nudge`,
+    {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    },
+  );
+
+export const cleanupSwarmTask = (taskId: string, removeWorktrees = false) =>
+  apiFetch<{ ok: boolean; removed: string[]; failures: Array<Record<string, string>>; task?: DevSwarmTask }>(
+    `/api/v1/swarm/tasks/${taskId}/cleanup`,
+    {
+      method: "POST",
+      body: JSON.stringify({ remove_worktrees: removeWorktrees }),
+    },
+  );
+
 export const createSchedule = (payload: {
   thread_id?: string;
   cron_expr: string;
@@ -206,22 +255,6 @@ export const deletePermission = (principalId: string, toolName: string) =>
     method: "DELETE",
   });
 
-export const getGoogleOAuthConfig = () =>
-  apiFetch<GoogleOAuthConfig>("/api/v1/auth/google/config");
-
-export const startGoogleOAuth = (payload: {
-  client_id?: string;
-  client_secret?: string;
-  redirect_uri?: string;
-}) =>
-  apiFetch<GoogleOAuthStartResult>("/api/v1/auth/google/start", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-
-export const getGoogleOAuthStatus = (state: string) =>
-  apiFetch<GoogleOAuthStatus>(`/api/v1/auth/google/status?state=${encodeURIComponent(state)}`);
-
 export const getProviderConfig = () =>
   apiFetch<ProviderConfig>("/api/v1/auth/providers/config");
 
@@ -229,9 +262,16 @@ export const getProviderModelsCatalog = () =>
   apiFetch<ProviderModelsCatalog>("/api/v1/auth/providers/models");
 
 export const updateProviderConfig = (payload: {
-  primary_provider?: "gemini" | "sglang" | string;
-  gemini_model?: string;
+  primary_provider?: "openrouter" | "sglang" | "lmstudio" | string;
+  fallback_provider?: "openrouter" | "sglang" | "lmstudio" | string;
+  openrouter_model?: string;
   sglang_model?: string;
+  lmstudio_model?: string;
+  lmstudio_base_url?: string;
+  openrouter_api_key?: string;
+  clear_openrouter_api_key?: boolean;
+  lmstudio_api_key?: string;
+  clear_lmstudio_api_key?: boolean;
 }) =>
   apiFetch<ProviderConfigUpdateResult>("/api/v1/auth/providers/config", {
     method: "POST",
@@ -251,6 +291,23 @@ export const listBugs = (params: {
   return apiFetch<{ items: BugReport[]; total: number }>(`/api/v1/bugs${suffix}`);
 };
 
+export const listFeatureRequests = (params?: {
+  status?: string;
+  priority?: string;
+  approval_status?: string;
+  search?: string;
+  limit?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.priority) qs.set("priority", params.priority);
+  if (params?.approval_status) qs.set("approval_status", params.approval_status);
+  if (params?.search) qs.set("search", params.search);
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return apiFetch<{ items: FeatureRequest[]; total: number }>(`/api/v1/feature-requests${suffix}`);
+};
+
 export const createBug = (payload: {
   title: string;
   description: string;
@@ -259,6 +316,18 @@ export const createBug = (payload: {
   trace_id?: string;
 }) =>
   apiFetch<{ id: string }>("/api/v1/bugs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const createFeatureRequest = (payload: {
+  title: string;
+  description: string;
+  priority: string;
+  thread_id?: string;
+  trace_id?: string;
+}) =>
+  apiFetch<{ id: string }>("/api/v1/feature-requests", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -418,5 +487,167 @@ export const whatsappDisconnect = () =>
     body: "{}",
   });
 
+export const whatsappReset = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/reset", {
+    method: "POST",
+    body: "{}",
+  });
+
+export const whatsappRestart = () =>
+  apiFetch<Record<string, unknown>>("/api/v1/channels/whatsapp/restart", {
+    method: "POST",
+    body: "{}",
+  });
+
 export const telegramStatus = () =>
   apiFetch<Record<string, unknown>>("/api/v1/channels/telegram/status");
+
+export const uploadMedia = (file: File, threadId?: string) => {
+  const form = new FormData();
+  form.append("file", file);
+  if (threadId) form.append("thread_id", threadId);
+  // Do NOT set Content-Type header — browser sets multipart boundary automatically.
+  return apiFetch<{ attachment_id: string; url: string; mime_type: string; size_bytes: number }>(
+    "/api/v1/media/upload",
+    { method: "POST", body: form },
+  );
+};
+
+export const repoStatus = () => apiFetch<RepoStatus>("/api/v1/repo/status");
+
+export const repoLog = (limit = 50) =>
+  apiFetch<RepoCommit[]>(`/api/v1/repo/log?limit=${limit}`);
+
+export const repoBranches = () => apiFetch<RepoBranchSet>("/api/v1/repo/branches");
+
+export const repoDiff = (mode: "working" | "staged", path?: string) => {
+  const qs = new URLSearchParams({ mode });
+  if (path) qs.set("path", path);
+  return apiFetch<string>(`/api/v1/repo/diff?${qs.toString()}`);
+};
+
+export const setFeatureApproval = (
+  featureId: string,
+  payload: { decision: "approved" | "rejected"; note?: string },
+) =>
+  apiFetch<{ id: string; approval_status: string }>(`/api/v1/feature-requests/${featureId}/approval`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+
+export const triggerFeatureBuild = (featureId: string) =>
+  apiFetch<{ run_id: string; trace_id: string; feature_id: string; status: string }>(
+    `/api/v1/feature-requests/${featureId}/build`,
+    { method: "POST", body: "{}" },
+  );
+
+export const listFeatureBuildRuns = (featureId: string, limit = 10) =>
+  apiFetch<{ items: FeatureBuildRun[]; feature_id: string }>(
+    `/api/v1/feature-requests/${featureId}/build-runs?limit=${limit}`,
+  );
+
+export const listApprovals = (params?: {
+  action?: string;
+  status?: string;
+  target_ref?: string;
+  limit?: number;
+  offset?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.action) qs.set("action", params.action);
+  if (params?.status) qs.set("status", params.status);
+  if (params?.target_ref) qs.set("target_ref", params.target_ref);
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  if (typeof params?.offset === "number") qs.set("offset", String(params.offset));
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return apiFetch<{ items: ApprovalRecord[]; allowed_actions: string[] }>(`/api/v1/approvals${suffix}`);
+};
+
+export const createApproval = (payload: {
+  action: string;
+  target_ref?: string;
+  ttl_minutes?: number;
+}) =>
+  apiFetch<{ approval_id: string; action: string; target_ref: string; ttl_minutes: number }>(
+    "/api/v1/approvals",
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+
+export const revokeApproval = (approvalId: string) =>
+  apiFetch<{ approval_id: string; status: string }>(`/api/v1/approvals/${approvalId}/revoke`, {
+    method: "POST",
+    body: "{}",
+  });
+
+export const listChannelReplyApprovals = (params?: {
+  status?: string;
+  limit?: number;
+  offset?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (typeof params?.limit === "number") qs.set("limit", String(params.limit));
+  if (typeof params?.offset === "number") qs.set("offset", String(params.offset));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<{ items: ChannelReplyApprovalRequest[] }>(`/api/v1/channel-reply-approvals${suffix}`);
+};
+
+export const approveChannelReply = (requestId: string, mode: "once" | "always") =>
+  apiFetch<{ ok: boolean; request_id: string; mode: string; status: string; dispatched: boolean }>(
+    `/api/v1/channel-reply-approvals/${requestId}/approve`,
+    { method: "POST", body: JSON.stringify({ mode }) },
+  );
+
+export const rejectChannelReply = (requestId: string, reason = "") =>
+  apiFetch<{ ok: boolean; request_id: string; status: string }>(
+    `/api/v1/channel-reply-approvals/${requestId}/reject`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+
+export const listChannelReplyPermissions = (status = "active") =>
+  apiFetch<{ items: ChannelReplyPermission[] }>(
+    `/api/v1/channel-reply-permissions?status=${encodeURIComponent(status)}`,
+  );
+
+export const revokeChannelReplyPermission = (
+  channelType: string,
+  recipient: string,
+  reason = "manual_revoke",
+) =>
+  apiFetch<{ ok: boolean; permission_id: string; status: string }>(
+    "/api/v1/channel-reply-permissions/revoke",
+    {
+      method: "POST",
+      body: JSON.stringify({ channel_type: channelType, recipient, reason }),
+    },
+  );
+
+export const repoCheckout = (payload: { branch?: string; create_branch?: string }) =>
+  apiFetch<{ status: string }>("/api/v1/repo/checkout", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const repoStage = (payload: { paths?: string[]; all?: boolean }) =>
+  apiFetch<{ status: string }>("/api/v1/repo/stage", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const repoUnstage = (paths: string[]) =>
+  apiFetch<{ status: string }>("/api/v1/repo/unstage", {
+    method: "POST",
+    body: JSON.stringify(paths),
+  });
+
+export const repoCommit = (message: string) =>
+  apiFetch<{ status: string }>("/api/v1/repo/commit", {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+
+export const repoPush = (set_upstream = false) =>
+  apiFetch<{ status: string }>("/api/v1/repo/push", {
+    method: "POST",
+    body: JSON.stringify({ set_upstream }),
+  });

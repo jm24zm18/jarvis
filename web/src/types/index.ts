@@ -7,12 +7,21 @@ export interface ThreadItem {
   last_message?: string | null;
 }
 
+export interface MediaAttachment {
+  id: string;
+  url: string;
+  mime_type: string;
+  thumbnail_url?: string | null;
+  size_bytes: number;
+}
+
 export interface MessageItem {
   id: string;
   role: "user" | "assistant" | string;
   speaker?: string;
   content: string;
   created_at: string;
+  media?: MediaAttachment[];
 }
 
 export interface OnboardingStatus {
@@ -176,55 +185,41 @@ export interface PermissionGroup {
   tools: Record<string, string>;
 }
 
-export interface GoogleOAuthConfig {
-  configured: boolean;
-  has_client_credentials: boolean;
-  token_cache_exists: boolean;
-  has_refresh_token: boolean;
-  auto_refresh_enabled: boolean;
-  access_expires_at_ms: number;
-  seconds_until_access_expiry: number;
-  current_tier_id: string;
-  current_tier_name: string;
-  quota_blocked: boolean;
-  quota_block_seconds_remaining: number;
-  quota_block_reason: string;
-}
-
-export interface GoogleOAuthStartResult {
-  state: string;
-  auth_url: string;
-  redirect_uri: string;
-  client_id_source: string;
-}
-
-export interface GoogleOAuthStatus {
-  status: string;
-  detail: string;
-}
-
 export interface ProviderConfig {
-  primary_provider: "gemini" | "sglang" | string;
-  gemini_model: string;
+  primary_provider: "openrouter" | "sglang" | "lmstudio" | string;
+  fallback_provider: "openrouter" | "sglang" | "lmstudio" | string;
+  openrouter_model: string;
   sglang_model: string;
+  lmstudio_model: string;
+  lmstudio_base_url: string;
+  openrouter_api_key_set: boolean;
+  openrouter_api_key_masked: string;
+  lmstudio_api_key_set: boolean;
+  lmstudio_api_key_masked: string;
   available_primary_providers: string[];
+  available_fallback_providers: string[];
 }
 
 export interface ProviderModelsCatalog {
-  gemini_models: string[];
-  gemini_verified_models: string[];
-  gemini_verification: Record<string, string>;
   sglang_models: string[];
-  gemini_source: string;
+  lmstudio_models: string[];
   sglang_source: string;
+  lmstudio_source: string;
 }
 
 export interface ProviderConfigUpdateResult {
   ok: boolean;
   updated: string[];
-  primary_provider: "gemini" | "sglang" | string;
-  gemini_model: string;
+  primary_provider: "openrouter" | "sglang" | "lmstudio" | string;
+  fallback_provider: "openrouter" | "sglang" | "lmstudio" | string;
+  openrouter_model: string;
   sglang_model: string;
+  lmstudio_model: string;
+  lmstudio_base_url: string;
+  openrouter_api_key_set: boolean;
+  openrouter_api_key_masked: string;
+  lmstudio_api_key_set: boolean;
+  lmstudio_api_key_masked: string;
   api_reloaded: boolean;
   worker_reload_enqueued: boolean;
 }
@@ -241,6 +236,130 @@ export interface BugReport {
   trace_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface FeatureRequest extends BugReport {
+  approval_status: "pending" | "approved" | "rejected";
+  approval_note?: string;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  rejected_by?: string | null;
+  rejected_at?: string | null;
+}
+
+export interface FeatureBuildRun {
+  id: string;
+  feature_id: string;
+  trace_id: string;
+  thread_id: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled" | "decomposed";
+  summary: string;
+  attempt_count: number;
+  max_attempts: number;
+  retry_state: "none" | "scheduled" | "running" | "exhausted";
+  next_retry_at: string;
+  last_failure_reason: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApprovalRecord {
+  id: string;
+  action: string;
+  actor_id: string;
+  status: "approved" | "consumed" | "revoked";
+  target_ref: string;
+  expires_at: string | null;
+  consumed_by_trace_id: string;
+  created_at: string;
+}
+
+export interface ChannelReplyApprovalRequest {
+  id: string;
+  source_thread_id: string;
+  source_message_id: string;
+  trace_id: string;
+  channel_type: string;
+  recipient: string;
+  status: string;
+  decision_mode: string;
+  reason: string;
+  admin_thread_id: string;
+  decided_by: string;
+  decided_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChannelReplyPermission {
+  id: string;
+  channel_type: string;
+  recipient: string;
+  status: string;
+  granted_by: string;
+  revoked_by: string;
+  revoked_reason: string;
+  created_at: string;
+  updated_at: string;
+  revoked_at?: string | null;
+}
+
+export interface RepoStatus {
+  branch: string;
+  upstream: string;
+  ahead: number;
+  behind: number;
+  staged: string[];
+  unstaged: string[];
+  untracked: string[];
+  conflicted: string[];
+  is_clean: boolean;
+}
+
+export interface RepoCommit {
+  sha: string;
+  short_sha: string;
+  subject: string;
+  author_name: string;
+  author_email: string;
+  authored_at: string;
+}
+
+export interface DevSwarmTask {
+  id: string;
+  task_type: "feature" | "bugfix" | "refactor" | string;
+  description: string;
+  status:
+    | "queued"
+    | "running"
+    | "needs_attention"
+    | "ready_for_review"
+    | "done"
+    | "failed"
+    | string;
+  repo_path: string;
+  worktree_path: string;
+  branch: string;
+  base_branch: string;
+  model: string;
+  provider: string;
+  tmux_session: string;
+  pr_number?: number | null;
+  pr_url: string;
+  attempt: number;
+  max_attempts: number;
+  last_error: string;
+  checks?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
+export interface RepoBranchSet {
+  current: string;
+  local: string[];
+  remote: string[];
 }
 
 export interface FitnessSnapshot {

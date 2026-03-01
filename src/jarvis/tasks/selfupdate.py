@@ -53,6 +53,7 @@ from jarvis.selfupdate.pipeline import (
     read_state,
     replay_patch_determinism_check,
     run_smoke_gate,
+    run_smoke_gate_sandboxed,
     touches_critical_paths,
     update_artifact_section,
     validate_evidence_refs_in_repo,
@@ -62,6 +63,7 @@ from jarvis.selfupdate.pipeline import (
     write_patch,
     write_state,
 )
+from jarvis.selfupdate.sandbox import generate_diff_summary
 from jarvis.tasks.system import enqueue_restart, system_restart
 
 PATCH_BASE = Path("/var/lib/agent/patches")
@@ -294,6 +296,60 @@ def _record_failure_capsule(trace_id: str, phase: str, reason: str) -> None:
                 attempt,
                 now_iso(),
             ),
+        )
+
+
+def _build_sandbox_summary(
+    *,
+    repo_path: str,
+    patch_path: Path,
+    work_dir: Path,
+    smoke_ok: bool,
+    smoke_reason: str,
+) -> dict[str, object]:
+    """Build deterministic sandbox diff metadata for artifact.json."""
+    summary_worktree = work_dir / "sandbox_summary_worktree"
+    add = subprocess.run(
+        ["git", "-C", repo_path, "worktree", "add", "--detach", str(summary_worktree), "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if add.returncode != 0:
+        return {
+            "enabled": True,
+            "status": "passed" if smoke_ok else "failed",
+            "detail": smoke_reason,
+            "summary_error": add.stderr.strip() or "worktree add failed",
+        }
+
+    try:
+        apply_result = git_apply(str(summary_worktree), patch_path)
+        if not apply_result.ok:
+            return {
+                "enabled": True,
+                "status": "passed" if smoke_ok else "failed",
+                "detail": smoke_reason,
+                "summary_error": apply_result.reason,
+            }
+
+        summary = generate_diff_summary(
+            repo_path=repo_path,
+            worktree_path=summary_worktree,
+            patch_path=patch_path,
+        )
+        summary["enabled"] = True
+        summary["status"] = "passed" if smoke_ok else "failed"
+        summary["detail"] = smoke_reason
+        return summary
+    finally:
+        subprocess.run(
+            ["git", "-C", repo_path, "worktree", "remove", "--force", str(summary_worktree)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
 
 
@@ -1237,12 +1293,31 @@ def self_update_test(trace_id: str) -> dict[str, str]:
         },
     )
 
-    smoke_result = run_smoke_gate(
-        repo_path=context["repo_path"],
-        patch_path=patch_path,
-        work_dir=patch_base / trace_id,
-        profile=settings.selfupdate_smoke_profile,
-    )
+    if int(settings.selfupdate_sandbox_enabled) == 1:
+        smoke_result = run_smoke_gate_sandboxed(
+            repo_path=context["repo_path"],
+            patch_path=patch_path,
+            work_dir=patch_base / trace_id,
+            profile=settings.selfupdate_smoke_profile,
+            image=settings.selfupdate_sandbox_image,
+            timeout=settings.selfupdate_sandbox_timeout_seconds,
+        )
+    else:
+        smoke_result = run_smoke_gate(
+            repo_path=context["repo_path"],
+            patch_path=patch_path,
+            work_dir=patch_base / trace_id,
+            profile=settings.selfupdate_smoke_profile,
+        )
+    if int(settings.selfupdate_sandbox_enabled) == 1:
+        sandbox_payload = _build_sandbox_summary(
+            repo_path=context["repo_path"],
+            patch_path=patch_path,
+            work_dir=patch_base / trace_id,
+            smoke_ok=smoke_result.ok,
+            smoke_reason=smoke_result.reason,
+        )
+        update_artifact_section(trace_id, patch_base, "sandbox", sandbox_payload)
     if not smoke_result.ok:
         write_state(trace_id, patch_base, "test_failed", smoke_result.reason)
         _record_check(
@@ -1343,7 +1418,15 @@ def self_update_apply(trace_id: str) -> dict[str, str]:
                 "status": "rejected",
                 "reason": f"required story pack not passing: {pack}",
             }
+    # Determine whether manual approval is required based on app_env and config flags.
+    # SELFUPDATE_AUTO_APPLY_PROD=1 skips approval in prod (not recommended).
+    # SELFUPDATE_AUTO_APPLY_DEV=0 requires approval even in dev/staging.
     if settings.app_env == "prod":
+        requires_approval = int(settings.selfupdate_auto_apply_prod) != 1
+    else:
+        requires_approval = int(settings.selfupdate_auto_apply_dev) != 1
+
+    if requires_approval:
         if phase in {"tested", "pr_opened"}:
             with get_conn() as conn:
                 approved = consume_approval(
@@ -1385,12 +1468,29 @@ def self_update_apply(trace_id: str) -> dict[str, str]:
                 "status": "rejected",
                 "reason": f"invalid state transition: {state['state']} -> applied",
             }
-    elif phase not in {"tested", "approved", "pr_opened"}:
-        return {
-            "trace_id": trace_id,
-            "status": "rejected",
-            "reason": f"invalid state transition: {state['state']} -> applied",
-        }
+    else:
+        # Auto-apply: emit an informational event and allow without manual approval.
+        auto_apply_reason = (
+            f"auto-apply enabled (env={settings.app_env}, "
+            f"SELFUPDATE_AUTO_APPLY_{'PROD' if settings.app_env == 'prod' else 'DEV'}=1)"
+        )
+        _emit(
+            trace_id,
+            "self_update.auto_apply",
+            {"status": "auto_approved", "reason": auto_apply_reason},
+        )
+        _record_check(
+            trace_id,
+            check_type="apply.approval",
+            status="passed",
+            detail=auto_apply_reason,
+        )
+        if phase not in {"tested", "approved", "pr_opened"}:
+            return {
+                "trace_id": trace_id,
+                "status": "rejected",
+                "reason": f"invalid state transition: {state['state']} -> applied",
+            }
 
     artifact = read_artifact(trace_id, patch_base)
     patch_text = read_patch(trace_id, patch_base)

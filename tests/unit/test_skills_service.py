@@ -133,7 +133,7 @@ def test_skills_service_install_package_and_history(tmp_path: Path) -> None:
             ("main", "agent"),
         )
         conn.execute(
-            "INSERT INTO tool_permissions(principal_id, tool_name, effect) VALUES(?,?,?)",
+            "INSERT OR IGNORE INTO tool_permissions(principal_id, tool_name, effect) VALUES(?,?,?)",
             ("main", "echo", "allow"),
         )
         installed = svc.install_package(

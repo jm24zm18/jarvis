@@ -8,14 +8,15 @@ Multi-agent async framework with WhatsApp and Telegram integration, event-source
 - In-process asyncio task runner and task routing.
 - SQLite DB connection + ordered SQL migrations.
 - Event system with trace-aware event emission.
-- Provider interface with Gemini + SGLang adapters and fallback routing.
+- Provider interface with OpenRouter, SGLang, and LM Studio adapters and fallback routing.
 - Tool registry/runtime with deny-by-default policy hooks and audit events.
 - Memory service with embeddings, semantic retrieval, FTS fallback, and thread compaction.
 - Agent orchestrator loop with bounded tool-call iterations.
 - Scheduler dispatch loop and self-update pipeline with validate/test/apply/rollback gates.
 - Agent bundle loader (`agents/*`) with startup validation and tool-permission seeding.
-- Role-aware web auth (`user` / `admin`) with ownership-scoped APIs and WebSocket checks.
+- Single-admin web auth bound to the root identity (`system:root`).
 - Managed skill package support with install metadata and CLI management.
+- Non-web outbound reply approval gate with admin approvals and sender/channel allowlist persistence (`081_channel_reply_approvals.sql`).
 
 ## Quick start
 
@@ -26,6 +27,16 @@ make migrate
 make dev
 make api
 ```
+
+Or run everything for local API + web development in one command:
+
+```bash
+./start-dev.sh
+```
+
+`start-dev.sh` defaults to `DEV_USE_HOST_OLLAMA=1` (reuse host Ollama on `11434`).
+Use `DEV_USE_HOST_OLLAMA=0 ./start-dev.sh` to force Docker-managed Ollama.
+It also verifies OpenCode + LM Studio, discovers models from LM Studio, and writes `opencode.json` before launching services.
 
 ## Web UI
 

@@ -1,8 +1,7 @@
 """FastAPI dependencies for web session auth."""
-
 from dataclasses import dataclass
 
-from fastapi import Cookie, Depends, Header, HTTPException, status
+from fastapi import Cookie, Header, HTTPException, status
 
 from jarvis.auth.service import validate_token
 from jarvis.db.connection import get_conn
@@ -34,11 +33,6 @@ def extract_session_token(
 @dataclass(frozen=True, slots=True)
 class UserContext:
     user_id: str
-    role: str
-
-    @property
-    def is_admin(self) -> bool:
-        return self.role == "admin"
 
 
 def require_auth(
@@ -55,11 +49,4 @@ def require_auth(
         auth_data = validate_token(conn, raw_token)
     if auth_data is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid session")
-    user_id, role = auth_data
-    return UserContext(user_id=user_id, role=role)
-
-
-def require_admin(ctx: UserContext = Depends(require_auth)) -> UserContext:  # noqa: B008
-    if not ctx.is_admin:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin required")
-    return ctx
+    return UserContext(user_id=auth_data)

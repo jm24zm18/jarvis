@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import re
+from typing import Any
 
 from jarvis.errors import ProviderError
 from jarvis.providers.base import ModelProvider, ModelResponse
@@ -22,9 +23,25 @@ class ProviderRouter:
     async def _local_llm_overloaded(self) -> bool:
         return False
 
+    def _primary_cooldown_status(self) -> tuple[bool, str]:
+        status_fn = getattr(self.primary, "quota_status", None)
+        if not callable(status_fn):
+            return False, ""
+        try:
+            status = status_fn()
+        except Exception:
+            return False, ""
+        if not isinstance(status, dict):
+            return False, ""
+        blocked = bool(status.get("blocked", False))
+        reason = str(status.get("reason", "")).strip()
+        if not blocked:
+            return False, ""
+        return True, reason or "primary quota cooldown active"
+
     async def generate(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, object]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
@@ -32,6 +49,18 @@ class ProviderRouter:
     ) -> tuple[ModelResponse, str, str | None]:
         last_exc: Exception | None = None
         primary_error = ""
+        blocked, reason = self._primary_cooldown_status()
+        if blocked:
+            primary_error = reason
+            try:
+                response = await self.fallback.generate(messages, tools, temperature, max_tokens)
+            except Exception as fallback_exc:
+                raise ProviderError(
+                    f"all providers failed: primary={primary_error}, "
+                    f"fallback={type(fallback_exc).__name__}: {fallback_exc}",
+                    retryable=True,
+                ) from fallback_exc
+            return response, "fallback", primary_error
         for attempt in range(_PRIMARY_RETRY_ATTEMPTS + 1):
             try:
                 response = await self.primary.generate(messages, tools, temperature, max_tokens)

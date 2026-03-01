@@ -3,7 +3,8 @@
 import json
 import logging
 import sqlite3
-from datetime import UTC, datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from math import sqrt
 from random import Random
@@ -15,6 +16,7 @@ from jarvis.config import get_settings
 from jarvis.ids import new_id
 from jarvis.memory.policy import apply_memory_policy, record_memory_governance_decision
 from jarvis.memory.scope import can_agent_access_thread_memory, is_known_agent, normalize_agent_id
+from jarvis.memory.state_items import StateItem, StateItemType, validate_item
 from jarvis.memory.state_store import StateStore
 
 logger = logging.getLogger(__name__)
@@ -111,6 +113,12 @@ class MemoryService:
                 decision="deny",
                 reason=schema_reason,
             )
+            self._emit_memory_event(
+                conn,
+                "memory.write.rejected",
+                {"actor_id": actor_id, "reason": schema_reason},
+                thread_id=thread_id,
+            )
             raise PermissionError(f"memory write blocked: {schema_reason}")
 
         if is_known_agent(actor_id):
@@ -125,6 +133,12 @@ class MemoryService:
                     target_kind="memory_item",
                     decision="deny",
                     reason=reason,
+                )
+                self._emit_memory_event(
+                    conn,
+                    "memory.write.rejected",
+                    {"actor_id": actor_id, "reason": reason},
+                    thread_id=thread_id,
                 )
                 raise PermissionError(f"memory write blocked: {reason}")
         governed_text, decision, reason = apply_memory_policy(
@@ -217,6 +231,38 @@ class MemoryService:
 
     def embed_text(self, text: str) -> list[float]:
         return self._embed_text(text)
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        settings = get_settings()
+        cleaned = [str(text) for text in texts]
+        base_url = settings.ollama_base_url.rstrip("/")
+        payload = {"model": settings.ollama_embed_model, "input": cleaned}
+        try:
+            with httpx.Client(timeout=12) as client:
+                response = client.post(f"{base_url}/api/embed", json=payload)
+                response.raise_for_status()
+            body = response.json()
+            embeddings = body.get("embeddings")
+            if isinstance(embeddings, list):
+                parsed_batch: list[list[float]] = []
+                for item in embeddings:
+                    if isinstance(item, dict):
+                        raw = item.get("embedding")
+                    else:
+                        raw = item
+                    if isinstance(raw, list):
+                        parsed = [float(v) for v in raw if isinstance(v, int | float)]
+                        parsed_batch.append(self._fit_dims(parsed, settings.memory_embed_dims))
+                if len(parsed_batch) == len(cleaned):
+                    return parsed_batch
+        except Exception:
+            logger.debug("batch embeddings failed; falling back to local fan-out", exc_info=True)
+
+        max_workers = max(1, min(8, len(cleaned)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            return list(executor.map(self._embed_text, cleaned))
 
     def _embed_text_cached(self, conn: sqlite3.Connection, text: str) -> list[float]:
         settings = get_settings()
@@ -905,6 +951,553 @@ class MemoryService:
         )
         return filtered
 
+    @staticmethod
+    def _safe_json_object(
+        raw: object,
+        default: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str) and raw.strip():
+            try:
+                decoded = json.loads(raw)
+            except json.JSONDecodeError:
+                return default or {}
+            if isinstance(decoded, dict):
+                return decoded
+        return default or {}
+
+    def get_user_profile(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+    ) -> dict[str, object] | None:
+        row = conn.execute(
+            (
+                "SELECT user_id, core_beliefs, summary, last_updated, version, source_thread_count "
+                "FROM user_profiles WHERE user_id=? LIMIT 1"
+            ),
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "user_id": str(row["user_id"]),
+            "core_beliefs": self._safe_json_object(row["core_beliefs"]),
+            "summary": str(row["summary"]) if row["summary"] is not None else "",
+            "last_updated": str(row["last_updated"]),
+            "version": int(row["version"] or 1),
+            "source_thread_count": int(row["source_thread_count"] or 0),
+        }
+
+    def upsert_user_profile(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        *,
+        beliefs: dict[str, object],
+        summary: str,
+        source_thread_count: int,
+        reason: str = "reflection",
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        existing = self.get_user_profile(conn, user_id)
+        version = 1
+        if existing is not None:
+            snapshot = json.dumps(existing, sort_keys=True)
+            conn.execute(
+                (
+                    "INSERT INTO user_profile_history("
+                    "id, user_id, snapshot, changed_at, change_reason"
+                    ") "
+                    "VALUES(?,?,?,?,?)"
+                ),
+                (new_id("uph"), user_id, snapshot, now, reason),
+            )
+            try:
+                version_raw = existing.get("version", 1)
+                if isinstance(version_raw, int):
+                    version = version_raw + 1
+                elif isinstance(version_raw, str):
+                    version = int(version_raw) + 1
+                else:
+                    version = 2
+            except (TypeError, ValueError):
+                version = 2
+        conn.execute(
+            (
+                "INSERT INTO user_profiles("
+                "user_id, core_beliefs, summary, last_updated, version, source_thread_count"
+                ") VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "core_beliefs=excluded.core_beliefs, "
+                "summary=excluded.summary, "
+                "last_updated=excluded.last_updated, "
+                "version=excluded.version, "
+                "source_thread_count=excluded.source_thread_count"
+            ),
+            (
+                user_id,
+                json.dumps(beliefs, sort_keys=True),
+                summary.strip(),
+                now,
+                version,
+                max(0, int(source_thread_count)),
+            ),
+        )
+
+    def get_user_top_state_items(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, object]]:
+        rows = conn.execute(
+            (
+                "SELECT si.thread_id, si.uid, si.text, si.type_tag, si.confidence, "
+                "si.importance_score, "
+                "si.refs_json, si.topic_tags_json "
+                "FROM state_items si "
+                "JOIN threads t ON t.id=si.thread_id "
+                "WHERE t.user_id=? AND si.status!='superseded' "
+                "ORDER BY si.importance_score DESC, si.last_seen_at DESC "
+                "LIMIT ?"
+            ),
+            (user_id, max(1, int(limit))),
+        ).fetchall()
+        items: list[dict[str, object]] = []
+        for row in rows:
+            refs_raw = row["refs_json"]
+            topic_raw = row["topic_tags_json"]
+            try:
+                refs_list = json.loads(str(refs_raw)) if refs_raw is not None else []
+            except json.JSONDecodeError:
+                refs_list = []
+            try:
+                topic_list = json.loads(str(topic_raw)) if topic_raw is not None else []
+            except json.JSONDecodeError:
+                topic_list = []
+            items.append(
+                {
+                    "thread_id": str(row["thread_id"]),
+                    "uid": str(row["uid"]),
+                    "text": str(row["text"]),
+                    "type_tag": str(row["type_tag"]),
+                    "confidence": str(row["confidence"]),
+                    "importance_score": float(row["importance_score"] or 0.0),
+                    "refs": [str(ref) for ref in refs_list if isinstance(ref, str)],
+                    "topic_tags": [str(tag) for tag in topic_list if isinstance(tag, str)],
+                }
+            )
+        return items
+
+    def get_user_threads(self, conn: sqlite3.Connection, user_id: str) -> list[str]:
+        rows = conn.execute(
+            "SELECT id FROM threads WHERE user_id=? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [str(row["id"]) for row in rows]
+
+    @staticmethod
+    def _thread_user_id(conn: sqlite3.Connection, thread_id: str) -> str | None:
+        row = conn.execute(
+            "SELECT user_id FROM threads WHERE id=? LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["user_id"])
+
+    def get_user_memory_by_id(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        requester_thread_id: str,
+        memory_id: str,
+        trace_id: str | None = None,
+    ) -> dict[str, object] | None:
+        owner_id = self._thread_user_id(conn, requester_thread_id)
+        if owner_id is None:
+            return None
+        row = conn.execute(
+            (
+                "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
+                "FROM memory_items mi "
+                "JOIN threads t ON t.id=mi.thread_id "
+                "WHERE mi.id=? AND t.user_id=? LIMIT 1"
+            ),
+            (memory_id, owner_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": str(row["id"]),
+            "thread_id": str(row["thread_id"]),
+            "text": str(row["text"]),
+            "metadata": self._parse_metadata(row["metadata_json"]),
+            "created_at": str(row["created_at"]),
+        }
+
+    def search_user_memories(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        requester_thread_id: str,
+        query: str,
+        limit: int = 5,
+        exclude_thread_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        owner_id = self._thread_user_id(conn, requester_thread_id)
+        if owner_id is None:
+            return []
+        search_text = str(query or "").strip()
+        if not search_text:
+            self._emit_memory_event(
+                conn,
+                "memory.retrieve.user_fallback",
+                {"result_count": 0, "query_present": False, "limit": max(1, int(limit))},
+                thread_id=requester_thread_id,
+                trace_id=trace_id,
+            )
+            return []
+
+        capped = max(1, min(int(limit), 50))
+        rows: list[sqlite3.Row] = []
+        fts_query = self._fts_query(search_text)
+        if fts_query:
+            clauses = ["t.user_id=?"]
+            params: list[object] = [owner_id]
+            if exclude_thread_id:
+                clauses.append("mi.thread_id!=?")
+                params.append(exclude_thread_id)
+            where_sql = " AND ".join(clauses)
+            try:
+                rows = conn.execute(
+                    (
+                        "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
+                        "FROM memory_fts mf JOIN memory_items mi ON mi.id=mf.memory_id "
+                        "JOIN threads t ON t.id=mi.thread_id "
+                        f"WHERE {where_sql} AND memory_fts MATCH ? "
+                        "ORDER BY bm25(memory_fts), mi.created_at DESC LIMIT ?"
+                    ),
+                    (*params, fts_query, capped),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                logger.debug("user memory fallback FTS query failed", exc_info=True)
+
+        if not rows:
+            clauses = ["t.user_id=?", "LOWER(mi.text) LIKE ?"]
+            params = [owner_id, f"%{search_text.lower()}%"]
+            if exclude_thread_id:
+                clauses.append("mi.thread_id!=?")
+                params.append(exclude_thread_id)
+            where_sql = " AND ".join(clauses)
+            rows = conn.execute(
+                (
+                    "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
+                    "FROM memory_items mi JOIN threads t ON t.id=mi.thread_id "
+                    f"WHERE {where_sql} "
+                    "ORDER BY mi.created_at DESC LIMIT ?"
+                ),
+                (*params, capped),
+            ).fetchall()
+
+        items: list[dict[str, object]] = [
+            {
+                "id": str(row["id"]),
+                "thread_id": str(row["thread_id"]),
+                "text": str(row["text"]),
+                "metadata": self._parse_metadata(row["metadata_json"]),
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]
+        self._emit_memory_event(
+            conn,
+            "memory.retrieve.user_fallback",
+            {"result_count": len(items), "query_present": True, "limit": capped},
+            thread_id=requester_thread_id,
+            trace_id=trace_id,
+        )
+        return items
+
+    def get_user_reflection_watermark(
+        self, conn: sqlite3.Connection, user_id: str
+    ) -> dict[str, object] | None:
+        row = conn.execute(
+            (
+                "SELECT user_id, last_reflected_at, source_thread_count, updated_at "
+                "FROM user_reflection_watermarks WHERE user_id=? LIMIT 1"
+            ),
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "user_id": str(row["user_id"]),
+            "last_reflected_at": str(row["last_reflected_at"]) if row["last_reflected_at"] else "",
+            "source_thread_count": int(row["source_thread_count"] or 0),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def set_user_reflection_watermark(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        *,
+        reflected_at: str,
+        source_thread_count: int,
+    ) -> None:
+        conn.execute(
+            (
+                "INSERT INTO user_reflection_watermarks("
+                "user_id, last_reflected_at, source_thread_count, updated_at"
+                ") VALUES(?,?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "last_reflected_at=excluded.last_reflected_at, "
+                "source_thread_count=excluded.source_thread_count, "
+                "updated_at=excluded.updated_at"
+            ),
+            (user_id, reflected_at, max(0, int(source_thread_count)), reflected_at),
+        )
+
+    def get_reflection_candidates(
+        self, conn: sqlite3.Connection, limit: int
+    ) -> list[dict[str, str]]:
+        candidates = conn.execute(
+            (
+                "SELECT t.id AS thread_id, "
+                "MAX(m.created_at) AS last_message, "
+                "w.last_reflected_at "
+                "FROM threads t "
+                "JOIN messages m ON m.thread_id=t.id "
+                "LEFT JOIN memory_reflection_watermarks w ON w.thread_id=t.id "
+                "WHERE t.status='open' "
+                "GROUP BY t.id "
+                "HAVING w.last_reflected_at IS NULL OR MAX(m.created_at)>w.last_reflected_at "
+                "ORDER BY last_message DESC "
+                "LIMIT ?"
+            ),
+            (max(1, int(limit)),),
+        ).fetchall()
+        return [
+            {
+                "thread_id": str(row["thread_id"]),
+                "last_message": (
+                    str(row["last_message"]) if row["last_message"] is not None else ""
+                ),
+                "last_reflected_at": (
+                    str(row["last_reflected_at"]) if row["last_reflected_at"] else ""
+                ),
+            }
+            for row in candidates
+        ]
+
+    def record_reflection(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        *,
+        insight_count: int,
+        pruned_count: int,
+        reflected_at: str,
+    ) -> None:
+        conn.execute(
+            (
+                "INSERT INTO memory_reflection_watermarks("
+                "thread_id, last_reflected_at, last_insight_count, last_pruned_count, "
+                "created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(thread_id) DO UPDATE SET "
+                "last_reflected_at=excluded.last_reflected_at, "
+                "last_insight_count=excluded.last_insight_count, "
+                "last_pruned_count=excluded.last_pruned_count, "
+                "updated_at=excluded.updated_at"
+            ),
+            (
+                thread_id,
+                reflected_at,
+                insight_count,
+                pruned_count,
+                reflected_at,
+                reflected_at,
+            ),
+        )
+
+    def _upsert_reflection_item(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        store: StateStore,
+        *,
+        type_tag: str,
+        text: str,
+        refs: list[str],
+        topic_tags: list[str],
+        agent_id: str = "main",
+    ) -> StateItem:
+        temp_item = StateItem(
+            uid="",
+            text=text,
+            status="active",
+            type_tag=type_tag,
+            topic_tags=topic_tags,
+            refs=refs,
+            confidence="high",
+        )
+        validate_item(temp_item)
+        return store.upsert_item(conn, thread_id, temp_item, agent_id=agent_id)
+
+    def upsert_worldview_item(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        *,
+        text: str,
+        refs: list[str],
+        topic_tags: list[str],
+        agent_id: str = "main",
+    ) -> StateItem:
+        store = StateStore()
+        existing = conn.execute(
+            (
+                "SELECT uid FROM state_items "
+                "WHERE thread_id=? AND type_tag=? AND status!='superseded' "
+                "ORDER BY updated_at DESC LIMIT 1"
+            ),
+            (thread_id, StateItemType.WORLDVIEW.value),
+        ).fetchone()
+        worldview_item = self._upsert_reflection_item(
+            conn,
+            thread_id,
+            store,
+            type_tag=StateItemType.WORLDVIEW.value,
+            text=text,
+            refs=refs,
+            topic_tags=topic_tags,
+            agent_id=agent_id,
+        )
+        if existing and str(existing["uid"]) != worldview_item.uid:
+            store.mark_superseded(
+                conn,
+                str(existing["uid"]),
+                thread_id,
+                replaced_by=worldview_item.uid,
+                evidence={"reason": "reflection"},
+            )
+        return worldview_item
+
+    def upsert_insight_item(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        *,
+        text: str,
+        refs: list[str],
+        topic_tags: list[str],
+        agent_id: str = "main",
+    ) -> StateItem:
+        store = StateStore()
+        return self._upsert_reflection_item(
+            conn,
+            thread_id,
+            store,
+            type_tag=StateItemType.INSIGHT.value,
+            text=text,
+            refs=refs,
+            topic_tags=topic_tags,
+            agent_id=agent_id,
+        )
+
+    def prune_low_importance(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        threshold: float,
+        age_days: int,
+    ) -> int:
+        cutoff = (
+            datetime.now(UTC) - timedelta(days=max(0, int(age_days)))
+        ).isoformat()
+        has_archive = (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state_items_archive'"
+            ).fetchone()
+            is not None
+        )
+        rows = conn.execute(
+            (
+                "SELECT uid, thread_id, text, status, type_tag, topic_tags_json, refs_json, "
+                "confidence, replaced_by, supersession_evidence, conflict, pinned, source, "
+                "created_at, last_seen_at, updated_at, tier, importance_score, access_count, "
+                "conflict_count, agent_id, last_accessed_at "
+                "FROM state_items "
+                "WHERE pinned=0 AND status!='superseded' "
+                "AND type_tag NOT IN ('worldview','insight') "
+                "AND importance_score<? "
+                "AND COALESCE(last_seen_at, created_at)<?"
+            ),
+            (float(threshold), cutoff),
+        ).fetchall()
+        archived = 0
+        if not rows:
+            return archived
+        archived_at = datetime.now(UTC).isoformat()
+        for row in rows:
+            if has_archive:
+                conn.execute(
+                (
+                    "INSERT INTO state_items_archive("
+                    "uid, thread_id, text, status, type_tag, topic_tags_json, refs_json, "
+                    "confidence, replaced_by, supersession_evidence, conflict, pinned, source, "
+                    "created_at, last_seen_at, updated_at, tier, importance_score, access_count, "
+                    "conflict_count, agent_id, last_accessed_at, archived_at, archive_reason"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                ),
+                    (
+                        str(row["uid"]),
+                        str(row["thread_id"]),
+                        str(row["text"]),
+                        str(row["status"]),
+                        str(row["type_tag"]),
+                        str(row["topic_tags_json"]),
+                        str(row["refs_json"]),
+                        str(row["confidence"]),
+                        str(row["replaced_by"]) if row["replaced_by"] is not None else None,
+                        (
+                            str(row["supersession_evidence"])
+                            if row["supersession_evidence"] is not None
+                            else None
+                        ),
+                        int(row["conflict"]),
+                        int(row["pinned"]),
+                        str(row["source"]),
+                        str(row["created_at"]),
+                        str(row["last_seen_at"]),
+                        str(row["updated_at"]),
+                        str(row["tier"]),
+                        float(row["importance_score"]),
+                        int(row["access_count"]),
+                        int(row["conflict_count"]),
+                        str(row["agent_id"]),
+                        (
+                            str(row["last_accessed_at"])
+                            if row["last_accessed_at"] is not None
+                            else None
+                        ),
+                        archived_at,
+                        "reflection_low_importance",
+                    ),
+                )
+            conn.execute(
+                "DELETE FROM state_items WHERE uid=? AND thread_id=?",
+                (str(row["uid"]), str(row["thread_id"])),
+            )
+            archived += 1
+        return archived
+
     def get_failures(
         self,
         conn: sqlite3.Connection,
@@ -1129,7 +1722,15 @@ class MemoryService:
             embedding = [float(item) for item in decoded if isinstance(item, int | float)]
             if not embedding:
                 continue
-            self._upsert_memory_vec_index_raw(conn, str(row["memory_id"]), embedding)
+            try:
+                self._upsert_memory_vec_index_raw(conn, str(row["memory_id"]), embedding)
+            except sqlite3.IntegrityError:
+                logger.debug(
+                    "memory vector backfill upsert conflict for memory_id=%s",
+                    str(row["memory_id"]),
+                    exc_info=True,
+                )
+                continue
 
     def _backfill_event_vec_runtime(self, conn: sqlite3.Connection) -> None:
         try:
@@ -1161,7 +1762,15 @@ class MemoryService:
             if not embedding:
                 continue
             thread_id = str(row["thread_id"]) if row["thread_id"] is not None else None
-            self._upsert_event_vec_index_raw(conn, str(row["id"]), thread_id, embedding)
+            try:
+                self._upsert_event_vec_index_raw(conn, str(row["id"]), thread_id, embedding)
+            except sqlite3.IntegrityError:
+                logger.debug(
+                    "event vector backfill upsert conflict for event_id=%s",
+                    str(row["id"]),
+                    exc_info=True,
+                )
+                continue
 
     def _upsert_memory_vec_index(
         self, conn: sqlite3.Connection, memory_id: str, embedding: list[float]
@@ -1173,20 +1782,17 @@ class MemoryService:
     def _upsert_memory_vec_index_raw(
         self, conn: sqlite3.Connection, memory_id: str, embedding: list[float]
     ) -> None:
+        conn.execute(
+            f"INSERT OR IGNORE INTO {self.MEMORY_VEC_INDEX_MAP_TABLE}(memory_id) VALUES(?)",
+            (memory_id,),
+        )
         row = conn.execute(
             f"SELECT vec_rowid FROM {self.MEMORY_VEC_INDEX_MAP_TABLE} WHERE memory_id=?",
             (memory_id,),
         ).fetchone()
         if row is None:
-            cursor = conn.execute(
-                f"INSERT INTO {self.MEMORY_VEC_INDEX_MAP_TABLE}(memory_id) VALUES(?)",
-                (memory_id,),
-            )
-            if cursor.lastrowid is None:
-                return
-            vec_rowid = int(cursor.lastrowid)
-        else:
-            vec_rowid = int(row["vec_rowid"])
+            return
+        vec_rowid = int(row["vec_rowid"])
         try:
             conn.execute(
                 f"INSERT OR REPLACE INTO {self.MEMORY_VEC_INDEX_TABLE}(rowid, embedding) "
@@ -1215,24 +1821,18 @@ class MemoryService:
         thread_id: str | None,
         embedding: list[float],
     ) -> None:
+        conn.execute(
+            f"INSERT INTO {self.EVENT_VEC_INDEX_MAP_TABLE}(event_id, thread_id) VALUES(?,?) "
+            "ON CONFLICT(event_id) DO UPDATE SET thread_id=excluded.thread_id",
+            (event_id, thread_id),
+        )
         row = conn.execute(
             f"SELECT vec_rowid FROM {self.EVENT_VEC_INDEX_MAP_TABLE} WHERE event_id=?",
             (event_id,),
         ).fetchone()
         if row is None:
-            cursor = conn.execute(
-                f"INSERT INTO {self.EVENT_VEC_INDEX_MAP_TABLE}(event_id, thread_id) VALUES(?,?)",
-                (event_id, thread_id),
-            )
-            if cursor.lastrowid is None:
-                return
-            vec_rowid = int(cursor.lastrowid)
-        else:
-            vec_rowid = int(row["vec_rowid"])
-            conn.execute(
-                f"UPDATE {self.EVENT_VEC_INDEX_MAP_TABLE} SET thread_id=? WHERE event_id=?",
-                (thread_id, event_id),
-            )
+            return
+        vec_rowid = int(row["vec_rowid"])
         try:
             conn.execute(
                 f"INSERT OR REPLACE INTO {self.EVENT_VEC_INDEX_TABLE}(rowid, embedding) "

@@ -19,6 +19,8 @@ PROTECTED_PATH_PATTERNS = (
     re.compile(r"^/etc/.*iptables"),
     re.compile(r"^/etc/nftables"),
     re.compile(r"^/root/"),
+    # Governance rails — agents must not modify these via patches.
+    re.compile(r".*/agents/feature_builder/identity\.md$"),
 )
 GOVERNANCE_IDENTITY_FIELDS = {
     "allowed_tools",
@@ -530,6 +532,72 @@ def run_smoke_gate(
                 detail = stderr or stdout or f"{cmd[0]} failed"
                 return ValidationResult(ok=False, reason=detail)
         return ValidationResult(ok=True, reason="smoke gate passed")
+    finally:
+        subprocess.run(
+            ["git", "-C", repo_path, "worktree", "remove", "--force", str(worktree)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+
+def run_smoke_gate_sandboxed(
+    repo_path: str,
+    patch_path: Path,
+    work_dir: Path,
+    profile: str,
+    image: str,
+    timeout: int = 300,
+) -> ValidationResult:
+    """Run the smoke gate inside a Docker sandbox instead of directly on the host.
+
+    Same worktree setup as :func:`run_smoke_gate`, but each smoke command is
+    executed via :func:`~jarvis.selfupdate.sandbox.run_in_sandbox`.
+    """
+    from jarvis.selfupdate.sandbox import create_sandbox, run_in_sandbox
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    worktree = work_dir / "sandbox_worktree"
+
+    add = subprocess.run(
+        ["git", "-C", repo_path, "worktree", "add", "--detach", str(worktree), "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if add.returncode != 0:
+        return ValidationResult(ok=False, reason=add.stderr.strip() or "worktree add failed")
+
+    try:
+        apply_result = git_apply(str(worktree), patch_path)
+        if not apply_result.ok:
+            return apply_result
+
+        has_src = (worktree / "src").exists()
+        has_tests = (worktree / "tests").exists()
+        checks = smoke_commands(profile=profile, has_src=has_src, has_tests=has_tests)
+
+        if not checks:
+            return ValidationResult(ok=True, reason="no smoke targets")
+
+        try:
+            ctx = create_sandbox(
+                trace_id=work_dir.name,
+                worktree_path=worktree,
+                image=image,
+            )
+        except Exception as exc:
+            return ValidationResult(ok=False, reason=f"sandbox unavailable: {exc}")
+
+        for cmd in checks:
+            result = run_in_sandbox(ctx, cmd, timeout=timeout)
+            if not result.ok:
+                detail = result.stderr.strip() or result.stdout.strip() or f"{cmd[0]} failed"
+                return ValidationResult(ok=False, reason=detail)
+
+        return ValidationResult(ok=True, reason="smoke gate passed (sandbox)")
     finally:
         subprocess.run(
             ["git", "-C", repo_path, "worktree", "remove", "--force", str(worktree)],

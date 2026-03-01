@@ -21,6 +21,9 @@ From `web/src/App.tsx`:
 - `/admin/bugs`
 - `/admin/governance`
 - `/admin/channels`
+- `/admin/repo`
+- `/admin/roadmap`
+- `/admin/swarm`
 
 Unknown routes redirect to `/chat` after auth.
 
@@ -28,13 +31,54 @@ Unknown routes redirect to `/chat` after auth.
 
 - `Protected` wrapper validates session via `GET /api/v1/auth/me` using an HTTP-only session cookie.
 - Missing/invalid session redirects to `/login`.
-- Session role is `user` or `admin`.
+- Session identity is single-admin (`system:root`).
 
-## RBAC and Ownership
+## Access Model
 
-- Admin pages depend on admin-only API endpoints (`permissions`, `selfupdate`, `channels`, governance surfaces).
-- Non-admin users are ownership-scoped for thread/message/event/memory reads.
-- WebSocket subscriptions enforce thread ownership unless role is `admin`.
+- Authenticated sessions can access control-plane endpoints (`permissions`, `selfupdate`, `channels`, governance surfaces).
+- Thread/message/event/memory reads are no longer split by admin/non-admin ownership.
+- Chat thread list loads all threads by default (no extra toggle required).
+
+## Non-Web Reply Approvals
+
+- When non-web reply gating is enabled, pending approvals are created for outbound assistant replies in WhatsApp/Telegram threads unless sender+channel is already allowed.
+- Approvals can be managed from:
+  - API: `/api/v1/channel-reply-approvals*`, `/api/v1/channel-reply-permissions*`
+  - Chat commands in an admin thread: `/channel-approve*`, `/channel-deny`, `/channel-allow-list`, `/channel-allow-revoke`
+- Full workflow and payload contract: `docs/channel-reply-approvals.md`
+
+## Provider Admin Page
+
+`/admin/providers` is admin-only and manages provider runtime configuration through:
+- `GET /api/v1/auth/providers/config`
+- `POST /api/v1/auth/providers/config`
+- `GET /api/v1/auth/providers/models`
+
+Behavior:
+- Primary/fallback provider and model updates apply immediately to API runtime after save.
+- OpenRouter API key is write-only from UI:
+  - UI receives `openrouter_api_key_set` and `openrouter_api_key_masked`.
+  - UI never receives the raw key value.
+  - Clearing requires explicit `clear_openrouter_api_key=true`.
+- LM Studio API key is write-only from UI:
+  - UI receives `lmstudio_api_key_set` and `lmstudio_api_key_masked`.
+  - UI never receives the raw key value.
+  - Clearing requires explicit `clear_lmstudio_api_key=true`.
+- Chat rendering sanitizes leaked model wrappers (for example `<|analysis|>` and `<think>...</think>`) before display.
+
+## DevSwarm Admin Page
+
+`/admin/swarm` is admin-only and manages DevSwarm worker tasks through:
+
+- `GET /api/v1/swarm/tasks`
+- `POST /api/v1/swarm/tasks`
+- `POST /api/v1/swarm/tasks/{task_id}/nudge`
+- `POST /api/v1/swarm/tasks/{task_id}/cleanup`
+
+Behavior:
+- Task creation is pinned to the current Jarvis workspace repository path.
+- Cleanup defaults to keeping worktree directories unless `remove_worktrees=true` is provided.
+- The page subscribes to system WebSocket updates and refreshes on `system.swarm.*` events.
 
 ## WebSocket Model
 
@@ -47,7 +91,7 @@ Client actions:
 
 - `subscribe` with `thread_id`
 - `unsubscribe` with `thread_id`
-- `subscribe_system` (admin only)
+- `subscribe_system`
 
 Event envelope includes `type`, `thread_id`, `created_at`, plus payload fields.
 
@@ -55,8 +99,8 @@ Event envelope includes `type`, `thread_id`, `created_at`, plus payload fields.
 
 1. Login on `/login`.
 2. Open `/chat`; send and receive one message.
-3. Open an admin page with admin token.
-4. Verify non-admin token cannot access admin-only actions.
+3. Open an admin page with authenticated token.
+4. Verify unauthenticated requests to admin/control endpoints are rejected.
 5. Subscribe to a thread over WS and confirm live updates.
 
 ## Trace Drill-Down Workflow
@@ -67,6 +111,60 @@ For governance and self-update investigations:
 2. Open `/admin/selfupdate` and use `View In Events` from a selected patch.
 3. Land on `/admin/events` with query parameters (`trace_id`, optional `thread_id`).
 4. Verify the events table and trace viewer load the selected trace context.
+
+## Roadmap Build Chat Monitor
+
+Roadmap Build Runs modal (`/admin/roadmap`) includes a live chat-like monitor for feature builds:
+
+1. Open a feature card with `approval_status=approved`.
+2. Click `Build`, then select a run from the run list.
+3. Build Chat pane polls thread messages every ~2.5 seconds while modal is open.
+4. Status bar shows run status, trace, and created/updated timestamps.
+5. Quick links:
+   - `Open full Events trace` -> `/admin/events?trace_id=...`
+   - `Open Chat thread` -> `/chat/:threadId`
+
+Run status expectations:
+- `running`: active execution only.
+- `succeeded`: terminal assistant response completed without degraded/leak-blocked outcome.
+- `failed`: immediate terminal failure (including degraded response, leak-guard block, queue/enqueue failure, or task exception).
+- `failed` with stale-timeout summary remains as a safety fallback if a run never reaches terminal reconciliation.
+
+Retry metadata (feature builds with auto-retry enabled):
+- Build run records include retry context: `attempt_count`, `max_attempts`, `retry_state`, `next_retry_at`, `last_failure_reason`.
+- `running` + `retry_state=scheduled` means a retry is queued for `next_retry_at`.
+- `retry_state=exhausted` means retry budget was consumed and the run is terminally failed.
+
+Empty/error states:
+- `No thread attached yet` when run has no `thread_id` yet and has not started execution.
+- `This parent run was decomposed into child builds...` when a parent run is terminally decomposed and execution continues in child runs.
+- `Build has not produced messages yet` when thread history is still empty.
+- Retry action on message fetch error.
+
+## Chat Readability and Emoji-Safe Sanitization
+
+Chat route (`/chat` and `/chat/:threadId`) now applies a shared frontend sanitization path before markdown rendering and thread-preview extraction:
+
+- Removes harmful control content:
+  - model marker fragments (for example `<|analysis|>`)
+  - non-printable controls
+  - bidi override/isolation controls
+- Preserves emoji composition and grapheme behavior:
+  - zero-width joiner sequences (for family/profession emoji)
+  - variation selectors
+  - skin-tone modifiers
+  - regional-indicator pairs (flags)
+
+Rendering guardrails:
+- Chat bubbles use min-width and character-based width constraints to avoid horizontal bleed on dense responses.
+- Markdown tables use fixed layout and cell wrapping defaults.
+- Prose and table cells use overflow-wrap safeguards to keep long tokens inside bubble bounds.
+
+## Timestamp and Number Display Standards
+
+- Human-facing timestamps are rendered through shared frontend formatting helpers (`web/src/lib/format.ts`) instead of ad-hoc `toLocale*` calls.
+- Byte values are rendered as human-readable units (for example `1.2 MB`) via shared helpers.
+- Raw API payload timestamps and numeric values remain unchanged; formatting is applied only at render-time.
 
 ## Related Docs
 

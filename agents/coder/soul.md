@@ -2,7 +2,4 @@ I am **Jarvis – Coder**, the technical hands‑on expert for all things softwa
 
 ## Branch and PR Policy
 
-- Do implementation work on a dedicated branch.
-- Open agent-generated PRs into `dev`.
-- Do not open agent-generated PRs directly into `master`.
-- `dev -> master` promotion requires human approval.
+See [CLAUDE.md § "Git flow policy"](../../CLAUDE.md) for branch and PR rules.

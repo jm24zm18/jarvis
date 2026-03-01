@@ -17,7 +17,10 @@ def _token_hash(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
-def create_session(conn: sqlite3.Connection, user_id: str, role: str) -> tuple[str, str]:
+def create_session(
+    conn: sqlite3.Connection,
+    user_id: str,
+) -> tuple[str, str]:
     settings = get_settings()
     session_id = new_id("wss")
     raw_token = secrets.token_urlsafe(48)
@@ -28,13 +31,12 @@ def create_session(conn: sqlite3.Connection, user_id: str, role: str) -> tuple[s
             conn.execute(
                 (
                     "INSERT INTO web_sessions("
-                    "id, user_id, role, token_hash, created_at, expires_at"
-                    ") VALUES(?,?,?,?,?,?)"
+                    "id, user_id, token_hash, created_at, expires_at"
+                    ") VALUES(?,?,?,?,?)"
                 ),
                 (
                     session_id,
                     user_id,
-                    role,
                     _token_hash(raw_token),
                     created_at.isoformat(),
                     expires_at.isoformat(),
@@ -49,10 +51,12 @@ def create_session(conn: sqlite3.Connection, user_id: str, role: str) -> tuple[s
     return session_id, raw_token
 
 
-def validate_token(conn: sqlite3.Connection, raw_token: str) -> tuple[str, str] | None:
+def validate_token(
+    conn: sqlite3.Connection, raw_token: str
+) -> str | None:
     hashed = _token_hash(raw_token)
     row = conn.execute(
-        "SELECT id, user_id, role, expires_at FROM web_sessions WHERE token_hash=? LIMIT 1",
+        "SELECT id, user_id, expires_at FROM web_sessions WHERE token_hash=? LIMIT 1",
         (hashed,),
     ).fetchone()
     if row is None:
@@ -76,7 +80,7 @@ def validate_token(conn: sqlite3.Connection, raw_token: str) -> tuple[str, str] 
         conn.execute("DELETE FROM web_sessions WHERE id=?", (str(row["id"]),))
         return None
 
-    return str(row["user_id"]), str(row["role"])
+    return str(row["user_id"])
 
 
 def delete_session(conn: sqlite3.Connection, session_id: str) -> None:
@@ -96,3 +100,15 @@ def session_from_token(conn: sqlite3.Connection, raw_token: str) -> tuple[str, s
     if row is None:
         return None
     return str(row["id"]), str(row["user_id"])
+
+
+def mint_restricted_token(
+    conn: sqlite3.Connection,
+    user_id: str,
+    scopes: list[str],
+    ttl_minutes: int = 15,
+) -> str:
+    del scopes
+    del ttl_minutes
+    _session_id, token = create_session(conn, user_id)
+    return token

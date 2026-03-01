@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -27,7 +27,13 @@ from jarvis.channels.whatsapp.router import router as whatsapp_router
 from jarvis.config import get_settings, validate_settings_for_env
 from jarvis.db.connection import get_conn
 from jarvis.db.migrations.runner import run_migrations
-from jarvis.db.queries import ensure_root_user, ensure_system_state, upsert_whatsapp_instance
+from jarvis.db.queries import (
+    clear_stale_restarting_flag,
+    ensure_root_user,
+    ensure_system_state,
+    prune_whatsapp_thread_map_orphans,
+    upsert_whatsapp_instance,
+)
 from jarvis.logging import configure_logging
 from jarvis.memory.service import MemoryService
 from jarvis.repo_index import write_repo_index
@@ -54,15 +60,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     baileys = BaileysClient()
     if baileys.enabled and int(settings.whatsapp_auto_create_on_startup) == 1:
         status_code, payload = await baileys.create_instance()
-        callback_status_code: int | None = None
-        callback_payload: dict[str, object] = {}
-        callback_ok = False
-        callback_error = ""
-        if evolution.webhook_enabled:
-            callback_status_code, callback_payload = await evolution.configure_webhook()
-            callback_ok = callback_status_code < 400
-            if not callback_ok:
-                callback_error = str(callback_payload.get("error") or "configure_webhook_failed")
+        callback_status_code: int | None = 200 if baileys.webhook_enabled else None
+        callback_payload: dict[str, object] = (
+            {"success": True, "mode": "managed_by_sidecar"} if baileys.webhook_enabled else {}
+        )
+        callback_ok = baileys.webhook_enabled
+        callback_error = "" if callback_ok else "webhook_url_not_configured"
         with get_conn() as conn:
             evo_state = str(
                 payload.get("instance", {}).get("state")
@@ -71,7 +74,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             )
             upsert_whatsapp_instance(
                 conn,
-                instance=evolution.instance,
+                instance=baileys.instance,
                 status=evo_state,
                 metadata={
                     "status_code": status_code,
@@ -79,9 +82,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                     "callback_status_code": callback_status_code,
                     "callback_payload": callback_payload,
                 },
-                callback_url=evolution.webhook_url,
-                callback_by_events=evolution.webhook_by_events,
-                callback_events=evolution.webhook_events,
+                callback_url=baileys.webhook_url,
+                callback_by_events=baileys.webhook_by_events,
+                callback_events=baileys.webhook_events,
                 callback_configured=callback_ok,
                 callback_last_error=callback_error,
             )
@@ -93,7 +96,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     except RuntimeError as exc:
         logger.warning("Agent bundle load skipped at startup: %s", exc)
     with get_conn() as conn:
+        pruned = prune_whatsapp_thread_map_orphans(conn)
+        if pruned > 0:
+            logger.info("Pruned %d stale whatsapp_thread_map rows", pruned)
         ensure_system_state(conn)
+        if clear_stale_restarting_flag(conn):
+            logger.warning("Cleared stale system_state.restarting flag on startup")
         root_user_id = ensure_root_user(conn)
         logger.info("Root user ready: %s", root_user_id)
         sync_stats = sync_seed_skills(conn)

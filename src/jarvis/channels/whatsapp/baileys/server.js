@@ -1,5 +1,5 @@
 import express from "express";
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } from "@whiskeysockets/baileys";
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage } from "@whiskeysockets/baileys";
 import pino from "pino";
 import qrcode from "qrcode";
 import fs from "fs";
@@ -10,6 +10,8 @@ app.use(express.json());
 
 const AUTH_DIR = "/tmp/auth";
 const WEBHOOK_URL = process.env.WEBHOOK_URL || "http://host.docker.internal:8000/webhooks/whatsapp";
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
+const WEBHOOK_SECRET_HEADER = process.env.WEBHOOK_SECRET_HEADER || "X-WhatsApp-Secret";
 const PORT = process.env.PORT || 8081;
 
 if (!fs.existsSync(AUTH_DIR)) {
@@ -22,6 +24,11 @@ let currentPairingCode = null;
 let connectionState = "close";
 let isConnecting = false;  // Prevent overlapping connection attempts
 let reconnectTimer = null;
+let lastDisconnectCode = null;
+let lastDisconnectReason = "";
+let lastErrorAt = "";
+let relinkRequired = false;
+let canReconnect = true;
 
 const logger = pino({ level: 'info' });
 
@@ -35,15 +42,48 @@ process.on('unhandledRejection', (reason, promise) => {
 
 function forceClearAuth() {
     try {
-        if (fs.existsSync(AUTH_DIR)) {
-            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        if (!fs.existsSync(AUTH_DIR)) {
+            fs.mkdirSync(AUTH_DIR, { recursive: true });
+            return;
         }
+        for (const entry of fs.readdirSync(AUTH_DIR)) {
+            const fullPath = path.join(AUTH_DIR, entry);
+            try {
+                fs.rmSync(fullPath, { recursive: true, force: true });
+            } catch (_e) {
+                // Keep clearing best-effort.
+            }
+        }
+        fs.mkdirSync(AUTH_DIR, { recursive: true });
     } catch (e) {
         // Ignore
     }
 }
 
+function clearConnectionDiagnostics() {
+    lastDisconnectCode = null;
+    lastDisconnectReason = "";
+    lastErrorAt = "";
+    relinkRequired = false;
+    canReconnect = true;
+}
+
+function asDisconnectReason(statusCode, lastDisconnect) {
+    if (statusCode === DisconnectReason.loggedOut) {
+        return "loggedOut";
+    }
+    const message = String(lastDisconnect?.error?.message || "").trim();
+    if (!message) {
+        return "unknown";
+    }
+    return message;
+}
+
 async function connectToWhatsApp() {
+    if (relinkRequired) {
+        logger.info('relink required after loggedOut; skipping automatic reconnect');
+        return;
+    }
     // Prevent overlapping connection attempts
     if (isConnecting) {
         logger.info('Connection attempt already in progress, skipping');
@@ -75,6 +115,9 @@ async function connectToWhatsApp() {
             version,
             logger: pino({ level: 'silent' }),
             printQRInTerminal: false,
+            browser: ["jarvis", "baileys-sidecar", "1.0"],
+            syncFullHistory: false,
+            markOnlineOnConnect: false,
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, logger),
@@ -105,15 +148,22 @@ async function connectToWhatsApp() {
                     isConnecting = false;  // Allow new connection attempts
 
                     const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+                    const reason = asDisconnectReason(statusCode, lastDisconnect);
+                    lastDisconnectCode = typeof statusCode === "number" ? statusCode : null;
+                    lastDisconnectReason = reason;
+                    lastErrorAt = new Date().toISOString();
+
                     const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                    logger.info(`connection closed (status: ${statusCode}), reconnecting: ${shouldReconnect}`);
+                    canReconnect = shouldReconnect;
+                    logger.info(`connection closed (status: ${statusCode}, reason: ${reason}), reconnecting: ${shouldReconnect}`);
 
                     if (shouldReconnect) {
                         // Reconnect after delay, prevent overlapping
                         reconnectTimer = setTimeout(() => connectToWhatsApp(), 5000);
                     } else {
                         sock = null;
-                        forceClearAuth();
+                        relinkRequired = true;
+                        logger.warn("loggedOut detected; manual reset/re-pair is required before reconnecting");
                     }
                 } else if (connection === 'open') {
                     logger.info('opened connection');
@@ -121,6 +171,7 @@ async function connectToWhatsApp() {
                     currentPairingCode = null;
                     connectionState = "open";
                     isConnecting = false;  // Connection established
+                    clearConnectionDiagnostics();
                 }
             } catch (err) {
                 logger.error(`Connection update error: ${err.message}`);
@@ -129,11 +180,19 @@ async function connectToWhatsApp() {
         });
 
         sock.ev.on('messages.upsert', async m => {
+            // Only forward real-time messages; skip history-sync (type: "append")
+            if (m.type !== 'notify') {
+                logger.info(`Skipping messages.upsert type=${m.type}`);
+                return;
+            }
             logger.info(`Received messages.upsert: ${JSON.stringify(m).substring(0, 500)}`);
             try {
                 const resp = await fetch(WEBHOOK_URL, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: {
+                        "Content-Type": "application/json",
+                        ...(WEBHOOK_SECRET ? { [WEBHOOK_SECRET_HEADER]: WEBHOOK_SECRET } : {}),
+                    },
                     body: JSON.stringify({
                         event: "messages.upsert",
                         data: m
@@ -147,21 +206,74 @@ async function connectToWhatsApp() {
     } catch (e) {
         logger.error(`Failed to initialize socket: ${e.message}`);
         isConnecting = false;
-        // Retry after delay
-        reconnectTimer = setTimeout(() => connectToWhatsApp(), 5000);
+        if (!relinkRequired) {
+            // Retry after delay for transient failures
+            reconnectTimer = setTimeout(() => connectToWhatsApp(), 5000);
+        }
     }
 }
 
 // API endpoints
 app.get("/status", (req, res) => {
-    res.json({ state: connectionState });
+    res.json({
+        state: connectionState,
+        last_disconnect_code: lastDisconnectCode,
+        last_disconnect_reason: lastDisconnectReason,
+        last_error_at: lastErrorAt,
+        autoheal_attempted: false,
+        relink_required: relinkRequired,
+        can_reconnect: canReconnect && !relinkRequired,
+    });
 });
 
 app.post("/start", async (req, res) => {
     if (connectionState === "open") {
         return res.json({ state: "open" });
     }
+    // Cancel any pending reconnect and close stale socket
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    if (sock) {
+        try {
+            sock.ev.removeAllListeners();
+            sock.ws?.close();
+        } catch (e) { }
+        sock = null;
+    }
+    isConnecting = false;
+    clearConnectionDiagnostics();
+    // Only clear auth if no saved credentials exist — don't force re-pair unnecessarily
+    const credsPath = path.join(AUTH_DIR, 'creds.json');
+    if (!fs.existsSync(credsPath)) {
+        forceClearAuth();
+    }
     connectToWhatsApp();
+    res.json({ state: "connecting" });
+});
+
+// Force a full re-pair by clearing saved credentials, then reconnect
+app.post("/reset", async (req, res) => {
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    if (sock) {
+        try {
+            sock.ev.removeAllListeners();
+            sock.ws?.close();
+        } catch (e) { }
+        sock = null;
+    }
+    isConnecting = false;
+    connectionState = "close";
+    currentQr = null;
+    currentPairingCode = null;
+    clearConnectionDiagnostics();
+    forceClearAuth();
+    // Give ws/file handles a moment to settle before reconnecting.
+    setTimeout(() => connectToWhatsApp(), 250);
     res.json({ state: "connecting" });
 });
 
@@ -191,17 +303,23 @@ app.post("/pair", async (req, res) => {
     try {
         if (!sock && !isConnecting) connectToWhatsApp();
 
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(number);
-                currentPairingCode = code;
-            } catch (e) {
-                logger.error(`Pairing error: ${e.message}`);
-            }
-        }, 2000);
+        // Wait for Baileys to reach QR state (registration phase complete) — up to 15s
+        const deadline = Date.now() + 15000;
+        while (connectionState !== "qr" && connectionState !== "open" && Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 200));
+        }
+        if (connectionState === "open") {
+            return res.status(400).json({ error: "Already connected" });
+        }
+        if (connectionState !== "qr") {
+            return res.status(503).json({ error: "QR state not reached — click Initialize Connection first" });
+        }
 
-        res.json({ code: "requested..." });
+        const code = await sock.requestPairingCode(number);
+        currentPairingCode = code;
+        res.json({ code });
     } catch (e) {
+        logger.error(`Pairing error: ${e.message}`);
         res.status(500).json({ error: e.message });
     }
 });
@@ -226,8 +344,16 @@ app.post("/disconnect", (req, res) => {
     connectionState = "close";
     currentQr = null;
     currentPairingCode = null;
+    clearConnectionDiagnostics();
     forceClearAuth();
     res.json({ ok: true });
+});
+
+// Hard-restart the process so Docker (restart: always) gives a clean slate
+app.post("/restart", (req, res) => {
+    logger.info("Restart requested via API — exiting for Docker restart");
+    res.json({ ok: true, message: "restarting" });
+    setTimeout(() => process.exit(0), 200);
 });
 
 app.post("/sendText", async (req, res) => {
@@ -238,6 +364,51 @@ app.post("/sendText", async (req, res) => {
     try {
         const jid = number.includes("@s.whatsapp.net") ? number : `${number}@s.whatsapp.net`;
         await sock.sendMessage(jid, { text });
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post("/downloadMedia", async (req, res) => {
+    if (connectionState !== "open") {
+        return res.status(400).json({ error: "Not connected" });
+    }
+    const { message } = req.body;
+    if (!message) {
+        return res.status(400).json({ error: "message object required" });
+    }
+    try {
+        const buffer = await downloadMediaMessage(
+            { message },
+            'buffer',
+            {},
+        );
+        // Determine mime type from the message
+        const audioMsg = message.audioMessage || message.imageMessage || message.videoMessage || message.documentMessage || message.stickerMessage;
+        const mimeType = audioMsg?.mimetype || "application/octet-stream";
+        res.set("Content-Type", mimeType);
+        res.set("Content-Length", buffer.length);
+        res.send(buffer);
+    } catch (e) {
+        logger.error(`Download media failed: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post("/presenceUpdate", async (req, res) => {
+    if (connectionState !== "open") {
+        return res.status(400).json({ error: "Not connected" });
+    }
+    const { number, presence } = req.body;
+    // presence: "composing" | "paused" | "available" | "unavailable"
+    const validPresences = ["composing", "paused", "available", "unavailable"];
+    if (!validPresences.includes(presence)) {
+        return res.status(400).json({ error: `Invalid presence. Must be one of: ${validPresences.join(", ")}` });
+    }
+    try {
+        const jid = number.includes("@") ? number : `${number}@s.whatsapp.net`;
+        await sock.sendPresenceUpdate(presence, jid);
         res.json({ ok: true });
     } catch (e) {
         res.status(500).json({ error: e.message });

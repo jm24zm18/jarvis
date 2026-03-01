@@ -62,3 +62,15 @@ def test_skill_tools_registered_and_operational() -> None:
     assert any(item["scope"] == "coder" for item in list_result["skills"])
     assert len(pinned_result["skills"]) == 1
     assert pinned_result["skills"][0]["scope"] == "coder"
+
+
+def test_main_registry_includes_create_feature_request_tool() -> None:
+    with get_conn() as conn:
+        registry = _build_registry(
+            conn,
+            trace_id="trc_feature_tool",
+            thread_id="thr_1",
+            actor_id="main",
+        )
+        tool = registry.get("create_feature_request")
+        assert tool is not None

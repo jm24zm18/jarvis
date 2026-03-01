@@ -94,8 +94,8 @@ export default function AdminMemoryPage() {
               <Database className="h-5 w-5 text-blue-600 dark:text-blue-400" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">Total Items</p>
-              <p className="mt-1 font-display text-2xl text-[var(--text-primary)]">{totalItems}</p>
+              <p className="text-[10px] font-mono uppercase tracking-widest text-text3">Total Items</p>
+              <p className="mt-1 font-mono text-lg font-semibold text-text">{totalItems}</p>
             </div>
           </div>
         </Card>
@@ -106,8 +106,8 @@ export default function AdminMemoryPage() {
               <Cpu className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">Embedded Items</p>
-              <p className="mt-1 font-display text-2xl text-[var(--text-primary)]">{embeddedItems}</p>
+              <p className="text-[10px] font-mono uppercase tracking-widest text-text3">Embedded Items</p>
+              <p className="mt-1 font-mono text-lg font-semibold text-text">{embeddedItems}</p>
             </div>
           </div>
         </Card>
@@ -118,13 +118,13 @@ export default function AdminMemoryPage() {
               <Brain className="h-5 w-5 text-purple-600 dark:text-purple-400" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">Embedding Coverage</p>
+              <p className="text-[10px] font-mono uppercase tracking-widest text-text3">Embedding Coverage</p>
               <div className="mt-2">
                 <div className="mb-1 flex items-center justify-between">
-                  <span className="font-display text-lg text-[var(--text-primary)]">{coveragePct}%</span>
+                  <span className="font-mono text-lg font-semibold text-text">{coveragePct}%</span>
                   {unembedded > 0 ? <Badge variant="warning">{unembedded} pending</Badge> : <Badge variant="success">Complete</Badge>}
                 </div>
-                <div className="h-2.5 w-full overflow-hidden rounded-full bg-[var(--bg-mist)]">
+                <div className="h-2.5 w-full overflow-hidden rounded-full bg-surface-2">
                   <div className="h-full rounded-full bg-purple-500 transition-all" style={{ width: `${coveragePct}%` }} />
                 </div>
               </div>
@@ -182,8 +182,8 @@ export default function AdminMemoryPage() {
         header={
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Brain className="h-4 w-4 text-[var(--text-muted)]" />
-              <h3 className="font-display text-base text-[var(--text-primary)]">Memory Items</h3>
+              <Brain className="h-4 w-4 text-text3" />
+              <h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Memory Items</h3>
             </div>
             <Badge variant="default">{allItems.length} results</Badge>
           </div>
@@ -193,26 +193,26 @@ export default function AdminMemoryPage() {
         <div className="-mx-4 overflow-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[var(--border-default)] text-left">
-                <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">ID</th>
-                <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">Thread</th>
-                <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">Text</th>
+              <tr className="border-b border-[var(--color-border)] text-left">
+                <th className="px-4 py-2.5 text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">ID</th>
+                <th className="px-4 py-2.5 text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">Thread</th>
+                <th className="px-4 py-2.5 text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">Text</th>
               </tr>
             </thead>
             <tbody>
               {pagedItems.map((item) => (
-                <tr key={item.id} className="border-b border-[var(--border-default)] transition hover:bg-[var(--bg-mist)]">
-                  <td className="whitespace-nowrap px-4 py-2.5 align-top font-mono text-xs text-[var(--text-muted)]">{item.id}</td>
+                <tr key={item.id} className="border-b border-[var(--color-border)] transition hover:bg-surface-2">
+                  <td className="whitespace-nowrap px-4 py-2.5 align-top font-mono text-xs text-text3">{item.id}</td>
                   <td className="whitespace-nowrap px-4 py-2.5 align-top">
-                    {item.thread_id ? <Badge variant="info">{item.thread_id}</Badge> : <span className="text-xs text-[var(--text-muted)]">-</span>}
+                    {item.thread_id ? <Badge variant="info">{item.thread_id}</Badge> : <span className="text-xs text-text3">-</span>}
                   </td>
-                  <td className="px-4 py-2.5 text-xs leading-relaxed text-[var(--text-secondary)]">
+                  <td className="px-4 py-2.5 text-xs leading-relaxed text-text2">
                     <div className="space-y-1.5">
                       <p className="whitespace-pre-wrap">{item.text}</p>
                       {item.metadata ? (
                         <details>
-                          <summary className="cursor-pointer text-[11px] text-[var(--text-muted)]">details</summary>
-                          <pre className="mt-1 overflow-auto rounded bg-[var(--bg-mist)] p-2 text-[11px]">
+                          <summary className="cursor-pointer text-[11px] text-text3">details</summary>
+                          <pre className="mt-1 overflow-auto rounded bg-surface-2 p-2 text-[11px]">
                             {JSON.stringify(item.metadata, null, 2)}
                           </pre>
                         </details>
@@ -223,7 +223,7 @@ export default function AdminMemoryPage() {
               ))}
               {pagedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-4 py-8 text-center text-sm text-[var(--text-muted)]">No memory items found.</td>
+                  <td colSpan={3} className="px-4 py-8 text-center text-sm text-text3">No memory items found.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -235,16 +235,16 @@ export default function AdminMemoryPage() {
         <Card
           header={
             <div className="flex items-center justify-between">
-              <h3 className="font-display text-base text-[var(--text-primary)]">Conflict Review Queue</h3>
+              <h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Conflict Review Queue</h3>
               <Badge variant="warning">{conflicts.data?.items.length ?? 0} open</Badge>
             </div>
           }
         >
-          <ul className="space-y-2 text-sm text-[var(--text-secondary)]">
+          <ul className="space-y-2 text-sm text-text2">
             {(conflicts.data?.items ?? []).slice(0, 8).map((item) => (
-              <li key={item.id} className="rounded border border-[var(--border-default)] p-2">
+              <li key={item.id} className="rounded border border-[var(--color-border)] p-2">
                 <div className="font-mono text-xs">{item.uid}</div>
-                <div className="text-xs text-[var(--text-muted)]">{item.reason}</div>
+                <div className="text-xs text-text3">{item.reason}</div>
                 <div className="mt-2 flex gap-2">
                   <Button size="sm" onClick={() => resolveMutation.mutate({ uid: item.uid, resolution: "approved" })}>Approve</Button>
                   <Button size="sm" variant="secondary" onClick={() => resolveMutation.mutate({ uid: item.uid, resolution: "rejected" })}>Reject</Button>
@@ -258,34 +258,34 @@ export default function AdminMemoryPage() {
         <Card
           header={
             <div className="flex items-center justify-between">
-              <h3 className="font-display text-base text-[var(--text-primary)]">Tier and Archive Stats</h3>
+              <h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Tier and Archive Stats</h3>
               <Badge variant="info">archive {stateStats.data?.archive_items ?? 0}</Badge>
             </div>
           }
         >
-          <ul className="space-y-2 text-sm text-[var(--text-secondary)]">
+          <ul className="space-y-2 text-sm text-text2">
             {(stateStats.data?.tiers ?? []).map((item) => (
-              <li key={item.tier} className="flex items-center justify-between rounded border border-[var(--border-default)] px-2 py-1">
+              <li key={item.tier} className="flex items-center justify-between rounded border border-[var(--color-border)] px-2 py-1">
                 <span>{item.tier}</span>
                 <Badge variant="default">{item.count}</Badge>
               </li>
             ))}
-            <li className="text-xs text-[var(--text-muted)]">Open conflicts: {stateStats.data?.open_conflicts ?? 0}</li>
+            <li className="text-xs text-text3">Open conflicts: {stateStats.data?.open_conflicts ?? 0}</li>
           </ul>
         </Card>
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Card header={<h3 className="font-display text-base text-[var(--text-primary)]">Failure Lookup</h3>}>
+        <Card header={<h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Failure Lookup</h3>}>
           <div className="mb-3 flex gap-2">
             <Input label="Similar to" value={failureQuery} onChange={(e) => setFailureQuery(e.target.value)} placeholder="timeout or dns" />
             <div className="flex items-end">
               <Button variant="secondary" onClick={() => void failures.refetch()}>Search</Button>
             </div>
           </div>
-          <ul className="space-y-2 text-sm text-[var(--text-secondary)]">
+          <ul className="space-y-2 text-sm text-text2">
             {(failures.data?.items ?? []).map((item) => (
-              <li key={item.id} className="rounded border border-[var(--border-default)] p-2">
+              <li key={item.id} className="rounded border border-[var(--color-border)] p-2">
                 <div className="text-xs">{item.phase} • {item.trace_id}</div>
                 <div>{item.summary}</div>
               </li>
@@ -294,7 +294,7 @@ export default function AdminMemoryPage() {
           </ul>
         </Card>
 
-        <Card header={<h3 className="font-display text-base text-[var(--text-primary)]">Graph Traversal Preview</h3>}>
+        <Card header={<h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Graph Traversal Preview</h3>}>
           <div className="mb-3 flex gap-2">
             <Input label="Root UID" value={graphUid} onChange={(e) => setGraphUid(e.target.value)} placeholder="st_..." />
             <div className="flex items-end">
@@ -304,13 +304,13 @@ export default function AdminMemoryPage() {
             </div>
           </div>
           {graph.data ? (
-            <div className="space-y-2 text-xs text-[var(--text-secondary)]">
+            <div className="space-y-2 text-xs text-text2">
               <div>nodes: {graph.data.nodes.length}</div>
               <div>edges: {graph.data.edges.length}</div>
-              <pre className="max-h-48 overflow-auto rounded bg-[var(--bg-mist)] p-2">{JSON.stringify(graph.data, null, 2)}</pre>
+              <pre className="max-h-48 overflow-auto rounded bg-surface-2 p-2">{JSON.stringify(graph.data, null, 2)}</pre>
             </div>
           ) : (
-            <p className="text-sm text-[var(--text-muted)]">Enter a UID to preview graph traversal.</p>
+            <p className="text-sm text-text3">Enter a UID to preview graph traversal.</p>
           )}
         </Card>
       </div>
@@ -319,7 +319,7 @@ export default function AdminMemoryPage() {
         className="mt-6"
         header={
           <div className="flex items-center justify-between">
-            <h3 className="font-display text-base text-[var(--text-primary)]">Consistency Reports</h3>
+            <h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Consistency Reports</h3>
             <Badge variant="info">avg {Number(consistency.data?.avg_consistency ?? 1).toFixed(2)}</Badge>
           </div>
         }
@@ -340,16 +340,16 @@ export default function AdminMemoryPage() {
         <div className="overflow-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[var(--border-default)] text-left">
-                <th className="px-2 py-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">Thread</th>
-                <th className="px-2 py-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">Score</th>
-                <th className="px-2 py-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">Conflicts</th>
-                <th className="px-2 py-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">Created</th>
+              <tr className="border-b border-[var(--color-border)] text-left">
+                <th className="px-2 py-2.5 text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">Thread</th>
+                <th className="px-2 py-2.5 text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">Score</th>
+                <th className="px-2 py-2.5 text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">Conflicts</th>
+                <th className="px-2 py-2.5 text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">Created</th>
               </tr>
             </thead>
             <tbody>
               {(consistency.data?.items ?? []).slice(0, 12).map((row, idx) => (
-                <tr key={`${row.id}-${idx}`} className="border-b border-[var(--border-default)]">
+                <tr key={`${row.id}-${idx}`} className="border-b border-[var(--color-border)]">
                   <td className="px-2 py-2 font-mono text-xs">{row.thread_id}</td>
                   <td className="px-2 py-2">{Number(row.consistency_score ?? 1).toFixed(2)}</td>
                   <td className="px-2 py-2">{String(row.conflicted_items ?? 0)}/{String(row.total_items ?? 0)}</td>

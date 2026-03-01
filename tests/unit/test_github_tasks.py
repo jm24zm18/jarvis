@@ -363,3 +363,61 @@ def test_github_issue_sync_bug_report_records_sync_error(monkeypatch) -> None:
         ).fetchone()
     assert row is not None
     assert "gh down" in str(row["github_sync_error"])
+
+
+def test_github_feature_validation_comment_posts_issue_comment(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_ISSUE_SYNC_ENABLED", "1")
+    monkeypatch.setenv("GITHUB_ISSUE_SYNC_REPO", "acme/repo")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    github_tasks.get_settings.cache_clear()
+
+    feature_id = github_tasks._record_bug_report(
+        "Feature for validation",
+        {"x": 1},
+        priority="high",
+    )
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE bug_reports SET kind='feature', github_issue_number=77 WHERE id=?",
+            (feature_id,),
+        )
+
+    class DummyResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def get(self, *args, **kwargs):
+            del args, kwargs
+            return DummyResponse([])
+
+        def post(self, *args, **kwargs):
+            del args, kwargs
+            return DummyResponse({"id": 901})
+
+    monkeypatch.setattr(github_tasks.httpx, "Client", DummyClient)
+    result = github_tasks.github_feature_validation_comment(
+        feature_id=feature_id,
+        run_id="fbr_123",
+        validation_status="passed",
+        validation_log_path="/tmp/jarvis-feature-1/validation/validate.log",
+        dependency_snapshot_json='{"dependencies":{"uv_lock_sha256":"abc"}}',
+    )
+    assert result["ok"] is True
+    assert int(result["issue_number"]) == 77
+    github_tasks.get_settings.cache_clear()

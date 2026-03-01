@@ -86,6 +86,10 @@ def render_api_reference() -> str:
     lines.append("")
     lines.append("Generated from FastAPI OpenAPI via `scripts/generate_api_docs.py`.")
     lines.append("Regenerate with `make docs-generate`.")
+    lines.append(
+        "For request/response semantics and operator workflows, see "
+        "`docs/api-usage-guide.md` and `docs/channel-reply-approvals.md`."
+    )
     lines.append("")
     lines.append("Auth levels:")
     lines.append("- `public`: no bearer token required")

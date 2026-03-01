@@ -1,6 +1,7 @@
 """Application configuration contract."""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,7 +16,9 @@ class Settings(BaseSettings):
     trace_sample_rate: float = Field(alias="TRACE_SAMPLE_RATE", default=1.0)
     compaction_every_n_events: int = Field(alias="COMPACTION_EVERY_N_EVENTS", default=25)
     compaction_interval_seconds: int = Field(alias="COMPACTION_INTERVAL_SECONDS", default=600)
-    prompt_budget_gemini_tokens: int = Field(alias="PROMPT_BUDGET_GEMINI_TOKENS", default=200000)
+    prompt_budget_openrouter_tokens: int = Field(
+        alias="PROMPT_BUDGET_OPENROUTER_TOKENS", default=200000
+    )
     prompt_budget_sglang_tokens: int = Field(alias="PROMPT_BUDGET_SGLANG_TOKENS", default=110000)
     lockdown_default: int = Field(alias="LOCKDOWN_DEFAULT", default=0)
     selfupdate_auto_apply_dev: int = Field(alias="SELFUPDATE_AUTO_APPLY_DEV", default=1)
@@ -36,6 +39,12 @@ class Settings(BaseSettings):
     selfupdate_pr_autoraise: int = Field(alias="SELFUPDATE_PR_AUTORAISE", default=0)
     selfupdate_fitness_gate_mode: str = Field(alias="SELFUPDATE_FITNESS_GATE_MODE", default="warn")
     selfupdate_test_gate_mode: str = Field(alias="SELFUPDATE_TEST_GATE_MODE", default="warn")
+    selfupdate_max_files_per_patch: int = Field(alias="SELFUPDATE_MAX_FILES_PER_PATCH", default=20)
+    selfupdate_max_risk_score: int = Field(alias="SELFUPDATE_MAX_RISK_SCORE", default=100)
+    selfupdate_max_patch_attempts_per_day: int = Field(
+        alias="SELFUPDATE_MAX_PATCH_ATTEMPTS_PER_DAY", default=10
+    )
+    selfupdate_max_prs_per_day: int = Field(alias="SELFUPDATE_MAX_PRS_PER_DAY", default=5)
     selfupdate_test_gate_min_coverage_pct: float = Field(
         alias="SELFUPDATE_TEST_GATE_MIN_COVERAGE_PCT", default=0.0
     )
@@ -55,10 +64,149 @@ class Settings(BaseSettings):
         alias="SELFUPDATE_MAX_ROLLBACK_FREQ", default=3
     )
     scheduler_max_catchup: int = Field(alias="SCHEDULER_MAX_CATCHUP", default=10)
+    followup_heartbeat_interval_seconds: int = Field(
+        alias="FOLLOWUP_HEARTBEAT_INTERVAL_SECONDS",
+        default=300,
+    )
+    followup_max_threads_per_tick: int = Field(alias="FOLLOWUP_MAX_THREADS_PER_TICK", default=20)
+    followup_min_idle_seconds: int = Field(alias="FOLLOWUP_MIN_IDLE_SECONDS", default=300)
+    followup_emit_idle_ticks: int = Field(alias="FOLLOWUP_EMIT_IDLE_TICKS", default=0)
     task_runner_max_concurrent: int = Field(alias="TASK_RUNNER_MAX_CONCURRENT", default=20)
     task_runner_shutdown_timeout_seconds: int = Field(
         alias="TASK_RUNNER_SHUTDOWN_TIMEOUT_SECONDS",
         default=30,
+    )
+    agent_step_max_attempts: int = Field(alias="AGENT_STEP_MAX_ATTEMPTS", default=3)
+    agent_step_retry_base_seconds: int = Field(alias="AGENT_STEP_RETRY_BASE_SECONDS", default=2)
+    agent_step_retry_max_seconds: int = Field(alias="AGENT_STEP_RETRY_MAX_SECONDS", default=20)
+    feature_build_retry_on_degraded: int = Field(
+        alias="FEATURE_BUILD_RETRY_ON_DEGRADED",
+        default=1,
+    )
+    feature_build_retry_max_attempts: int = Field(
+        alias="FEATURE_BUILD_RETRY_MAX_ATTEMPTS",
+        default=5,
+    )
+    feature_build_retry_backoff_seconds: str = Field(
+        alias="FEATURE_BUILD_RETRY_BACKOFF_SECONDS",
+        default="30,120,300,600",
+    )
+    feature_build_retry_dispatch_interval_seconds: int = Field(
+        alias="FEATURE_BUILD_RETRY_DISPATCH_INTERVAL_SECONDS",
+        default=15,
+    )
+    feature_build_escalate_on_exhausted: int = Field(
+        alias="FEATURE_BUILD_ESCALATE_ON_EXHAUSTED",
+        default=1,
+    )
+    feature_build_fail_fast_placeholder_repeat: int = Field(
+        alias="FEATURE_BUILD_FAIL_FAST_PLACEHOLDER_REPEAT",
+        default=1,
+    )
+    feature_build_deliverable_gate_enabled: int = Field(
+        alias="FEATURE_BUILD_DELIVERABLE_GATE_ENABLED",
+        default=1,
+    )
+    feature_build_loop_cap_threshold: int = Field(
+        alias="FEATURE_BUILD_LOOP_CAP_THRESHOLD",
+        default=8,
+    )
+    feature_build_attempt_capsules_enabled: int = Field(
+        alias="FEATURE_BUILD_ATTEMPT_CAPSULES_ENABLED",
+        default=1,
+    )
+    feature_build_repeat_limit: int = Field(
+        alias="FEATURE_BUILD_REPEAT_LIMIT",
+        default=2,
+    )
+    feature_build_use_rlm: int = Field(alias="FEATURE_BUILD_USE_RLM", default=0)
+    feature_build_auto_decompose: int = Field(
+        alias="FEATURE_BUILD_AUTO_DECOMPOSE",
+        default=1,
+    )
+    feature_build_decompose_fallback: int = Field(
+        alias="FEATURE_BUILD_DECOMPOSE_FALLBACK",
+        default=1,
+    )
+    feature_build_thread_target: str = Field(
+        alias="FEATURE_BUILD_THREAD_TARGET",
+        default="reporter",
+    )
+    feature_build_subtask_layer_strict: int = Field(
+        alias="FEATURE_BUILD_SUBTASK_LAYER_STRICT",
+        default=1,
+    )
+    rlm_enabled: int = Field(alias="RLM_ENABLED", default=0)
+    rlm_context_files_limit: int = Field(alias="RLM_CONTEXT_FILES_LIMIT", default=8)
+    rlm_context_token_limit: int = Field(alias="RLM_CONTEXT_TOKEN_LIMIT", default=4000)
+    rlm_prompt_token_limit: int = Field(alias="RLM_PROMPT_TOKEN_LIMIT", default=8000)
+    rlm_validation_attempts: int = Field(alias="RLM_VALIDATION_ATTEMPTS", default=2)
+    rlm_max_attempts: int = Field(alias="RLM_MAX_ATTEMPTS", default=2)
+    rlm_max_refinements: int = Field(alias="RLM_MAX_REFINEMENTS", default=3)
+    rlm_timeout_s: int = Field(alias="RLM_TIMEOUT_S", default=120)
+    rlm_budget_per_1k_tokens: float = Field(alias="RLM_BUDGET_PER_1K_TOKENS", default=0.02)
+    feature_build_require_test_gates: int = Field(
+        alias="FEATURE_BUILD_REQUIRE_TEST_GATES",
+        default=1,
+    )
+    feature_isolation_enabled: int = Field(
+        alias="FEATURE_ISOLATION_ENABLED",
+        default=1,
+    )
+    feature_isolation_tmp_prefix: str = Field(
+        alias="FEATURE_ISOLATION_TMP_PREFIX",
+        default="/tmp/jarvis-feature",
+    )
+    feature_isolation_min_disk_gb: int = Field(
+        alias="FEATURE_ISOLATION_MIN_DISK_GB",
+        default=10,
+    )
+    feature_isolation_ttl_hours: int = Field(
+        alias="FEATURE_ISOLATION_TTL_HOURS",
+        default=24,
+    )
+    feature_isolation_clone_ref: str = Field(
+        alias="FEATURE_ISOLATION_CLONE_REF",
+        default="origin/dev",
+    )
+    orchestrator_max_tool_iterations: int = Field(
+        alias="ORCHESTRATOR_MAX_TOOL_ITERATIONS",
+        default=8,
+    )
+    orchestrator_fallback_only_retries: int = Field(
+        alias="ORCHESTRATOR_FALLBACK_ONLY_RETRIES",
+        default=2,
+    )
+    human_escalation_channel_type: str = Field(
+        alias="HUMAN_ESCALATION_CHANNEL_TYPE",
+        default="whatsapp",
+    )
+    human_escalation_targets: str = Field(
+        alias="HUMAN_ESCALATION_TARGETS",
+        default="",
+    )
+    human_escalation_default_priority: str = Field(
+        alias="HUMAN_ESCALATION_DEFAULT_PRIORITY",
+        default="normal",
+    )
+    human_escalation_dispatch_interval_seconds: int = Field(
+        alias="HUMAN_ESCALATION_DISPATCH_INTERVAL_SECONDS",
+        default=15,
+    )
+    agent_run_reaper_interval_seconds: int = Field(
+        alias="AGENT_RUN_REAPER_INTERVAL_SECONDS", default=30
+    )
+    agent_run_model_stale_min_seconds: int = Field(
+        alias="AGENT_RUN_MODEL_STALE_MIN_SECONDS", default=780
+    )
+    agent_run_tool_stale_min_seconds: int = Field(
+        alias="AGENT_RUN_TOOL_STALE_MIN_SECONDS", default=240
+    )
+    agent_run_finalize_stale_min_seconds: int = Field(
+        alias="AGENT_RUN_FINALIZE_STALE_MIN_SECONDS", default=120
+    )
+    agent_run_stale_hard_cap_seconds: int = Field(
+        alias="AGENT_RUN_STALE_HARD_CAP_SECONDS", default=2700
     )
     restart_command: str = Field(alias="RESTART_COMMAND", default="")
     lockdown_readyz_fail_threshold: int = Field(alias="LOCKDOWN_READYZ_FAIL_THRESHOLD", default=3)
@@ -78,7 +226,7 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = Field(alias="WHATSAPP_PHONE_NUMBER_ID", default="")
     whatsapp_instance: str = Field(alias="WHATSAPP_INSTANCE", default="personal")
     whatsapp_auto_create_on_startup: int = Field(
-        alias="WHATSAPP_AUTO_CREATE_ON_STARTUP", default=0
+        alias="BAILEYS_AUTO_CREATE_ON_STARTUP", default=0
     )
     whatsapp_webhook_secret: str = Field(alias="WHATSAPP_WEBHOOK_SECRET", default="")
     whatsapp_media_dir: str = Field(
@@ -121,13 +269,21 @@ class Settings(BaseSettings):
     )
     whatsapp_review_mode: str = Field(alias="WHATSAPP_REVIEW_MODE", default="unknown_only")
     whatsapp_allowed_senders: str = Field(alias="WHATSAPP_ALLOWED_SENDERS", default="")
-    evolution_api_url: str = Field(alias="EVOLUTION_API_URL", default="")
-    evolution_api_key: str = Field(alias="EVOLUTION_API_KEY", default="")
-    evolution_webhook_url: str = Field(alias="EVOLUTION_WEBHOOK_URL", default="")
-    evolution_webhook_by_events: int = Field(alias="EVOLUTION_WEBHOOK_BY_EVENTS", default=1)
-    evolution_webhook_events: str = Field(
-        alias="EVOLUTION_WEBHOOK_EVENTS",
+    non_web_reply_approval_required: int = Field(
+        alias="NON_WEB_REPLY_APPROVAL_REQUIRED",
+        default=1,
+    )
+    whatsapp_typing_ttl_seconds: int = Field(alias="WHATSAPP_TYPING_TTL_SECONDS", default=20)
+    baileys_api_url: str = Field(alias="BAILEYS_API_URL", default="http://127.0.0.1:8081")
+    baileys_webhook_url: str = Field(alias="BAILEYS_WEBHOOK_URL", default="")
+    baileys_webhook_by_events: int = Field(alias="BAILEYS_WEBHOOK_BY_EVENTS", default=1)
+    baileys_webhook_events: str = Field(
+        alias="BAILEYS_WEBHOOK_EVENTS",
         default="messages.upsert",
+    )
+    baileys_webhook_secret_header: str = Field(
+        alias="BAILEYS_WEBHOOK_SECRET_HEADER",
+        default="X-WhatsApp-Secret",
     )
 
     # Telegram
@@ -136,30 +292,28 @@ class Settings(BaseSettings):
 
     google_oauth_client_id: str = Field(alias="GOOGLE_OAUTH_CLIENT_ID", default="")
     google_oauth_client_secret: str = Field(alias="GOOGLE_OAUTH_CLIENT_SECRET", default="")
-    primary_provider: str = Field(alias="PRIMARY_PROVIDER", default="gemini")
-    gemini_model: str = Field(alias="GEMINI_MODEL", default="gemini-2.5-flash")
-    gemini_code_assist_token_path: str = Field(
-        alias="GEMINI_CODE_ASSIST_TOKEN_PATH",
-        default="~/.config/gemini-cli-oauth/token.json",
+    primary_provider: str = Field(alias="PRIMARY_PROVIDER", default="openrouter")
+    fallback_provider: str = Field(alias="FALLBACK_PROVIDER", default="")
+    openrouter_api_key: str = Field(alias="OPENROUTER_API_KEY", default="")
+    openrouter_model: str = Field(alias="OPENROUTER_MODEL", default="google/gemini-2.5-flash")
+    openrouter_base_url: str = Field(
+        alias="OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1"
     )
-    gemini_cli_timeout_seconds: int = Field(alias="GEMINI_CLI_TIMEOUT_SECONDS", default=120)
-    gemini_code_assist_plan_tier: str = Field(alias="GEMINI_CODE_ASSIST_PLAN_TIER", default="free")
-    gemini_code_assist_requests_per_minute: int = Field(
-        alias="GEMINI_CODE_ASSIST_REQUESTS_PER_MINUTE",
-        default=0,
-    )
-    gemini_code_assist_requests_per_day: int = Field(
-        alias="GEMINI_CODE_ASSIST_REQUESTS_PER_DAY",
-        default=0,
-    )
-    gemini_quota_cooldown_default_seconds: int = Field(
-        alias="GEMINI_QUOTA_COOLDOWN_DEFAULT_SECONDS",
-        default=60,
-    )
+    openrouter_timeout_seconds: int = Field(alias="OPENROUTER_TIMEOUT_SECONDS", default=120, ge=10)
 
     sglang_base_url: str = Field(alias="SGLANG_BASE_URL", default="http://localhost:30000/v1")
     sglang_model: str = Field(alias="SGLANG_MODEL", default="openai/gpt-oss-120b")
     sglang_timeout_seconds: int = Field(alias="SGLANG_TIMEOUT_SECONDS", default=600)
+    sglang_parallel_tool_calls: int = Field(alias="SGLANG_PARALLEL_TOOL_CALLS", default=0)
+    sglang_tool_choice: str = Field(alias="SGLANG_TOOL_CHOICE", default="auto")
+    openrouter_tool_choice: str = Field(alias="OPENROUTER_TOOL_CHOICE", default="auto")
+    openrouter_parallel_tool_calls: int = Field(alias="OPENROUTER_PARALLEL_TOOL_CALLS", default=1)
+    lmstudio_base_url: str = Field(alias="LMSTUDIO_BASE_URL", default="http://127.0.0.1:1234")
+    lmstudio_model: str = Field(alias="LMSTUDIO_MODEL", default="local-model")
+    lmstudio_api_key: str = Field(alias="LMSTUDIO_API_KEY", default="")
+    lmstudio_timeout_seconds: int = Field(alias="LMSTUDIO_TIMEOUT_SECONDS", default=600)
+    lmstudio_tool_choice: str = Field(alias="LMSTUDIO_TOOL_CHOICE", default="auto")
+    lmstudio_parallel_tool_calls: int = Field(alias="LMSTUDIO_PARALLEL_TOOL_CALLS", default=0)
 
     ollama_base_url: str = Field(alias="OLLAMA_BASE_URL", default="http://localhost:11434")
     ollama_embed_model: str = Field(alias="OLLAMA_EMBED_MODEL", default="nomic-embed-text")
@@ -175,7 +329,27 @@ class Settings(BaseSettings):
     )
     state_max_active_items: int = Field(alias="STATE_MAX_ACTIVE_ITEMS", default=40)
     state_extraction_timeout_seconds: int = Field(
-        alias="STATE_EXTRACTION_TIMEOUT_SECONDS", default=15
+        alias="STATE_EXTRACTION_TIMEOUT_SECONDS", default=180
+    )
+    state_extraction_llm_timeout: int = Field(
+        alias="STATE_EXTRACTION_LLM_TIMEOUT",
+        default=45,
+    )
+    state_extraction_embed_timeout: int = Field(
+        alias="STATE_EXTRACTION_EMBED_TIMEOUT",
+        default=15,
+    )
+    state_extraction_db_timeout: int = Field(
+        alias="STATE_EXTRACTION_DB_TIMEOUT",
+        default=10,
+    )
+    state_extraction_backoff_base_seconds: int = Field(
+        alias="STATE_EXTRACTION_BACKOFF_BASE_SECONDS",
+        default=30,
+    )
+    state_extraction_backoff_max_seconds: int = Field(
+        alias="STATE_EXTRACTION_BACKOFF_MAX_SECONDS",
+        default=600,
     )
     governance_enforce: int = Field(alias="GOVERNANCE_ENFORCE", default=1)
     approval_ttl_minutes: int = Field(alias="APPROVAL_TTL_MINUTES", default=30)
@@ -191,6 +365,7 @@ class Settings(BaseSettings):
     memory_secret_scan_enabled: int = Field(alias="MEMORY_SECRET_SCAN_ENABLED", default=1)
     memory_pii_redact_mode: str = Field(alias="MEMORY_PII_REDACT_MODE", default="mask")
     memory_retention_days: int = Field(alias="MEMORY_RETENTION_DAYS", default=180)
+    event_retention_days: int = Field(alias="EVENT_RETENTION_DAYS", default=90)
     memory_tiers_enabled: int = Field(alias="MEMORY_TIERS_ENABLED", default=0)
     memory_importance_enabled: int = Field(alias="MEMORY_IMPORTANCE_ENABLED", default=0)
     memory_graph_enabled: int = Field(alias="MEMORY_GRAPH_ENABLED", default=0)
@@ -200,6 +375,46 @@ class Settings(BaseSettings):
         alias="MEMORY_SENTENCE_TRANSFORMERS_MODEL",
         default="all-MiniLM-L6-v2",
     )
+    memory_reflection_enabled: int = Field(alias="MEMORY_REFLECTION_ENABLED", default=1)
+    memory_reflection_interval_seconds: int = Field(
+        alias="MEMORY_REFLECTION_INTERVAL_SECONDS",
+        default=21600,
+    )
+    memory_reflection_batch_size: int = Field(alias="MEMORY_REFLECTION_BATCH_SIZE", default=10)
+    memory_reflection_insight_limit: int = Field(alias="MEMORY_REFLECTION_INSIGHT_LIMIT", default=3)
+    memory_reflection_prune_threshold: float = Field(
+        alias="MEMORY_REFLECTION_PRUNE_THRESHOLD",
+        default=0.35,
+    )
+    memory_reflection_prune_age_days: int = Field(
+        alias="MEMORY_REFLECTION_PRUNE_AGE_DAYS",
+        default=30,
+    )
+    auto_knowledge_extraction_enabled: int = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_ENABLED",
+        default=0,
+    )
+    auto_knowledge_extraction_min_tool_calls: int = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_MIN_TOOL_CALLS",
+        default=5,
+    )
+    auto_knowledge_extraction_max_per_day: int = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_MAX_PER_DAY",
+        default=6,
+    )
+    auto_knowledge_extraction_cooldown_minutes: int = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_COOLDOWN_MINUTES",
+        default=25,
+    )
+    auto_knowledge_extraction_notify: int = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_NOTIFY",
+        default=1,
+    )
+    auto_knowledge_extraction_confidence_threshold: float = Field(
+        alias="AUTO_KNOWLEDGE_EXTRACTION_CONFIDENCE_THRESHOLD",
+        default=0.75,
+    )
+    reflection_model: str = Field(alias="REFLECTION_MODEL", default="")
 
     searxng_base_url: str = Field(alias="SEARXNG_BASE_URL", default="http://localhost:8080")
     searxng_api_key: str = Field(alias="SEARXNG_API_KEY", default="")
@@ -238,6 +453,30 @@ class Settings(BaseSettings):
     maintenance_timeout_seconds: int = Field(alias="MAINTENANCE_TIMEOUT_SECONDS", default=1800)
     maintenance_create_bugs: int = Field(alias="MAINTENANCE_CREATE_BUGS", default=1)
     maintenance_workdir: str = Field(alias="MAINTENANCE_WORKDIR", default="")
+    devswarm_monitor_interval_seconds: int = Field(
+        alias="DEVSWARM_MONITOR_INTERVAL_SECONDS",
+        default=600,
+    )
+    devswarm_worktrees_root: str = Field(alias="DEVSWARM_WORKTREES_ROOT", default="")
+    devswarm_logs_root: str = Field(alias="DEVSWARM_LOGS_ROOT", default="")
+    devswarm_prompts_root: str = Field(alias="DEVSWARM_PROMPTS_ROOT", default="")
+    devswarm_max_attempts: int = Field(alias="DEVSWARM_MAX_ATTEMPTS", default=3)
+    devswarm_opencode_command_template: str = Field(
+        alias="DEVSWARM_OPENCODE_COMMAND_TEMPLATE",
+        default="",
+    )
+    devswarm_blocked_env_keys: str = Field(
+        alias="DEVSWARM_BLOCKED_ENV_KEYS",
+        default=(
+            "GITHUB_TOKEN,WHATSAPP_ACCESS_TOKEN,WHATSAPP_VERIFY_TOKEN,WHATSAPP_WEBHOOK_SECRET,"
+            "WEB_AUTH_SETUP_PASSWORD,LMSTUDIO_API_KEY,OPENROUTER_API_KEY"
+        ),
+    )
+    devswarm_whatsapp_notify_enabled: int = Field(
+        alias="DEVSWARM_WHATSAPP_NOTIFY_ENABLED",
+        default=1,
+    )
+    devswarm_whatsapp_targets: str = Field(alias="DEVSWARM_WHATSAPP_TARGETS", default="")
     github_token: str = Field(alias="GITHUB_TOKEN", default="")
     github_webhook_secret: str = Field(alias="GITHUB_WEBHOOK_SECRET", default="")
     webhook_replay_window_minutes: int = Field(
@@ -262,7 +501,7 @@ class Settings(BaseSettings):
     )
     exec_host_allowed_cwd_prefixes: str = Field(
         alias="EXEC_HOST_ALLOWED_CWD_PREFIXES",
-        default="/srv/agent-framework,/tmp,/home/justin/jarvis",
+        default="/srv/agent-framework,/tmp," + str(Path.cwd()),
     )
     web_auth_token_ttl_hours: int = Field(alias="WEB_AUTH_TOKEN_TTL_HOURS", default=720)
     web_cors_origins: str = Field(alias="WEB_CORS_ORIGINS", default="http://localhost:5173")
@@ -285,6 +524,41 @@ class Settings(BaseSettings):
     exec_host_max_output_bytes: int = Field(alias="EXEC_HOST_MAX_OUTPUT_BYTES", default=1_000_000)
     exec_host_max_memory_mb: int = Field(alias="EXEC_HOST_MAX_MEMORY_MB", default=512)
     exec_host_max_cpu_seconds: int = Field(alias="EXEC_HOST_MAX_CPU_SECONDS", default=120)
+    exec_host_full_log_max_bytes: int = Field(
+        alias="EXEC_HOST_FULL_LOG_MAX_BYTES",
+        default=262_144,
+    )
+    exec_host_log_retention_days: int = Field(alias="EXEC_HOST_LOG_RETENTION_DAYS", default=7)
+    exec_host_log_retention_max_files: int = Field(
+        alias="EXEC_HOST_LOG_RETENTION_MAX_FILES",
+        default=1_000,
+    )
+    exec_host_log_retention_max_bytes: int = Field(
+        alias="EXEC_HOST_LOG_RETENTION_MAX_BYTES",
+        default=524_288_000,
+    )
+    stall_detect_enabled: int = Field(alias="STALL_DETECT_ENABLED", default=1)
+    stall_detect_threshold_seconds: int = Field(
+        alias="STALL_DETECT_THRESHOLD_SECONDS",
+        default=90,
+    )
+    stall_recovery_cooldown_seconds: int = Field(
+        alias="STALL_RECOVERY_COOLDOWN_SECONDS",
+        default=600,
+    )
+
+    # Self-update smoke-gate sandboxing
+    selfupdate_sandbox_enabled: int = Field(alias="SELFUPDATE_SANDBOX_ENABLED", default=0)
+    selfupdate_sandbox_image: str = Field(
+        alias="SELFUPDATE_SANDBOX_IMAGE", default="jarvis-sandbox:latest"
+    )
+    selfupdate_sandbox_timeout_seconds: int = Field(
+        alias="SELFUPDATE_SANDBOX_TIMEOUT_SECONDS", default=300
+    )
+
+    # Media storage
+    media_storage_dir: str = Field(alias="MEDIA_STORAGE_DIR", default="/var/lib/jarvis/media")
+    media_max_upload_bytes: int = Field(alias="MEDIA_MAX_UPLOAD_BYTES", default=20_971_520)
 
 
 def validate_settings_for_env(settings: Settings) -> None:
@@ -309,12 +583,12 @@ def validate_settings_for_env(settings: Settings) -> None:
     missing: list[str] = []
     required_non_empty = {
         "APP_DB": settings.app_db,
-        "GOOGLE_OAUTH_CLIENT_ID": settings.google_oauth_client_id,
-        "GOOGLE_OAUTH_CLIENT_SECRET": settings.google_oauth_client_secret,
         "PRIMARY_PROVIDER": settings.primary_provider,
-        "GEMINI_MODEL": settings.gemini_model,
+        "OPENROUTER_MODEL": settings.openrouter_model,
         "SGLANG_BASE_URL": settings.sglang_base_url,
         "SGLANG_MODEL": settings.sglang_model,
+        "LMSTUDIO_BASE_URL": settings.lmstudio_base_url,
+        "LMSTUDIO_MODEL": settings.lmstudio_model,
         "OLLAMA_BASE_URL": settings.ollama_base_url,
         "OLLAMA_EMBED_MODEL": settings.ollama_embed_model,
         "SEARXNG_BASE_URL": settings.searxng_base_url,

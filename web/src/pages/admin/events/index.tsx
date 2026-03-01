@@ -10,6 +10,7 @@ import Pagination from "../../../components/ui/Pagination";
 import TraceTree from "../../../components/ui/TraceTree";
 import Card from "../../../components/ui/Card";
 import Badge from "../../../components/ui/Badge";
+import { formatTimestampHuman } from "../../../lib/format";
 
 const PAGE_SIZE = 20;
 
@@ -125,8 +126,8 @@ export default function AdminEventsPage() {
           header={
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Activity className="h-4 w-4 text-[var(--text-muted)]" />
-                <h3 className="font-display text-base text-[var(--text-primary)]">Events</h3>
+                <Activity className="h-4 w-4 text-text3" />
+                <h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Events</h3>
               </div>
               <Badge variant="default">{allItems.length} results</Badge>
             </div>
@@ -138,17 +139,17 @@ export default function AdminEventsPage() {
           <div className="-mx-4 overflow-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-[var(--border-default)] text-left">
-                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+                <tr className="border-b border-[var(--color-border)] text-left">
+                  <th className="px-4 py-2.5 text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">
                     Created
                   </th>
-                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+                  <th className="px-4 py-2.5 text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">
                     Type
                   </th>
-                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+                  <th className="px-4 py-2.5 text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">
                     Component
                   </th>
-                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+                  <th className="px-4 py-2.5 text-[10px] font-mono uppercase tracking-widest text-text3 font-medium">
                     Trace
                   </th>
                 </tr>
@@ -159,10 +160,10 @@ export default function AdminEventsPage() {
                   return (
                     <tr
                       key={item.id}
-                      className={`cursor-pointer border-b border-[var(--border-default)] transition ${
+                      className={`cursor-pointer border-b border-[var(--color-border)] transition ${
                         isSelected
                           ? "bg-blue-50 dark:bg-blue-900/20"
-                          : "hover:bg-[var(--bg-mist)]"
+                          : "hover:bg-surface-2"
                       }`}
                       onClick={() => {
                         const traceId = item.trace_id ?? "";
@@ -176,16 +177,16 @@ export default function AdminEventsPage() {
                         });
                       }}
                     >
-                      <td className="whitespace-nowrap px-4 py-2.5 text-xs text-[var(--text-muted)]">
-                        {item.created_at}
+                      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-text3 [font-variant-numeric:tabular-nums]">
+                        {formatTimestampHuman(item.created_at)}
                       </td>
                       <td className="px-4 py-2.5">
                         <Badge variant="info">{item.event_type}</Badge>
                       </td>
-                      <td className="px-4 py-2.5 text-sm text-[var(--text-secondary)]">
+                      <td className="px-4 py-2.5 text-sm text-text2">
                         {item.component}
                       </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-[var(--text-muted)]">
+                      <td className="px-4 py-2.5 font-mono text-xs text-text3">
                         {item.trace_id ? item.trace_id.slice(0, 12) + "..." : "-"}
                       </td>
                     </tr>
@@ -193,7 +194,7 @@ export default function AdminEventsPage() {
                 })}
                 {paged.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="px-4 py-8 text-center text-sm text-[var(--text-muted)]">
+                    <td colSpan={4} className="px-4 py-8 text-center text-sm text-text3">
                       No events found. Adjust your filters and search again.
                     </td>
                   </tr>
@@ -207,8 +208,8 @@ export default function AdminEventsPage() {
         <Card
           header={
             <div className="flex items-center gap-2">
-              <Activity className="h-4 w-4 text-[var(--text-muted)]" />
-              <h3 className="font-display text-base text-[var(--text-primary)]">Trace Viewer</h3>
+              <Activity className="h-4 w-4 text-text3" />
+              <h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">Trace Viewer</h3>
               {selectedTrace ? (
                 <Badge variant="info" className="ml-auto">
                   {selectedTrace.slice(0, 12)}...
@@ -219,13 +220,13 @@ export default function AdminEventsPage() {
         >
           {!selectedTrace ? (
             <div className="flex min-h-[200px] items-center justify-center">
-              <p className="text-sm text-[var(--text-muted)]">
+              <p className="text-sm text-text3">
                 Click an event row to load its trace.
               </p>
             </div>
           ) : trace.isLoading ? (
             <div className="flex min-h-[200px] items-center justify-center">
-              <p className="text-sm text-[var(--text-muted)]">Loading trace...</p>
+              <p className="text-sm text-text3">Loading trace...</p>
             </div>
           ) : (
             <TraceTree events={trace.data?.items ?? []} />

@@ -7,7 +7,7 @@ from typing import Any
 
 SAFE_DURING_LOCKDOWN = {"session_list", "session_history"}
 SESSION_TOOLS = {"session_list", "session_history", "session_send"}
-HIGH_RISK_TOOLS = {"exec_host", "session_send"}
+HIGH_RISK_TOOLS = {"exec_host", "session_send", "request_human_escalation"}
 PATH_HINT_KEYS = {
     "path",
     "paths",
@@ -18,6 +18,32 @@ PATH_HINT_KEYS = {
     "directory",
     "target",
     "repo_path",
+}
+
+# Maps CBAC scope strings to the set of tool names permitted under that scope.
+# Wildcard scope "*" bypasses this map entirely (checked before R9).
+SCOPE_TOOL_MAP: dict[str, frozenset[str]] = {
+    "memory:read": frozenset(
+        {"memory_search", "memory_list", "memory_export", "memory_stats"}
+    ),
+    "memory:write": frozenset(
+        {"memory_save", "memory_delete", "memory_clear", "memory_index"}
+    ),
+    "self:read": frozenset({"session_list", "session_history", "skill_list", "skill_read"}),
+    "self:write": frozenset(
+        {"session_send", "skill_write", "update_persona", "create_feature_request"}
+    ),
+    "media:read": frozenset(),   # API-tier scope; no agent tools require it
+    "media:write": frozenset(),  # API-tier scope; no agent tools require it
+    "tools:exec": frozenset({"exec_host", "web_search", "echo", "create_feature_request"}),
+    "swarm:write": frozenset(
+        {
+            "devswarm.spawn_worker",
+            "devswarm.send_tmux",
+            "devswarm.check_tasks",
+            "devswarm.cleanup",
+        }
+    ),
 }
 
 
@@ -72,10 +98,12 @@ def _governance_decision(
     principal_id: str,
     tool_name: str,
     arguments: dict[str, Any],
+    trace_id: str | None = None,
 ) -> tuple[bool, str]:
     row = conn.execute(
         (
-            "SELECT risk_tier, allowed_paths_json, can_request_privileged_change "
+            "SELECT risk_tier, max_actions_per_step, allowed_paths_json, "
+            "can_request_privileged_change "
             "FROM agent_governance WHERE principal_id=? LIMIT 1"
         ),
         (principal_id,),
@@ -92,6 +120,20 @@ def _governance_decision(
         and not can_request
     ):
         return False, "R6: governance.risk_tier"
+
+    # R8: enforce max_actions_per_step
+    max_actions_raw = row["max_actions_per_step"]
+    if max_actions_raw is not None and trace_id:
+        max_actions = int(max_actions_raw)
+        if max_actions > 0:
+            action_count_row = conn.execute(
+                "SELECT COUNT(*) AS n FROM events "
+                "WHERE trace_id=? AND event_type='tool.call.start'",
+                (trace_id,),
+            ).fetchone()
+            action_count = int(action_count_row["n"]) if action_count_row is not None else 0
+            if action_count > max_actions:
+                return False, "R8: step_limit_exceeded"
 
     raw_paths = row["allowed_paths_json"]
     try:
@@ -112,9 +154,11 @@ def _governance_decision(
 
 
 def is_allowed(conn: sqlite3.Connection, principal_id: str, tool_name: str) -> bool:
+    # Check exact tool_name match first, then wildcard '*'.
     row = conn.execute(
-        "SELECT effect FROM tool_permissions WHERE principal_id=? AND tool_name=?",
-        (principal_id, tool_name),
+        "SELECT effect FROM tool_permissions WHERE principal_id=? AND tool_name IN (?, '*') "
+        "ORDER BY CASE tool_name WHEN ? THEN 0 ELSE 1 END LIMIT 1",
+        (principal_id, tool_name, tool_name),
     ).fetchone()
     return bool(row and row["effect"] == "allow")
 
@@ -124,6 +168,8 @@ def decision(
     principal_id: str,
     tool_name: str,
     arguments: dict[str, Any] | None = None,
+    trace_id: str | None = None,
+    token_scopes: frozenset[str] | None = None,
 ) -> tuple[bool, str]:
     state_row = conn.execute(
         "SELECT lockdown, restarting FROM system_state WHERE id='singleton'"
@@ -136,13 +182,27 @@ def decision(
         return False, "R1: lockdown"
     if tool_name in SESSION_TOOLS and principal_id != "main":
         return False, "R5: main-agent-only session tool"
+    if tool_name == "request_human_escalation" and principal_id != "main":
+        return False, "R5: main-agent-only escalation tool"
     if not is_allowed(conn, principal_id, tool_name):
         return False, "R4: permission denied"
     gov_allowed, gov_reason = _governance_decision(
-        conn, principal_id, tool_name, arguments or {}
+        conn, principal_id, tool_name, arguments or {}, trace_id=trace_id
     )
     if not gov_allowed:
         return False, gov_reason
+
+    # R9: CBAC token scope gate — only applies when a restricted token is in use.
+    if token_scopes is not None and "*" not in token_scopes:
+        allowed_by_scope: set[str] = set()
+        for s in token_scopes:
+            ns = s.split(":")[0]
+            for k, tools in SCOPE_TOOL_MAP.items():
+                if k == s or k == f"{ns}:*":
+                    allowed_by_scope.update(tools)
+        if tool_name not in allowed_by_scope:
+            return False, "R9: cbac.scope_denied"
+
     return True, "allow"
 
 

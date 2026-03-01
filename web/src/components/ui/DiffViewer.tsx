@@ -5,7 +5,7 @@ interface DiffViewerProps {
 export default function DiffViewer({ diff }: DiffViewerProps) {
   const lines = diff.split("\n");
   return (
-    <div className="max-h-[36rem] overflow-auto rounded border border-ink/20 bg-[#0e1726] p-3 font-mono text-xs">
+    <div className="max-h-[36rem] overflow-auto rounded border border-[var(--color-border)] bg-[#0a0a0b] p-3 font-mono text-xs">
       {lines.map((line, idx) => {
         let cls = "text-slate-200";
         if (line.startsWith("+++") || line.startsWith("---")) cls = "text-cyan-300";

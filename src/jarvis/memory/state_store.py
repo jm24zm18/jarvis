@@ -341,6 +341,8 @@ class StateStore:
                 "WHEN 'risk' THEN 3 "
                 "WHEN 'failure' THEN 4 "
                 "WHEN 'question' THEN 5 "
+                "WHEN 'insight' THEN 6 "
+                "WHEN 'worldview' THEN 7 "
                 "ELSE 6 END ASC, "
                 "CASE confidence "
                 "WHEN 'high' THEN 2 "
@@ -454,22 +456,115 @@ class StateStore:
             return None
         return str(row["last_message_created_at"]), str(row["last_message_id"])
 
+    def get_extraction_watermark_metadata(
+        self, conn: sqlite3.Connection, thread_id: str
+    ) -> dict[str, str] | None:
+        row = conn.execute(
+            (
+                "SELECT last_message_created_at, last_message_id, extraction_status, "
+                "status_updated_at, last_error "
+                "FROM state_extraction_watermarks WHERE thread_id=?"
+            ),
+            (thread_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "last_message_created_at": str(row["last_message_created_at"]),
+            "last_message_id": str(row["last_message_id"]),
+            "extraction_status": str(row["extraction_status"] or "idle"),
+            "status_updated_at": str(row["status_updated_at"] or ""),
+            "last_error": str(row["last_error"] or ""),
+        }
+
     def set_extraction_watermark(
-        self, conn: sqlite3.Connection, thread_id: str, created_at: str, message_id: str
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        created_at: str,
+        message_id: str,
+        *,
+        extraction_status: str | None = None,
+        last_error: str | None = None,
     ) -> None:
         now = self._now_iso()
+        status_value = (extraction_status or "idle").strip() or "idle"
         conn.execute(
             (
                 "INSERT INTO state_extraction_watermarks("
-                "thread_id, last_message_created_at, last_message_id, updated_at"
-                ") VALUES(?,?,?,?) "
+                "thread_id, last_message_created_at, last_message_id, updated_at, "
+                "extraction_status, status_updated_at, last_error"
+                ") VALUES(?,?,?,?,?,?,?) "
                 "ON CONFLICT(thread_id) DO UPDATE SET "
                 "last_message_created_at=excluded.last_message_created_at, "
                 "last_message_id=excluded.last_message_id, "
-                "updated_at=excluded.updated_at"
+                "updated_at=excluded.updated_at, "
+                "extraction_status=excluded.extraction_status, "
+                "status_updated_at=excluded.status_updated_at, "
+                "last_error=excluded.last_error"
             ),
-            (thread_id, created_at, message_id, now),
+            (
+                thread_id,
+                created_at,
+                message_id,
+                now,
+                status_value,
+                now,
+                last_error,
+            ),
         )
+
+    def set_extraction_status(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        status: str,
+        *,
+        last_error: str | None = None,
+    ) -> None:
+        now = self._now_iso()
+        row = conn.execute(
+            (
+                "SELECT last_message_created_at, last_message_id "
+                "FROM state_extraction_watermarks WHERE thread_id=?"
+            ),
+            (thread_id,),
+        ).fetchone()
+        if row is None:
+            return
+        conn.execute(
+            (
+                "UPDATE state_extraction_watermarks "
+                "SET extraction_status=?, status_updated_at=?, last_error=?, updated_at=? "
+                "WHERE thread_id=?"
+            ),
+            (status, now, last_error, now, thread_id),
+        )
+
+    def batch_upsert_items(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        items: list[StateItem],
+        embeddings: list[list[float]] | None = None,
+        *,
+        agent_id: str = "main",
+    ) -> list[StateItem]:
+        if not items:
+            return []
+        output: list[StateItem] = []
+        vectors = embeddings or []
+        for idx, item in enumerate(items):
+            stored = self.upsert_item(conn, thread_id, item, agent_id=agent_id)
+            if idx < len(vectors):
+                self.upsert_item_embedding(
+                    conn,
+                    uid=stored.uid,
+                    thread_id=thread_id,
+                    embedding=vectors[idx],
+                )
+            output.append(stored)
+        return output
 
     def get_new_messages_since(
         self,

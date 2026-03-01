@@ -93,10 +93,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     if auth_data is None:
         await websocket.close(code=1008)
         return
-    user_id, role = auth_data
+    user_id = auth_data
 
     await websocket.accept()
-    await websocket.send_json({"type": "auth.ok", "user_id": user_id, "role": role})
+    await websocket.send_json({"type": "auth.ok", "user_id": user_id})
 
     try:
         while True:
@@ -112,9 +112,6 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     if row is None:
                         await websocket.send_json({"type": "error", "detail": "thread not found"})
                         continue
-                    if role != "admin" and str(row["user_id"]) != user_id:
-                        await websocket.send_json({"type": "error", "detail": "forbidden"})
-                        continue
                     await hub.subscribe(websocket, thread_id)
                     await websocket.send_json({"type": "subscribed", "thread_id": thread_id})
             elif action == "unsubscribe":
@@ -123,9 +120,6 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     await hub.unsubscribe(websocket, thread_id)
                     await websocket.send_json({"type": "unsubscribed", "thread_id": thread_id})
             elif action == "subscribe_system":
-                if role != "admin":
-                    await websocket.send_json({"type": "error", "detail": "forbidden"})
-                    continue
                 await hub.subscribe_system(websocket)
                 await websocket.send_json({"type": "subscribed.system"})
             else:

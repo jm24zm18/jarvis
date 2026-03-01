@@ -35,6 +35,27 @@ class RetryableFailThenOkProvider:
         return True
 
 
+class CooldownPrimaryProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @staticmethod
+    def quota_status() -> dict[str, object]:
+        return {
+            "blocked": True,
+            "seconds_remaining": 120,
+            "reason": "gemini quota exceeded; skipping primary until 2026-02-22T15:15:55Z UTC",
+        }
+
+    async def generate(self, messages, tools=None, temperature=0.7, max_tokens=4096):
+        del messages, tools, temperature, max_tokens
+        self.calls += 1
+        return ModelResponse(text="should_not_be_called", tool_calls=[])
+
+    async def health_check(self) -> bool:
+        return True
+
+
 @pytest.mark.asyncio
 async def test_primary_success() -> None:
     router = ProviderRouter(OkProvider(), OkProvider())
@@ -82,3 +103,15 @@ async def test_retryable_primary_error_retries_before_success() -> None:
     assert lane == "primary"
     assert primary_error is None
     assert primary.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_primary_cooldown_short_circuits_to_fallback() -> None:
+    primary = CooldownPrimaryProvider()
+    router = ProviderRouter(primary, OkProvider())
+    response, lane, primary_error = await router.generate([{"role": "user", "content": "x"}])
+    assert response.text == "ok"
+    assert lane == "fallback"
+    assert primary_error is not None
+    assert "skipping primary until" in primary_error
+    assert primary.calls == 0

@@ -6,8 +6,9 @@ import sqlite3
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from jarvis.auth.dependencies import UserContext, require_admin, require_auth
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.db.connection import get_conn
+from jarvis.db.queries import store_consistency_report
 from jarvis.memory.knowledge import KnowledgeBaseService
 from jarvis.memory.scope import can_agent_access_thread_memory, normalize_agent_id
 from jarvis.memory.service import MemoryService
@@ -37,10 +38,9 @@ def _parse_metadata(raw: object) -> dict[str, object]:
 
 
 def _thread_allowed(conn: sqlite3.Connection, ctx: UserContext, thread_id: str) -> bool:
+    del ctx
     owner = conn.execute("SELECT user_id FROM threads WHERE id=? LIMIT 1", (thread_id,)).fetchone()
-    if owner is None:
-        return False
-    return bool(ctx.is_admin or str(owner["user_id"]) == ctx.user_id)
+    return owner is not None
 
 
 def _resolve_state_agent_scope(
@@ -68,23 +68,10 @@ def search_memory(
             ).fetchone()
             if owner is None:
                 return {"items": []}
-            if not ctx.is_admin and str(owner["user_id"]) != ctx.user_id:
-                return {"items": []}
             items = service.search(conn, thread_id=thread_id, limit=limit, query=q or None)
             return {"items": items}
 
-        if q.strip() and not ctx.is_admin:
-            rows = conn.execute(
-                (
-                    "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
-                    "FROM memory_fts mf JOIN memory_items mi ON mi.id=mf.memory_id "
-                    "JOIN threads t ON t.id=mi.thread_id "
-                    "WHERE memory_fts MATCH ? AND t.user_id=? "
-                    "ORDER BY mi.created_at DESC LIMIT ?"
-                ),
-                (q, ctx.user_id, limit),
-            ).fetchall()
-        elif q.strip():
+        if q.strip():
             rows = conn.execute(
                 (
                     "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
@@ -92,16 +79,6 @@ def search_memory(
                     "WHERE memory_fts MATCH ? ORDER BY mi.created_at DESC LIMIT ?"
                 ),
                 (q, limit),
-            ).fetchall()
-        elif not ctx.is_admin:
-            rows = conn.execute(
-                (
-                    "SELECT mi.id, mi.thread_id, mi.text, mi.metadata_json, mi.created_at "
-                    "FROM memory_items mi JOIN threads t ON t.id=mi.thread_id "
-                    "WHERE t.user_id=? "
-                    "ORDER BY mi.created_at DESC LIMIT ?"
-                ),
-                (ctx.user_id, limit),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -126,25 +103,10 @@ def search_memory(
 
 @router.get("/stats")
 def memory_stats(ctx: UserContext = Depends(require_auth)) -> dict[str, int]:  # noqa: B008
+    del ctx
     with get_conn() as conn:
-        if ctx.is_admin:
-            total = conn.execute("SELECT COUNT(*) AS n FROM memory_items").fetchone()
-            embedded = conn.execute("SELECT COUNT(*) AS n FROM memory_embeddings").fetchone()
-        else:
-            total = conn.execute(
-                "SELECT COUNT(*) AS n "
-                "FROM memory_items mi JOIN threads t ON t.id=mi.thread_id "
-                "WHERE t.user_id=?",
-                (ctx.user_id,),
-            ).fetchone()
-            embedded = conn.execute(
-                "SELECT COUNT(*) AS n "
-                "FROM memory_embeddings me "
-                "JOIN memory_items mi ON mi.id=me.memory_id "
-                "JOIN threads t ON t.id=mi.thread_id "
-                "WHERE t.user_id=?",
-                (ctx.user_id,),
-            ).fetchone()
+        total = conn.execute("SELECT COUNT(*) AS n FROM memory_items").fetchone()
+        embedded = conn.execute("SELECT COUNT(*) AS n FROM memory_embeddings").fetchone()
     total_n = int(total["n"]) if total is not None else 0
     embedded_n = int(embedded["n"]) if embedded is not None else 0
     return {
@@ -152,6 +114,75 @@ def memory_stats(ctx: UserContext = Depends(require_auth)) -> dict[str, int]:  #
         "embedded_items": embedded_n,
         "embedding_coverage_pct": int((embedded_n * 100 / total_n) if total_n else 0),
     }
+
+
+@router.get("/consistency")
+def get_consistency(
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+    thread_id: str = "",
+    from_ts: str | None = None,
+    to_ts: str | None = None,
+    limit: int = Query(default=20, ge=1, le=200),
+) -> dict[str, object]:
+    """Evaluate and persist memory consistency for a thread."""
+    if not thread_id.strip():
+        return {"error": "thread_id is required", "items": []}
+    service = MemoryService()
+    with get_conn() as conn:
+        if not _thread_allowed(conn, ctx, thread_id):
+            return {"error": "forbidden", "items": []}
+        # Run consistency evaluation and persist the result.
+        eval_result = service.evaluate_consistency(conn, thread_id=thread_id)
+        _sample_size = eval_result.get("sample_size", 0)
+        _total_items = eval_result.get("total_items", 0)
+        _conflicted_items = eval_result.get("conflicted_items", 0)
+        _consistency_score = eval_result.get("consistency_score", 1.0)
+        _num = (int, float, str)
+        report_id = store_consistency_report(
+            conn,
+            thread_id=thread_id,
+            sample_size=int(_sample_size) if isinstance(_sample_size, _num) else 0,
+            total_items=int(_total_items) if isinstance(_total_items, _num) else 0,
+            conflicted_items=(
+                int(_conflicted_items) if isinstance(_conflicted_items, _num) else 0
+            ),
+            consistency_score=(
+                float(_consistency_score) if isinstance(_consistency_score, _num) else 1.0
+            ),
+        )
+        # Fetch historical reports.
+        filters: list[str] = ["thread_id=?"]
+        params: list[object] = [thread_id]
+        if from_ts and from_ts.strip():
+            filters.append("created_at>=?")
+            params.append(from_ts.strip())
+        if to_ts and to_ts.strip():
+            filters.append("created_at<=?")
+            params.append(to_ts.strip())
+        where = " AND ".join(filters)
+        rows = conn.execute(
+            (
+                "SELECT id, thread_id, sample_size, total_items, conflicted_items, "
+                "consistency_score, details_json, created_at "
+                f"FROM memory_consistency_reports WHERE {where} "
+                "ORDER BY created_at DESC LIMIT ?"
+            ),
+            tuple([*params, limit]),
+        ).fetchall()
+    items = [
+        {
+            "id": str(row["id"]),
+            "thread_id": str(row["thread_id"]),
+            "sample_size": int(row["sample_size"]),
+            "total_items": int(row["total_items"]),
+            "conflicted_items": int(row["conflicted_items"]),
+            "consistency_score": float(row["consistency_score"]),
+            "details": _parse_metadata(row["details_json"]),
+            "created_at": str(row["created_at"]),
+        }
+        for row in rows
+    ]
+    return {"current_report_id": report_id, "latest": eval_result, "items": items}
 
 
 @router.get("/kb")
@@ -184,7 +215,7 @@ def upsert_kb(
 
 @router.post("/maintenance/run")
 def memory_maintenance_run(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     return run_memory_maintenance()
@@ -221,7 +252,7 @@ def state_search(
 
 @router.get("/state/failures")
 def state_failures(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     similar_to: str = "",
     k: int = Query(default=10, ge=1, le=100),
 ) -> dict[str, object]:
@@ -264,7 +295,7 @@ def state_graph(
 
 @router.get("/state/review/conflicts")
 def state_review_conflicts(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, object]:
     del ctx
@@ -300,7 +331,7 @@ def state_review_conflicts(
 
 @router.get("/state/stats")
 def state_stats(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     with get_conn() as conn:
@@ -335,7 +366,7 @@ def state_stats(
 def state_review_resolve(
     uid: str,
     payload: ReviewResolveInput,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     with get_conn() as conn:
         now = conn.execute("SELECT datetime('now') AS now").fetchone()
@@ -405,7 +436,7 @@ def memory_export(
                     else (thread_id, limit)
                 ),
             ).fetchall()
-        elif ctx.is_admin:
+        else:
             rows = conn.execute(
                 (
                     "SELECT uid, thread_id, text, type_tag, status, tier, "
@@ -424,27 +455,6 @@ def memory_export(
                     else (scoped_agent, limit)
                     if scoped_agent
                     else (limit,)
-                ),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                (
-                    "SELECT si.uid, si.thread_id, si.text, si.type_tag, si.status, si.tier, "
-                    "si.importance_score, si.created_at "
-                    "FROM state_items si JOIN threads t ON t.id=si.thread_id "
-                    "WHERE t.user_id=? "
-                    + ("AND si.tier=? " if tier.strip() else "")
-                    + ("AND si.agent_id=? " if scoped_agent else "")
-                    + "ORDER BY si.created_at DESC LIMIT ?"
-                ),
-                (
-                    (ctx.user_id, tier, scoped_agent, limit)
-                    if tier.strip() and scoped_agent
-                    else (ctx.user_id, tier, limit)
-                    if tier.strip()
-                    else (ctx.user_id, scoped_agent, limit)
-                    if scoped_agent
-                    else (ctx.user_id, limit)
                 ),
             ).fetchall()
     items = [
@@ -468,7 +478,7 @@ def memory_export(
 
 @router.get("/state/consistency/report")
 def state_consistency_report(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
     limit: int = Query(default=50, ge=1, le=500),
     thread_id: str | None = None,
     from_ts: str | None = None,

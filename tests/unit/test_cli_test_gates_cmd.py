@@ -45,6 +45,7 @@ def test_json_output(capsys: pytest.CaptureFixture[str]) -> None:
     with patch("jarvis.cli.test_gates.subprocess.run", return_value=_make_completed(0)):
         run_test_gates(json_output=True)
     out = capsys.readouterr().out
+    assert "$ " not in out
     assert '"name"' in out
     assert '"passed"' in out
 

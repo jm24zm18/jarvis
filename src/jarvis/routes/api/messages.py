@@ -45,8 +45,7 @@ def list_messages(
         if owner_row is None:
             raise HTTPException(status_code=404, detail="thread not found")
         thread_user_id = str(owner_row["user_id"])
-        if not ctx.is_admin:
-            verify_thread_owner(conn, thread_id, ctx.user_id)
+        verify_thread_owner(conn, thread_id, ctx.user_id)
         user_name = get_user_name(conn, thread_user_id)
         if before:
             rows = conn.execute(
@@ -88,11 +87,37 @@ def list_messages(
                 (thread_id, limit),
             ).fetchall()
 
+    # Batch-fetch media attachments for all returned messages in one query.
+    message_ids = [str(row["id"]) for row in rows]
+    media_by_message: dict[str, list[dict[str, object]]] = {}
+    if message_ids:
+        placeholders = ",".join("?" * len(message_ids))
+        with get_conn() as media_conn:
+            media_rows = media_conn.execute(
+                f"SELECT id, message_id, mime_type, size_bytes, thumbnail_path "
+                f"FROM media_attachments WHERE message_id IN ({placeholders})",
+                message_ids,
+            ).fetchall()
+        for mrow in media_rows:
+            mid = str(mrow["message_id"])
+            media_by_message.setdefault(mid, []).append({
+                "id": str(mrow["id"]),
+                "url": f"/api/v1/media/{mrow['id']}",
+                "mime_type": str(mrow["mime_type"]),
+                "thumbnail_url": (
+                    f"/api/v1/media/{mrow['id']}/thumb"
+                    if mrow["thumbnail_path"] is not None
+                    else None
+                ),
+                "size_bytes": int(mrow["size_bytes"]),
+            })
+
     items = []
     for row in reversed(rows):
         content = str(row["content"])
+        row_id = str(row["id"])
         items.append({
-            "id": str(row["id"]),
+            "id": row_id,
             "role": str(row["role"]),
             "content": content,
             "created_at": str(row["created_at"]),
@@ -109,6 +134,7 @@ def list_messages(
                     else str(row["actor_id"])
                 )
             ),
+            "media": media_by_message.get(row_id, []),
         })
     next_before = str(rows[-1]["created_at"]) if rows else None
     return {"items": items, "next_before": next_before}
@@ -133,8 +159,6 @@ async def send_message(
         if thread_row is None:
             raise HTTPException(status_code=404, detail="thread not found")
         thread_user_id = str(thread_row["user_id"])
-        if not ctx.is_admin and thread_user_id != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
         message_id = insert_message(conn, thread_id, "user", content)
         conn.execute(
             (
@@ -197,8 +221,6 @@ def get_thread_onboarding_status(
         if thread_row is None:
             raise HTTPException(status_code=404, detail="thread not found")
         thread_user_id = str(thread_row["user_id"])
-        if not ctx.is_admin and thread_user_id != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
         return get_onboarding_status(conn, user_id=thread_user_id)
 
 
@@ -213,8 +235,6 @@ async def start_thread_onboarding(
         if thread_row is None:
             raise HTTPException(status_code=404, detail="thread not found")
         thread_user_id = str(thread_row["user_id"])
-        if not ctx.is_admin and thread_user_id != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
         settings = get_settings()
         router = ProviderRouter(
             build_primary_provider(settings),

@@ -1,4 +1,7 @@
 import asyncio
+from unittest.mock import patch
+
+import pytest
 
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import ensure_channel, ensure_open_thread, ensure_system_state, ensure_user
@@ -16,6 +19,13 @@ class _Router:
     async def generate(self, *_args, **_kwargs):
         self.calls += 1
         return ModelResponse(text=self.text, tool_calls=[]), "primary", None
+
+
+class _FailingRouter:
+    async def generate(self, *_args, **_kwargs):
+        raise RuntimeError(
+            "gemini quota exceeded; skipping primary until 2026-02-22T14:38:35.570594+00:00 UTC"
+        )
 
 
 class _Memory:
@@ -167,3 +177,63 @@ def test_extractor_supersedes_with_guardrails() -> None:
     assert old_row["status"] == "superseded"
     assert old_row["replaced_by"] is not None
     assert "instead" in str(old_row["supersession_evidence"])
+
+
+def test_extractor_timeout_has_descriptive_message() -> None:
+    """asyncio.wait_for raises bare TimeoutError(); verify it is re-raised with message."""
+
+    class _SlowRouter:
+        async def generate(self, *_args, **_kwargs):
+            await asyncio.sleep(999)
+
+    with get_conn() as conn:
+        thread_id = _seed_thread(conn, "15555550155")
+        store = StateStore()
+        base_stamp = "2026-02-01T00:00:00+00:00"
+        store.set_extraction_watermark(conn, thread_id, base_stamp, "msg_0")
+        conn.execute(
+            "INSERT INTO messages(id, thread_id, role, content, created_at) VALUES(?,?,?,?,?)",
+            ("msg_1", thread_id, "user", "hello", "2026-02-02T00:00:00+00:00"),
+        )
+        with patch("jarvis.memory.state_extractor.get_settings") as mock_settings:
+            mock_settings.return_value.state_extraction_enabled = 1
+            mock_settings.return_value.state_extraction_timeout_seconds = 5
+            mock_settings.return_value.state_extraction_max_messages = 50
+            mock_settings.return_value.state_max_active_items = 40
+            mock_settings.return_value.state_extraction_merge_threshold = 0.92
+            mock_settings.return_value.state_extraction_conflict_threshold = 0.85
+            mock_settings.return_value.state_extraction_llm_timeout = 1
+            mock_settings.return_value.state_extraction_embed_timeout = 1
+            with pytest.raises(TimeoutError) as exc_info:
+                asyncio.run(
+                    extract_state_items(
+                        conn,
+                        thread_id=thread_id,
+                        router=_SlowRouter(),
+                        memory=_Memory(),
+                    )
+                )
+    msg = str(exc_info.value)
+    assert "timed out" in msg
+    assert "5s" in msg
+
+
+def test_extractor_skips_for_provider_quota_cooldown() -> None:
+    with get_conn() as conn:
+        thread_id = _seed_thread(conn, "15555550154")
+        store = StateStore()
+        base_stamp = "2026-02-01T00:00:00+00:00"
+        store.set_extraction_watermark(conn, thread_id, base_stamp, "msg_0")
+        conn.execute(
+            "INSERT INTO messages(id, thread_id, role, content, created_at) VALUES(?,?,?,?,?)",
+            ("msg_1", thread_id, "user", "Use Redis", "2026-02-02T00:00:00+00:00"),
+        )
+        result = asyncio.run(
+            extract_state_items(
+                conn,
+                thread_id=thread_id,
+                router=_FailingRouter(),
+                memory=_Memory(),
+            )
+        )
+    assert result.skipped_reason == "provider_quota_cooldown"

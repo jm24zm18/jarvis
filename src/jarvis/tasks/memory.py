@@ -1,15 +1,42 @@
 """Memory/indexing Celery tasks."""
 # ruff: noqa: E501
 
+import asyncio
 import json
+import logging
+import sqlite3
+import time
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import now_iso
+from jarvis.events.models import EventInput
+from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
+from jarvis.memory.knowledge_graph import KnowledgeGraph
 from jarvis.memory.service import MemoryService
+from jarvis.memory.state_extractor import extract_state_items
+from jarvis.memory.state_store import StateStore
+from jarvis.providers.factory import build_fallback_provider, build_primary_provider
+from jarvis.providers.router import ProviderRouter
+
+_STATE_EXTRACTION_BACKOFF: dict[str, dict[str, object]] = {}
+_STATE_EXTRACTION_TIMEOUT_RETRY_MAX_ATTEMPTS = 3
+_STATE_EXTRACTION_TIMEOUT_RETRY_DELAYS_SECONDS = (1, 2)
+_TASK_LESSON_PREDICATES = frozenset(
+    {"best_practice_for", "lesson_learned", "should_avoid", "skill_for"}
+)
+logger = logging.getLogger(__name__)
+
+
+def _is_vector_map_integrity_error(exc: sqlite3.IntegrityError) -> bool:
+    message = str(exc).lower()
+    return (
+        "memory_vec_index_map.memory_id" in message
+        or "event_vec_index_map.event_id" in message
+    )
 
 
 def index_event(
@@ -25,6 +52,15 @@ def index_event(
             ids = service.write_chunked(conn, thread_id, text, metadata=metadata)
         except PermissionError:
             return ""
+        except sqlite3.IntegrityError as exc:
+            if _is_vector_map_integrity_error(exc):
+                logger.warning(
+                    "memory index_event conflict suppressed for thread_id=%s",
+                    thread_id,
+                    exc_info=True,
+                )
+                return ""
+            raise
     return ids[0] if ids else ""
 
 
@@ -32,6 +68,311 @@ def compact_thread(thread_id: str) -> dict[str, str]:
     service = MemoryService()
     with get_conn() as conn:
         return service.compact_thread(conn, thread_id)
+
+
+def _extract_primary_failure_fields(message: str) -> dict[str, object]:
+    lower = message.lower()
+    if "quota exhausted (terminal)" in lower:
+        return {"primary_failure_kind": "quota_terminal"}
+    if (
+        "quota exceeded" in lower
+        or "rate limit" in lower
+        or "resource_exhausted" in lower
+        or "429" in lower
+    ):
+        return {"primary_failure_kind": "quota_retryable"}
+    if "timed out" in lower or "timeout" in lower:
+        return {"primary_failure_kind": "timeout"}
+    if (
+        "temporary failure in name resolution" in lower
+        or "name or service not known" in lower
+        or "getaddrinfo failed" in lower
+    ):
+        return {"primary_failure_kind": "dns_resolution"}
+    return {"primary_failure_kind": "generic"}
+
+
+def _notify_trace_event(
+    conn,
+    *,
+    thread_id: str,
+    trace_id: str,
+    event_type: str,
+    payload: dict[str, object],
+) -> None:
+    created_at = now_iso()
+    enriched = dict(payload)
+    enriched["trace_id"] = trace_id
+    enriched["created_at"] = created_at
+    conn.execute(
+        "INSERT INTO web_notifications(thread_id, event_type, payload_json, created_at) "
+        "VALUES(?,?,?,?)",
+        (thread_id, f"trace.{event_type}", json.dumps(enriched), created_at),
+    )
+
+
+def _state_backoff_active_seconds(thread_id: str, now: datetime) -> int:
+    state = _STATE_EXTRACTION_BACKOFF.get(thread_id)
+    if not isinstance(state, dict):
+        return 0
+    until_raw = state.get("until")
+    if not isinstance(until_raw, datetime):
+        return 0
+    remaining = int((until_raw - now).total_seconds())
+    return max(0, remaining)
+
+
+def _set_state_backoff(thread_id: str, *, failure_kind: str, settings) -> int:
+    current = _STATE_EXTRACTION_BACKOFF.get(thread_id, {})
+    failures = int(current.get("failures", 0)) + 1
+    base = max(5, int(settings.state_extraction_backoff_base_seconds))
+    cap = max(base, int(settings.state_extraction_backoff_max_seconds))
+    if failure_kind == "quota_retryable":
+        seconds = max(base, 60)
+    else:
+        seconds = min(cap, base * (2 ** max(0, failures - 1)))
+    until = datetime.now(UTC) + timedelta(seconds=seconds)
+    _STATE_EXTRACTION_BACKOFF[thread_id] = {
+        "failures": failures,
+        "until": until,
+        "failure_kind": failure_kind,
+    }
+    return seconds
+
+
+def _clear_state_backoff(thread_id: str) -> None:
+    _STATE_EXTRACTION_BACKOFF.pop(thread_id, None)
+
+
+def extract_thread_state(
+    thread_id: str,
+    actor_id: str = "main",
+    trace_id: str | None = None,
+) -> dict[str, object]:
+    settings = get_settings()
+    payload: dict[str, object] = {
+        "thread_id": thread_id,
+        "actor_id": actor_id,
+    }
+    if trace_id:
+        payload["trace_id"] = trace_id
+    if int(settings.state_extraction_enabled) != 1:
+        payload["skipped_reason"] = "disabled"
+        return payload
+
+    with get_conn() as conn:
+        store = StateStore()
+        now = datetime.now(UTC)
+        remaining = _state_backoff_active_seconds(thread_id, now)
+        if remaining > 0:
+            store.set_extraction_status(conn, thread_id, "skipped")
+            payload["skipped_reason"] = "backoff_active"
+            payload["retry_in_seconds"] = remaining
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id or new_id("trc"),
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="state.extraction.skipped",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(payload),
+                    payload_redacted_json=json.dumps(redact_payload(payload)),
+                ),
+            )
+            if trace_id:
+                _notify_trace_event(
+                    conn,
+                    thread_id=thread_id,
+                    trace_id=trace_id,
+                    event_type="state.extraction.skipped",
+                    payload=payload,
+                )
+            return payload
+
+        router = ProviderRouter(
+            build_primary_provider(settings),
+            build_fallback_provider(settings),
+        )
+        memory = MemoryService()
+        max_attempts = max(1, _STATE_EXTRACTION_TIMEOUT_RETRY_MAX_ATTEMPTS)
+        retry_delays = list(_STATE_EXTRACTION_TIMEOUT_RETRY_DELAYS_SECONDS)
+        attempt_count = 0
+        retry_attempted = False
+        retry_delays_used: list[int] = []
+        final_exc: Exception | None = None
+        result = None
+        store.set_extraction_status(conn, thread_id, "running", last_error=None)
+
+        while attempt_count < max_attempts:
+            attempt_count += 1
+            try:
+                result = asyncio.run(
+                    extract_state_items(
+                        conn=conn,
+                        thread_id=thread_id,
+                        router=router,
+                        memory=memory,
+                        actor_id=actor_id,
+                    )
+                )
+                final_exc = None
+                break
+            except TimeoutError as exc:
+                final_exc = exc
+                if attempt_count >= max_attempts:
+                    break
+                retry_attempted = True
+                delay_index = min(attempt_count - 1, len(retry_delays) - 1)
+                retry_in_seconds = (
+                    int(retry_delays[delay_index]) if delay_index >= 0 else 1
+                )
+                retry_delays_used.append(retry_in_seconds)
+                retry_payload: dict[str, object] = {
+                    "thread_id": thread_id,
+                    "actor_id": actor_id,
+                    "attempt": attempt_count + 1,
+                    "max_attempts": max_attempts,
+                    "retry_in_seconds": retry_in_seconds,
+                    "reason": "timeout",
+                }
+                if trace_id:
+                    retry_payload["trace_id"] = trace_id
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id or new_id("trc"),
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="state.extraction.retry_scheduled",
+                        component="memory",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(retry_payload),
+                        payload_redacted_json=json.dumps(redact_payload(retry_payload)),
+                    ),
+                )
+                if trace_id:
+                    _notify_trace_event(
+                        conn,
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        event_type="state.extraction.retry_scheduled",
+                        payload=retry_payload,
+                    )
+                time.sleep(max(1, retry_in_seconds))
+            except Exception as exc:
+                final_exc = exc
+                break
+
+        try:
+            if result is None and final_exc is not None:
+                raise final_exc
+            if result is None:
+                raise RuntimeError("state extraction returned no result")
+            payload.update(
+                {
+                    "items_extracted": result.items_extracted,
+                    "items_merged": result.items_merged,
+                    "items_conflicted": result.items_conflicted,
+                    "items_dropped": result.items_dropped,
+                    "duration_ms": result.duration_ms,
+                    "llm_ms": result.llm_ms,
+                    "embed_ms": result.embed_ms,
+                    "db_ms": result.db_ms,
+                    "skipped_reason": result.skipped_reason,
+                }
+            )
+            if payload.get("skipped_reason") in {"provider_quota_cooldown"}:
+                store.set_extraction_status(conn, thread_id, "skipped")
+                failure_kind = "quota_retryable"
+                payload["retry_in_seconds"] = _set_state_backoff(
+                    thread_id, failure_kind=failure_kind, settings=settings
+                )
+                event_type = "state.extraction.skipped"
+            else:
+                if payload.get("skipped_reason"):
+                    store.set_extraction_status(conn, thread_id, "skipped")
+                else:
+                    store.set_extraction_status(conn, thread_id, "idle")
+                _clear_state_backoff(thread_id)
+                event_type = "state.extraction.complete"
+            if retry_attempted:
+                payload["attempt_count"] = attempt_count
+                payload["max_attempts"] = max_attempts
+                payload["retry_attempted"] = True
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id or new_id("trc"),
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type=event_type,
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(payload),
+                    payload_redacted_json=json.dumps(redact_payload(payload)),
+                ),
+            )
+            if trace_id:
+                _notify_trace_event(
+                    conn,
+                    thread_id=thread_id,
+                    trace_id=trace_id,
+                    event_type=event_type,
+                    payload=payload,
+                )
+            return payload
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            payload["error"] = error
+            payload.update(_extract_primary_failure_fields(error))
+            if retry_attempted:
+                payload["attempt_count"] = attempt_count
+                payload["max_attempts"] = max_attempts
+                payload["retry_attempted"] = True
+                payload["retry_delays_seconds"] = retry_delays_used
+            if (
+                payload.get("primary_failure_kind") in {"quota_retryable", "quota_terminal"}
+                and "skipping primary until" in error.lower()
+            ):
+                payload["skipped_reason"] = "provider_quota_cooldown"
+            payload["retry_in_seconds"] = _set_state_backoff(
+                thread_id,
+                failure_kind=str(payload.get("primary_failure_kind", "generic")),
+                settings=settings,
+            )
+            store.set_extraction_status(conn, thread_id, "failed", last_error=error[:500])
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id or new_id("trc"),
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="state.extraction.failed",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(payload),
+                    payload_redacted_json=json.dumps(redact_payload(payload)),
+                ),
+            )
+            if trace_id:
+                _notify_trace_event(
+                    conn,
+                    thread_id=thread_id,
+                    trace_id=trace_id,
+                    event_type="state.extraction.failed",
+                    payload=payload,
+                )
+            return payload
 
 
 def periodic_compaction() -> dict[str, int]:
@@ -313,6 +654,693 @@ def run_memory_maintenance() -> dict[str, object]:
         "stale_before": stale_before,
         "summary": summary,
     }
+
+
+def _extract_json_payload(raw: str) -> object:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`").strip()
+        text = text.replace("json\n", "", 1).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+        start = text.find("[")
+        end = text.rfind("]")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+    return {}
+
+
+def _merge_beliefs(
+    existing: dict[str, object] | None,
+    incoming: dict[str, object],
+) -> dict[str, object]:
+    base = dict(existing or {})
+    for key in ("prefers", "avoids", "knows", "goals"):
+        old_values = base.get(key, [])
+        new_values = incoming.get(key, [])
+        merged: list[str] = []
+        for value in [*old_values, *new_values]:
+            if not isinstance(value, str):
+                continue
+            clean = value.strip()
+            if clean and clean not in merged:
+                merged.append(clean)
+        base[key] = merged[:20]
+    if isinstance(incoming.get("context"), dict):
+        context = dict(base.get("context", {})) if isinstance(base.get("context"), dict) else {}
+        context.update(incoming.get("context", {}))
+        base["context"] = context
+    return base
+
+
+def _render_profile_summary(profile: dict[str, object]) -> str:
+    parts: list[str] = []
+    for key in ("prefers", "avoids", "knows", "goals"):
+        values = profile.get(key, [])
+        if isinstance(values, list) and values:
+            short = ", ".join(str(item) for item in values[:4])
+            parts.append(f"{key}: {short}")
+    if not parts:
+        return "No stable profile synthesized yet."
+    return " | ".join(parts)
+
+
+def _synthesize_profile_json(
+    router: ProviderRouter,
+    *,
+    user_id: str,
+    items: list[dict[str, object]],
+    model_name: str,
+) -> dict[str, object]:
+    top_lines = [
+        f"- ({item['type_tag']}, importance={item['importance_score']:.2f}) {item['text']}"
+        for item in items[:50]
+    ]
+    prompt = "".join(
+        [
+            "Infer stable user profile beliefs from cross-thread notes.\n",
+            "Return ONLY JSON object with keys: ",
+            "prefers (array), avoids (array), knows (array), goals (array), context (object).\n",
+            f"Preferred model hint: {model_name}\n" if model_name else "",
+            f"user_id={user_id}\n",
+            "Evidence:\n",
+            "\n".join(top_lines),
+        ]
+    )
+    convo = [
+        {"role": "system", "content": "Return strict JSON only."},
+        {"role": "user", "content": prompt},
+    ]
+    response, _lane, _err = asyncio.run(
+        asyncio.wait_for(
+            router.generate(
+                convo,
+                tools=None,
+                temperature=0.1,
+                max_tokens=800,
+            ),
+            timeout=5,
+        )
+    )
+    parsed = _extract_json_payload(response.text)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _extract_kg_triples(
+    router: ProviderRouter,
+    *,
+    user_id: str,
+    items: list[dict[str, object]],
+    model_name: str,
+) -> list[dict[str, object]]:
+    top_lines = [f"- {item['text']}" for item in items[:40]]
+    prompt = "".join(
+        [
+            "Extract stable factual triples for this user.\n",
+            "Return ONLY JSON array of objects with keys: subject, predicate, object, confidence, importance.\n",
+            "Allowed predicates: prefers, avoids, knows, uses, has_goal, works_on, owns, dislikes, lives_in, works_at.\n",
+            f"Preferred model hint: {model_name}\n" if model_name else "",
+            f"user_id={user_id}\n",
+            "Evidence:\n",
+            "\n".join(top_lines),
+        ]
+    )
+    convo = [
+        {"role": "system", "content": "Return strict JSON only."},
+        {"role": "user", "content": prompt},
+    ]
+    response, _lane, _err = asyncio.run(
+        asyncio.wait_for(
+            router.generate(
+                convo,
+                tools=None,
+                temperature=0.0,
+                max_tokens=900,
+            ),
+            timeout=5,
+        )
+    )
+    parsed = _extract_json_payload(response.text)
+    return [row for row in parsed if isinstance(row, dict)] if isinstance(parsed, list) else []
+
+
+def _extract_task_lessons(
+    router: ProviderRouter,
+    *,
+    user_id: str,
+    thread_id: str,
+    compact_summary: str,
+    messages: list[dict[str, object]],
+    existing_triples: list[dict[str, object]],
+    model_name: str,
+    confidence_threshold: float,
+) -> dict[str, object]:
+    max_messages = 50
+    clipped_messages = messages[-max_messages:]
+    message_lines = []
+    for item in clipped_messages:
+        role = str(item.get("role", "unknown")).strip().lower()
+        content = str(item.get("content", ""))
+        message_lines.append(f"- [{role}] {content[:500]}")
+
+    triple_lines = []
+    for row in existing_triples[:30]:
+        triple_lines.append(
+            f"- ({row.get('subject', '')}) {row.get('predicate', '')}: {row.get('object', '')}"
+        )
+
+    system_prompt = (
+        "You are Jarvis's internal knowledge extractor.\n"
+        "After a complex task, extract ONLY high-value operational lessons.\n"
+        "Rules:\n"
+        "- Be extremely specific and actionable (code patterns, error handling, UX decisions, workflow optimizations).\n"
+        "- Prefer best_practice_for, lesson_learned, should_avoid, skill_for predicates.\n"
+        "- NEVER output generic facts or profile preferences (those go to profile synthesis).\n"
+        "- Confidence 0-1 based on how reusable and important this is.\n"
+        "- If nothing high-value, return empty lessons list.\n"
+        "Return strict JSON only."
+    )
+    user_prompt = "".join(
+        [
+            "Recent task context:\n",
+            f"{compact_summary.strip()[:1500] or 'No compact summary available.'}\n\n",
+            f"user_id={user_id}\n",
+            f"thread_id={thread_id}\n",
+            f"Preferred model hint: {model_name}\n" if model_name else "",
+            f"Confidence threshold: {confidence_threshold}\n\n",
+            f"Last {len(clipped_messages)} messages:\n",
+            "\n".join(message_lines) if message_lines else "(none)",
+            "\n\n",
+            "Existing task lessons (for dedup):\n",
+            "\n".join(triple_lines) if triple_lines else "(none)",
+            "\n\n",
+            "Extract lessons learned from THIS task only.\n"
+            "Return valid JSON:\n"
+            "{\n"
+            '  "lessons": [\n'
+            "    {\n"
+            '      "subject": "...",\n'
+            '      "predicate": "best_practice_for|lesson_learned|should_avoid|skill_for",\n'
+            '      "object": "...",\n'
+            '      "confidence": 0.92,\n'
+            '      "importance": 8\n'
+            "    }\n"
+            "  ],\n"
+            '  "profile_updates": {"prefers": [], "avoids": []}\n'
+            "}",
+        ]
+    )
+    convo = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    response, _lane, _err = asyncio.run(
+        asyncio.wait_for(
+            router.generate(
+                convo,
+                tools=None,
+                temperature=0.0,
+                max_tokens=1200,
+            ),
+            timeout=30,
+        )
+    )
+    parsed = _extract_json_payload(response.text)
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, list):
+        return {"lessons": [row for row in parsed if isinstance(row, dict)]}
+    return {}
+
+
+def post_task_knowledge_extraction(
+    *,
+    thread_id: str,
+    actor_id: str = "main",
+    trace_id: str | None = None,
+    total_tool_calls: int = 0,
+    step_idx: int = 0,
+) -> dict[str, object]:
+    settings = get_settings()
+    payload: dict[str, object] = {
+        "thread_id": thread_id,
+        "actor_id": actor_id,
+        "trace_id": trace_id,
+        "total_tool_calls": int(total_tool_calls),
+        "step_idx": int(step_idx),
+        "triples_upserted": 0,
+        "triples_skipped": 0,
+    }
+    if int(settings.auto_knowledge_extraction_enabled) != 1:
+        payload["skipped_reason"] = "disabled"
+        return payload
+    if int(settings.memory_graph_enabled) != 1:
+        payload["skipped_reason"] = "memory_graph_disabled"
+        return payload
+    if actor_id != "main":
+        payload["skipped_reason"] = "non_main_actor"
+        return payload
+
+    try:
+        confidence_threshold = float(settings.auto_knowledge_extraction_confidence_threshold)
+        max_per_day = max(1, int(settings.auto_knowledge_extraction_max_per_day))
+        cooldown_minutes = max(0, int(settings.auto_knowledge_extraction_cooldown_minutes))
+        reflection_model = str(settings.reflection_model).strip()
+        graph = KnowledgeGraph()
+        service = MemoryService()
+        with get_conn() as conn:
+            thread_row = conn.execute(
+                "SELECT user_id FROM threads WHERE id=? LIMIT 1",
+                (thread_id,),
+            ).fetchone()
+            if thread_row is None:
+                payload["skipped_reason"] = "thread_not_found"
+                return payload
+            user_id = str(thread_row["user_id"])
+
+            daily_row = conn.execute(
+                (
+                    "SELECT COUNT(*) AS n FROM events e "
+                    "JOIN threads t ON t.id=e.thread_id "
+                    "WHERE t.user_id=? "
+                    "AND e.event_type='knowledge.extraction.complete' "
+                    "AND (julianday('now') - julianday(e.created_at)) <= 1.0"
+                ),
+                (user_id,),
+            ).fetchone()
+            daily_count = int(daily_row["n"]) if daily_row is not None else 0
+            if daily_count >= max_per_day:
+                payload["skipped_reason"] = "daily_limit_reached"
+                payload["daily_count"] = daily_count
+                return payload
+
+            cooldown_row = conn.execute(
+                (
+                    "SELECT MAX(created_at) AS last_created_at FROM events "
+                    "WHERE thread_id=? AND event_type='knowledge.extraction.complete'"
+                ),
+                (thread_id,),
+            ).fetchone()
+            last_created_at = (
+                str(cooldown_row["last_created_at"])
+                if cooldown_row is not None and cooldown_row["last_created_at"] is not None
+                else ""
+            )
+            if last_created_at and cooldown_minutes > 0:
+                age_row = conn.execute(
+                    (
+                        "SELECT (julianday('now') - julianday(?)) * 1440.0 AS age_minutes"
+                    ),
+                    (last_created_at,),
+                ).fetchone()
+                age_minutes = (
+                    float(age_row["age_minutes"]) if age_row is not None else float(cooldown_minutes)
+                )
+                if age_minutes < float(cooldown_minutes):
+                    payload["skipped_reason"] = "cooldown"
+                    payload["cooldown_remaining_minutes"] = max(
+                        0, int(cooldown_minutes - age_minutes)
+                    )
+                    return payload
+
+            summary_row = conn.execute(
+                "SELECT short_summary FROM thread_summaries WHERE thread_id=? LIMIT 1",
+                (thread_id,),
+            ).fetchone()
+            compact_summary = (
+                str(summary_row["short_summary"]) if summary_row is not None else ""
+            )
+            message_rows = conn.execute(
+                (
+                    "SELECT role, content, created_at FROM messages "
+                    "WHERE thread_id=? AND created_at > "
+                    "COALESCE((SELECT updated_at FROM thread_summaries WHERE thread_id=?), '1970-01-01') "
+                    "ORDER BY created_at DESC LIMIT 50"
+                ),
+                (thread_id, thread_id),
+            ).fetchall()
+            if not message_rows:
+                message_rows = conn.execute(
+                    (
+                        "SELECT role, content, created_at FROM messages "
+                        "WHERE thread_id=? ORDER BY created_at DESC LIMIT 50"
+                    ),
+                    (thread_id,),
+                ).fetchall()
+            if not message_rows:
+                payload["skipped_reason"] = "no_messages"
+                return payload
+            messages = [
+                {
+                    "role": str(row["role"]),
+                    "content": str(row["content"]),
+                    "created_at": str(row["created_at"]),
+                }
+                for row in reversed(message_rows)
+            ]
+
+            existing_task_triples = graph.query(
+                conn,
+                user_id=user_id,
+                extraction_type="task_lesson",
+                limit=30,
+            )
+            router = ProviderRouter(
+                build_primary_provider(settings),
+                build_fallback_provider(settings),
+            )
+            try:
+                extracted = _extract_task_lessons(
+                    router,
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    compact_summary=compact_summary,
+                    messages=messages,
+                    existing_triples=existing_task_triples,
+                    model_name=reflection_model,
+                    confidence_threshold=confidence_threshold,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "task lesson extraction failed thread_id=%s trace_id=%s",
+                    thread_id,
+                    trace_id,
+                    exc_info=True,
+                )
+                payload["error"] = f"{type(exc).__name__}: {exc}"
+                return payload
+
+            lessons_raw = extracted.get("lessons", [])
+            lessons = [row for row in lessons_raw if isinstance(row, dict)] if isinstance(lessons_raw, list) else []
+            upserted = 0
+            skipped = 0
+            for lesson in lessons:
+                predicate = str(lesson.get("predicate", "")).strip().lower()
+                confidence = float(lesson.get("confidence", 0.0))
+                if predicate not in _TASK_LESSON_PREDICATES or confidence < confidence_threshold:
+                    skipped += 1
+                    continue
+                triple_id = graph.upsert_triple(
+                    conn,
+                    user_id=user_id,
+                    subject=str(lesson.get("subject", "")),
+                    predicate=predicate,
+                    object_=str(lesson.get("object", "")),
+                    confidence=confidence,
+                    importance=int(lesson.get("importance", 5)),
+                    source_thread_id=thread_id,
+                    extraction_type="task_lesson",
+                    source_trace_id=trace_id,
+                )
+                if triple_id:
+                    upserted += 1
+                else:
+                    skipped += 1
+
+            profile_updates = extracted.get("profile_updates", {})
+            existing_profile = service.get_user_profile(conn, user_id)
+            existing_beliefs = (
+                existing_profile.get("core_beliefs", {}) if isinstance(existing_profile, dict) else {}
+            )
+            merged = _merge_beliefs(
+                existing_beliefs if isinstance(existing_beliefs, dict) else {},
+                profile_updates if isinstance(profile_updates, dict) else {},
+            )
+            service.upsert_user_profile(
+                conn,
+                user_id,
+                beliefs=merged,
+                summary=_render_profile_summary(merged),
+                source_thread_count=len(service.get_user_threads(conn, user_id)),
+                reason="task_lesson_extraction",
+            )
+
+            payload["triples_upserted"] = upserted
+            payload["triples_skipped"] = skipped
+            payload["user_id"] = user_id
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id or new_id("trc"),
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="knowledge.extraction.complete",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(payload),
+                    payload_redacted_json=json.dumps(redact_payload(payload)),
+                ),
+            )
+            if int(settings.auto_knowledge_extraction_notify) == 1 and upserted > 0:
+                notif_payload = {
+                    "thread_id": thread_id,
+                    "trace_id": trace_id,
+                    "triples_upserted": upserted,
+                    "total_tool_calls": int(total_tool_calls),
+                }
+                conn.execute(
+                    "INSERT INTO web_notifications(thread_id, event_type, payload_json, created_at) "
+                    "VALUES(?,?,?,?)",
+                    (
+                        thread_id,
+                        "knowledge.extraction.complete",
+                        json.dumps(notif_payload),
+                        now_iso(),
+                    ),
+                )
+            payload["ok"] = True
+            return payload
+    except Exception as exc:
+        logger.warning(
+            "post_task_knowledge_extraction failed thread_id=%s trace_id=%s",
+            thread_id,
+            trace_id,
+            exc_info=True,
+        )
+        payload["error"] = f"{type(exc).__name__}: {exc}"
+        return payload
+
+
+def proactive_reflection() -> dict[str, object]:
+    settings = get_settings()
+    if int(settings.memory_reflection_enabled) != 1:
+        return {"ok": False, "reason": "disabled"}
+    batch_size = max(1, int(settings.memory_reflection_batch_size))
+    insight_limit = max(1, int(settings.memory_reflection_insight_limit))
+    prune_threshold = float(settings.memory_reflection_prune_threshold)
+    prune_age = max(0, int(settings.memory_reflection_prune_age_days))
+    state_limit = max(1, int(settings.state_max_active_items))
+    reflection_model = str(settings.reflection_model).strip()
+    service = MemoryService()
+    store = StateStore()
+    graph = KnowledgeGraph()
+    summary: dict[str, int] = {
+        "threads": 0,
+        "insights": 0,
+        "pruned": 0,
+        "profiles_updated": 0,
+        "kg_triples_upserted": 0,
+    }
+    with get_conn() as conn:
+        candidates = service.get_reflection_candidates(conn, batch_size)
+        touched_user_ids: set[str] = set()
+        for candidate in candidates:
+            thread_id = candidate["thread_id"]
+            active_items = store.get_active_items(conn, thread_id, limit=state_limit)
+            if not active_items:
+                continue
+            user_row = conn.execute(
+                "SELECT user_id FROM threads WHERE id=? LIMIT 1",
+                (thread_id,),
+            ).fetchone()
+            if user_row is not None:
+                touched_user_ids.add(str(user_row["user_id"]))
+            summary["threads"] += 1
+            refs = [
+                ref.strip()
+                for item in active_items
+                for ref in item.refs
+                if isinstance(ref, str) and ref.strip()
+            ]
+            if not refs:
+                refs = [f"thread:{thread_id}"]
+            refs = list(dict.fromkeys(refs))
+            topic_candidates = [
+                tag.strip().lower()
+                for item in active_items
+                for tag in item.topic_tags
+                if isinstance(tag, str) and tag.strip()
+            ]
+            topic_tags = list(dict.fromkeys(topic_candidates))
+            sorted_items = sorted(
+                active_items, key=lambda item: float(item.importance_score), reverse=True
+            )
+            worldview_lines = [
+                f"{item.type_tag}: {item.text}" for item in sorted_items[:3]
+            ]
+            worldview_text = "Worldview snapshot: " + " | ".join(worldview_lines)
+            worldview_tags = topic_tags or ["worldview"]
+            service.upsert_worldview_item(
+                conn,
+                thread_id,
+                text=worldview_text,
+                refs=refs,
+                topic_tags=worldview_tags,
+            )
+            insight_candidates = sorted_items[:insight_limit]
+            for item in insight_candidates:
+                insight_refs = [
+                    ref.strip() for ref in item.refs if isinstance(ref, str) and ref.strip()
+                ] or refs
+                insight_refs = list(dict.fromkeys(insight_refs))
+                insight_topics = list(
+                    dict.fromkeys(
+                        ["insight", item.type_tag] + [
+                            tag.strip().lower()
+                            for tag in item.topic_tags
+                            if isinstance(tag, str) and tag.strip()
+                        ]
+                    )
+                )
+                insight_text = f"Reflection insight ({item.type_tag}): {item.text}"
+                service.upsert_insight_item(
+                    conn,
+                    thread_id,
+                    text=insight_text,
+                    refs=insight_refs,
+                    topic_tags=insight_topics,
+                )
+            summary["insights"] += len(insight_candidates)
+            pruned = service.prune_low_importance(
+                conn,
+                threshold=prune_threshold,
+                age_days=prune_age,
+            )
+            summary["pruned"] += pruned
+            reflected_at = datetime.now(UTC).isoformat()
+            service.record_reflection(
+                conn,
+                thread_id,
+                insight_count=len(insight_candidates),
+                pruned_count=pruned,
+                reflected_at=reflected_at,
+            )
+            payload = {
+                "thread_id": thread_id,
+                "insight_count": len(insight_candidates),
+                "pruned_count": pruned,
+                "reflected_at": reflected_at,
+            }
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=new_id("trc"),
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="memory.reflection.run",
+                    component="memory",
+                    actor_type="system",
+                    actor_id="memory",
+                    payload_json=json.dumps(payload),
+                    payload_redacted_json=json.dumps(redact_payload(payload)),
+                ),
+            )
+
+        if touched_user_ids:
+            router = ProviderRouter(
+                build_primary_provider(settings),
+                build_fallback_provider(settings),
+            )
+            now = datetime.now(UTC)
+            for user_id in touched_user_ids:
+                threads = service.get_user_threads(conn, user_id)
+                watermark = service.get_user_reflection_watermark(conn, user_id)
+                if watermark and watermark.get("last_reflected_at"):
+                    try:
+                        last_run = datetime.fromisoformat(str(watermark["last_reflected_at"]))
+                        if (now - last_run) < timedelta(hours=24):
+                            continue
+                    except ValueError:
+                        pass
+                top_items = service.get_user_top_state_items(conn, user_id, limit=50)
+                if not top_items:
+                    continue
+                try:
+                    synthesized = _synthesize_profile_json(
+                        router,
+                        user_id=user_id,
+                        items=top_items,
+                        model_name=reflection_model,
+                    )
+                except Exception:
+                    logger.debug("profile synthesis failed user_id=%s", user_id, exc_info=True)
+                    synthesized = {}
+                existing = service.get_user_profile(conn, user_id)
+                existing_beliefs = (
+                    existing.get("core_beliefs", {}) if isinstance(existing, dict) else {}
+                )
+                merged = _merge_beliefs(
+                    existing_beliefs if isinstance(existing_beliefs, dict) else {},
+                    synthesized,
+                )
+                summary_text = _render_profile_summary(merged)
+                service.upsert_user_profile(
+                    conn,
+                    user_id,
+                    beliefs=merged,
+                    summary=summary_text,
+                    source_thread_count=len(threads),
+                    reason="cross_thread_reflection",
+                )
+                summary["profiles_updated"] += 1
+                service.set_user_reflection_watermark(
+                    conn,
+                    user_id,
+                    reflected_at=now.isoformat(),
+                    source_thread_count=len(threads),
+                )
+
+                if int(settings.memory_graph_enabled) != 1:
+                    continue
+                try:
+                    triples = _extract_kg_triples(
+                        router,
+                        user_id=user_id,
+                        items=top_items,
+                        model_name=reflection_model,
+                    )
+                except Exception:
+                    logger.debug("kg extraction failed user_id=%s", user_id, exc_info=True)
+                    triples = []
+                source_thread = top_items[0]["thread_id"] if top_items else None
+                for triple in triples:
+                    triple_id = graph.upsert_triple(
+                        conn,
+                        user_id=user_id,
+                        subject=str(triple.get("subject", "")),
+                        predicate=str(triple.get("predicate", "")),
+                        object_=str(triple.get("object", "")),
+                        confidence=float(triple.get("confidence", 0.0)),
+                        importance=int(triple.get("importance", 5)),
+                        source_thread_id=str(source_thread) if source_thread else None,
+                    )
+                    if triple_id:
+                        summary["kg_triples_upserted"] += 1
+    return {"ok": True, "summary": summary}
 
 
 def migrate_tiers() -> dict[str, int]:

@@ -7,9 +7,9 @@ Primary AI-agent operating guide for this repository.
 - Stack: FastAPI + in-process asyncio task runner + SQLite + React/Vite web UI.
 - Channels: WhatsApp (Evolution API) + Telegram (Bot API).
 - Runtime: API (`make api`) + Docker services (`make dev`).
-- DB migrations: `src/jarvis/db/migrations/001..055` auto-run at startup and via `make migrate`.
+- DB migrations: `src/jarvis/db/migrations/001..081` auto-run at startup and via `make migrate`.
 - Tool runtime is deny-by-default (`src/jarvis/tools/runtime.py`, `src/jarvis/policy/engine.py`).
-- Auth/RBAC: bearer session tokens with `user`/`admin` roles and ownership scoping.
+- Auth: bearer session tokens for single-admin (`system:root`) web sessions.
 
 ## Commands
 
@@ -46,7 +46,7 @@ uv run jarvis skill list
 
 ## Architecture Invariants
 
-- IDs are type-prefixed (`usr_`, `thr_`, `msg_`, `trc_`, `spn_`, `sch_`).
+- IDs are type-prefixed (`usr_`, `thr_`, `msg_`, `trc_`, `spn_`, `sch_`, `mda_`).
 - Event names are dot-separated (`channel.inbound`, `agent.step.end`, `tool.call.start`).
 - Agent bundle contract in `agents/<id>/` is mandatory:
   - `identity.md` (frontmatter includes `allowed_tools`)
@@ -58,7 +58,7 @@ uv run jarvis skill list
   - During lockdown: deny all but safe tools
   - Session tools: `main` agent only
 - Self-update evidence is mandatory and must include path+line references.
-- Ownership boundaries must hold for non-admin users across API and WebSocket subscriptions.
+- Authenticated web sessions are treated as root-admin for API and WebSocket subscriptions.
 
 ## Decision Trees
 
@@ -76,8 +76,8 @@ uv run jarvis skill list
 
 ### Should I add a new route?
 1. Add route under `src/jarvis/routes/api/`.
-2. Enforce `require_auth` and ownership checks where applicable.
-3. Add integration tests for admin and non-admin behavior.
+2. Enforce `require_auth` and single-admin semantics.
+3. Add integration tests for authenticated vs unauthenticated behavior.
 4. Update `docs/codebase-tour.md` and API-related docs.
 
 ## File Map
@@ -86,7 +86,7 @@ uv run jarvis skill list
 - Configuration/env contract: `src/jarvis/config.py`, `.env.example`, `docs/configuration.md`
 - Data model/query invariants: `src/jarvis/db/queries.py`, `src/jarvis/db/migrations/`
 - Orchestration/tool policies: `src/jarvis/orchestrator/step.py`, `src/jarvis/tools/runtime.py`, `src/jarvis/policy/engine.py`
-- Auth and RBAC: `src/jarvis/auth/`, `src/jarvis/routes/api/auth.py`
+- Auth: `src/jarvis/auth/`, `src/jarvis/routes/api/auth.py`
 - Web UI: `web/src/App.tsx`, `web/src/pages/admin/*`, `web/src/pages/chat/*`
 - Operations: `docs/runbook.md`, `docs/build-release.md`, `deploy/*`
 - Documentation index: `docs/README.md`
@@ -94,7 +94,7 @@ uv run jarvis skill list
 ## Safety Rules
 
 - Do not bypass policy checks in runtime or route handlers.
-- Do not relax ownership checks for non-admin users.
+- Do not bypass authentication checks for protected routes.
 - Do not introduce non-additive migration rollouts without explicit rollback strategy.
 - Do not commit real credentials into docs or `.env.example`.
 - Keep `AGENTS.md` and `CLAUDE.md` operationally consistent.

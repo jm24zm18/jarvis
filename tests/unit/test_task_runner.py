@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from jarvis.db.connection import get_conn
 from jarvis.tasks.runner import TaskRunner
 
 
@@ -62,3 +63,27 @@ async def test_shutdown_runtimeerror_is_swallowed(monkeypatch: pytest.MonkeyPatc
     assert runner.in_flight == 0
     assert not completed.is_set()
     await runner.shutdown(timeout_s=1)
+
+
+@pytest.mark.asyncio
+async def test_task_failure_emits_event() -> None:
+    runner = TaskRunner(max_concurrent=1)
+
+    def _boom(trace_id: str | None = None) -> None:
+        del trace_id
+        raise RuntimeError("boom")
+
+    runner.register("demo.fail", _boom)
+    assert runner.send_task("demo.fail", kwargs={"trace_id": "trc_task_fail"}) is True
+    await asyncio.sleep(0.1)
+    await runner.shutdown(timeout_s=1)
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT payload_json FROM events "
+            "WHERE event_type='task.failed' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert "demo.fail" in str(row["payload_json"])
+        assert "RuntimeError" in str(row["payload_json"])

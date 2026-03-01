@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.db.connection import get_conn
+from jarvis.db.queries import create_feature_request as create_feature_request_row
 from jarvis.ids import new_id
 from jarvis.tasks import get_task_runner
 
@@ -59,9 +60,6 @@ def list_bugs(
 ) -> dict[str, object]:
     filters: list[str] = []
     params: list[object] = []
-    if not ctx.is_admin:
-        filters.append("reporter_id=?")
-        params.append(ctx.user_id)
     if status:
         filters.append("status=?")
         params.append(status)
@@ -100,39 +98,51 @@ def create_bug(
         raise HTTPException(status_code=400, detail=f"Invalid priority: {body.priority}")
     if body.kind not in VALID_KINDS:
         raise HTTPException(status_code=400, detail=f"Invalid kind: {body.kind}")
-    bug_id = new_id("bug")
     now = _now()
     degraded = False
+    created = True
     with get_conn() as conn:
-        conn.execute(
-            (
-                "INSERT INTO bug_reports(id, kind, title, description, status, priority, "
-                "reporter_id, assignee_agent, thread_id, trace_id, "
-                "github_issue_number, github_issue_url, github_synced_at, github_sync_error, "
-                "created_at, updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-            ),
-            (
-                bug_id,
-                body.kind,
-                body.title,
-                body.description,
-                "open",
-                body.priority,
-                ctx.user_id,
-                None,
-                body.thread_id,
-                body.trace_id,
-                None,
-                None,
-                None,
-                None,
-                now,
-                now,
-            ),
-        )
+        if body.kind == "feature":
+            bug_id, created = create_feature_request_row(
+                conn,
+                title=body.title,
+                description=body.description,
+                priority=body.priority,
+                reporter_id=ctx.user_id,
+                thread_id=body.thread_id,
+                trace_id=body.trace_id,
+            )
+        else:
+            bug_id = new_id("bug")
+            conn.execute(
+                (
+                    "INSERT INTO bug_reports(id, kind, title, description, status, priority, "
+                    "reporter_id, assignee_agent, thread_id, trace_id, "
+                    "github_issue_number, github_issue_url, github_synced_at, github_sync_error, "
+                    "created_at, updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                ),
+                (
+                    bug_id,
+                    body.kind,
+                    body.title,
+                    body.description,
+                    "open",
+                    body.priority,
+                    ctx.user_id,
+                    None,
+                    body.thread_id,
+                    body.trace_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    now,
+                    now,
+                ),
+            )
     github_sync_queued = False
-    if body.sync_to_github:
+    if body.sync_to_github and created:
         github_sync_queued = _send_task(
             "jarvis.tasks.github.github_issue_sync_bug_report",
             kwargs={"bug_id": bug_id},
@@ -142,9 +152,14 @@ def create_bug(
     return {
         "id": bug_id,
         "kind": body.kind,
+        "created": created,
+        "idempotent_hit": not created,
         "github_sync_queued": github_sync_queued,
         "degraded": degraded,
     }
+
+
+VALID_APPROVAL_STATUSES = {"pending", "approved", "rejected"}
 
 
 @router.get("/feature-requests")
@@ -152,19 +167,40 @@ def list_feature_requests(
     ctx: UserContext = Depends(require_auth),  # noqa: B008
     status: str | None = None,
     priority: str | None = None,
+    approval_status: str | None = None,
     search: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, object]:
-    return list_bugs(
-        ctx=ctx,
-        status=status,
-        priority=priority,
-        kind="feature",
-        search=search,
-        limit=limit,
-        offset=offset,
-    )
+    if approval_status and approval_status not in VALID_APPROVAL_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid approval_status: {approval_status}")
+    filters: list[str] = ["kind='feature'"]
+    params: list[object] = []
+    if status:
+        filters.append("status=?")
+        params.append(status)
+    if priority:
+        filters.append("priority=?")
+        params.append(priority)
+    if approval_status:
+        filters.append("approval_status=?")
+        params.append(approval_status)
+    if search:
+        filters.append("(title LIKE ? OR description LIKE ?)")
+        params.append(f"%{search}%")
+        params.append(f"%{search}%")
+    where = f" WHERE {' AND '.join(filters)}"
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM bug_reports{where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
+        total_row = conn.execute(
+            f"SELECT COUNT(*) as cnt FROM bug_reports{where}",
+            tuple(params),
+        ).fetchone()
+        total = int(total_row["cnt"]) if total_row else 0
+    return {"items": [dict(r) for r in rows], "total": total}
 
 
 @router.post("/feature-requests")
@@ -223,8 +259,6 @@ def update_bug(
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Bug not found")
-        if not ctx.is_admin and str(row["reporter_id"]) != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
         conn.execute(
             f"UPDATE bug_reports SET {', '.join(updates)} WHERE id=?",
             tuple(params),
@@ -244,7 +278,148 @@ def delete_bug(
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Bug not found")
-        if not ctx.is_admin and str(row["reporter_id"]) != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
         conn.execute("DELETE FROM bug_reports WHERE id=?", (bug_id,))
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Feature request approval endpoints (admin only)
+# ---------------------------------------------------------------------------
+
+class ApprovalDecisionBody(BaseModel):
+    decision: str  # "approved" | "rejected"
+    note: str = ""
+
+
+class FeatureSplitSubtask(BaseModel):
+    title: str
+    description: str
+    acceptance_criteria: str
+    target_files: list[str]
+    estimated_lines: int | None = None
+
+
+class FeatureSplitBody(BaseModel):
+    subtasks: list[FeatureSplitSubtask]
+    dry_run: bool = False
+    split_reason: str = "manual"
+
+
+@router.patch("/feature-requests/{feature_id}/approval")
+def set_feature_approval(
+    feature_id: str,
+    body: ApprovalDecisionBody,
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+) -> dict[str, object]:
+    from jarvis.services.feature_requests import approve_feature_request
+
+    with get_conn() as conn:
+        result = approve_feature_request(
+            conn,
+            feature_id,
+            decision=body.decision,
+            actor_id=ctx.user_id,
+            note=body.note,
+        )
+    return result
+
+
+@router.post("/feature-requests/{feature_id}/build")
+def trigger_feature_build(
+    feature_id: str,
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+) -> dict[str, object]:
+    from jarvis.services.feature_requests import enqueue_feature_build
+
+    with get_conn() as conn:
+        result = enqueue_feature_build(
+            conn,
+            feature_id,
+            actor_id=ctx.user_id,
+            task_runner=get_task_runner(),
+        )
+    return result
+
+
+@router.post("/feature-requests/{feature_id}/split")
+def split_feature_request_endpoint(
+    feature_id: str,
+    body: FeatureSplitBody,
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+) -> dict[str, object]:
+    from jarvis.services.feature_requests import split_feature_request
+
+    subtasks = [subtask.model_dump() for subtask in body.subtasks]
+    with get_conn() as conn:
+        if body.dry_run:
+            conn.execute("SAVEPOINT dry_feature_split")
+            try:
+                child_ids = split_feature_request(
+                    conn,
+                    parent_id=feature_id,
+                    subtasks=subtasks,
+                    actor_id=ctx.user_id,
+                    split_reason=body.split_reason,
+                )
+            finally:
+                conn.execute("ROLLBACK TO dry_feature_split")
+                conn.execute("RELEASE dry_feature_split")
+        else:
+            child_ids = split_feature_request(
+                conn,
+                parent_id=feature_id,
+                subtasks=subtasks,
+                actor_id=ctx.user_id,
+                split_reason=body.split_reason,
+            )
+    return {"parent_id": feature_id, "child_ids": child_ids, "dry_run": body.dry_run}
+
+
+@router.get("/feature-requests/{feature_id}/build-runs")
+def list_feature_build_runs_endpoint(
+    feature_id: str,
+    limit: int = Query(default=20, ge=1, le=100),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+) -> dict[str, object]:
+    from jarvis.services.feature_requests import get_feature_build_runs
+
+    with get_conn() as conn:
+        items = get_feature_build_runs(conn, feature_id, limit=limit)
+    return {"items": items, "feature_id": feature_id}
+
+
+@router.post("/feature-requests/build-runs/reconcile")
+def reconcile_feature_build_runs_endpoint(
+    stale_after_seconds: int = Query(default=900, ge=1, le=86400),
+    limit: int = Query(default=200, ge=1, le=1000),
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+) -> dict[str, object]:
+    del ctx
+    from jarvis.services.feature_requests import reconcile_feature_build_runs
+
+    with get_conn() as conn:
+        result = reconcile_feature_build_runs(
+            conn,
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        )
+    return result
+
+
+@router.post("/feature-requests/{feature_id}/build-runs/{run_id}/recover-children")
+def recover_feature_build_children_endpoint(
+    feature_id: str,
+    run_id: str,
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+) -> dict[str, object]:
+    from jarvis.services.feature_requests import recover_decomposed_child_builds
+
+    with get_conn() as conn:
+        result = recover_decomposed_child_builds(
+            conn,
+            feature_id=feature_id,
+            run_id=run_id,
+            actor_id=ctx.user_id,
+            task_runner=get_task_runner(),
+        )
+    return result

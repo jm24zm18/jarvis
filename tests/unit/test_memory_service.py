@@ -1,10 +1,17 @@
 import json
 import os
+import sqlite3
 
 import pytest
 
 from jarvis.db.connection import get_conn
-from jarvis.db.queries import ensure_channel, ensure_open_thread, ensure_system_state, ensure_user
+from jarvis.db.queries import (
+    create_thread,
+    ensure_channel,
+    ensure_open_thread,
+    ensure_system_state,
+    ensure_user,
+)
 from jarvis.memory.service import MemoryService
 
 
@@ -232,6 +239,121 @@ def test_backfill_event_vec_runtime_from_legacy_table() -> None:
     assert row["thread_id"] == "thr_a"
 
 
+def test_backfill_memory_vec_runtime_continues_on_integrity_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO users(id, external_id, created_at) VALUES(?,?,datetime('now'))",
+            ("usr_b", "u_b"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO channels(id, user_id, channel_type, created_at) "
+                "VALUES(?,?,?,datetime('now'))"
+            ),
+            ("chn_b", "usr_b", "whatsapp"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO threads(id, user_id, channel_id, status, created_at, updated_at) "
+                "VALUES(?,?,?,'open',datetime('now'),datetime('now'))"
+            ),
+            ("thr_b", "usr_b", "chn_b"),
+        )
+        for memory_id, text in (("mem_b1", "alpha"), ("mem_b2", "beta")):
+            conn.execute(
+                (
+                    "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                    "VALUES(?,?,?,?,datetime('now'))"
+                ),
+                (memory_id, "thr_b", text, "{}"),
+            )
+            conn.execute(
+                (
+                    "INSERT INTO memory_embeddings(memory_id, model, vector_json, created_at) "
+                    "VALUES(?,?,?,datetime('now'))"
+                ),
+                (memory_id, "nomic-embed-text", "[0.1, 0.2]"),
+            )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS memory_vec_index(rowid INTEGER PRIMARY KEY, embedding TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS memory_vec_index_map("
+            "vec_rowid INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT UNIQUE NOT NULL)"
+        )
+
+        original = service._upsert_memory_vec_index_raw
+        call_count = {"value": 0}
+
+        def flaky_upsert(
+            inner_conn,
+            memory_id: str,
+            embedding: list[float],
+        ) -> None:
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                raise sqlite3.IntegrityError(
+                    "UNIQUE constraint failed: memory_vec_index_map.memory_id"
+                )
+            original(inner_conn, memory_id, embedding)
+
+        monkeypatch.setattr(service, "_upsert_memory_vec_index_raw", flaky_upsert)
+        service._backfill_memory_vec_runtime(conn)
+        rows = conn.execute(
+            "SELECT memory_id FROM memory_vec_index_map ORDER BY memory_id"
+        ).fetchall()
+    assert [str(row["memory_id"]) for row in rows] == ["mem_b2"]
+
+
+def test_backfill_event_vec_runtime_continues_on_integrity_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS event_vec_index(rowid INTEGER PRIMARY KEY, embedding TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS event_vec_index_map("
+            "vec_rowid INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "event_id TEXT UNIQUE NOT NULL, thread_id TEXT)"
+        )
+        for event_id in ("evt_b1", "evt_b2"):
+            conn.execute(
+                (
+                    "INSERT INTO event_vec(id, thread_id, vector_json, created_at) "
+                    "VALUES(?,?,?,datetime('now'))"
+                ),
+                (event_id, "thr_b", "[0.3, 0.7]"),
+            )
+
+        original = service._upsert_event_vec_index_raw
+        call_count = {"value": 0}
+
+        def flaky_upsert(
+            inner_conn,
+            event_id: str,
+            thread_id: str | None,
+            embedding: list[float],
+        ) -> None:
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                raise sqlite3.IntegrityError(
+                    "UNIQUE constraint failed: event_vec_index_map.event_id"
+                )
+            original(inner_conn, event_id, thread_id, embedding)
+
+        monkeypatch.setattr(service, "_upsert_event_vec_index_raw", flaky_upsert)
+        service._backfill_event_vec_runtime(conn)
+        rows = conn.execute(
+            "SELECT event_id FROM event_vec_index_map ORDER BY event_id"
+        ).fetchall()
+    assert [str(row["event_id"]) for row in rows] == ["evt_b2"]
+
+
 def test_sqlite_vec_round_trip_search_when_runtime_available(monkeypatch) -> None:
     service = MemoryService()
     os.environ["MEMORY_EMBED_DIMS"] = "2"
@@ -344,3 +466,89 @@ def test_graph_traverse_returns_edges() -> None:
         graph = service.graph_traverse(conn, uid="d_a", depth=2)
     assert graph["root_uid"] == "d_a"
     assert len(graph["edges"]) >= 2
+
+
+def test_get_user_memory_by_id_returns_any_thread_memory_for_single_admin() -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        alice_id = ensure_user(conn, "15555550151")
+        bob_id = ensure_user(conn, "15555550152")
+        alice_channel = ensure_channel(conn, alice_id, "whatsapp")
+        bob_channel = ensure_channel(conn, bob_id, "whatsapp")
+        alice_thread = ensure_open_thread(conn, alice_id, alice_channel)
+        bob_thread = ensure_open_thread(conn, bob_id, bob_channel)
+        conn.execute(
+            (
+                "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                "VALUES(?,?,?,?,datetime('now'))"
+            ),
+            ("mem_owner_a", alice_thread, "alice memory", "{}"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                "VALUES(?,?,?,?,datetime('now'))"
+            ),
+            ("mem_owner_b", bob_thread, "bob memory", "{}"),
+        )
+
+        own_item = service.get_user_memory_by_id(
+            conn,
+            requester_thread_id=alice_thread,
+            memory_id="mem_owner_a",
+        )
+        other_item = service.get_user_memory_by_id(
+            conn,
+            requester_thread_id=alice_thread,
+            memory_id="mem_owner_b",
+        )
+    assert own_item is not None
+    assert own_item["id"] == "mem_owner_a"
+    assert other_item is not None
+    assert other_item["id"] == "mem_owner_b"
+
+
+def test_search_user_memories_returns_cross_thread_matches_for_single_admin() -> None:
+    service = MemoryService()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550153")
+        other_user_id = ensure_user(conn, "15555550154")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        other_channel_id = ensure_channel(conn, other_user_id, "whatsapp")
+        thread_a = create_thread(conn, user_id, channel_id)
+        thread_b = create_thread(conn, user_id, channel_id)
+        other_thread = create_thread(conn, other_user_id, other_channel_id)
+        conn.execute(
+            (
+                "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                "VALUES(?,?,?,?,datetime('now'))"
+            ),
+            ("mem_cross_a", thread_a, "oreo in thread a", "{}"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                "VALUES(?,?,?,?,datetime('now'))"
+            ),
+            ("mem_cross_b", thread_b, "oreo in thread b", "{}"),
+        )
+        conn.execute(
+            (
+                "INSERT INTO memory_items(id, thread_id, text, metadata_json, created_at) "
+                "VALUES(?,?,?,?,datetime('now'))"
+            ),
+            ("mem_cross_other", other_thread, "oreo in other user thread", "{}"),
+        )
+        items = service.search_user_memories(
+            conn,
+            requester_thread_id=thread_a,
+            query="oreo",
+            limit=10,
+            exclude_thread_id=thread_a,
+        )
+    returned_ids = {str(item["id"]) for item in items}
+    assert "mem_cross_b" in returned_ids
+    assert "mem_cross_a" not in returned_ids
+    assert "mem_cross_other" in returned_ids

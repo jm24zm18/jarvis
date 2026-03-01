@@ -36,12 +36,12 @@
 ### `memory/`
 
 - Purpose: semantic memory, knowledge base, skill memory.
-- Key files: `src/jarvis/memory/service.py`, `src/jarvis/memory/knowledge.py`, `src/jarvis/memory/skills.py`.
+- Key files: `src/jarvis/memory/service.py`, `src/jarvis/memory/knowledge.py`, `src/jarvis/memory/knowledge_graph.py`, `src/jarvis/memory/skills.py`.
 
 ### `orchestrator/`
 
 - Purpose: prompt assembly + provider/tool loop.
-- Key files: `src/jarvis/orchestrator/step.py`, `src/jarvis/orchestrator/prompt_builder.py`.
+- Key files: `src/jarvis/orchestrator/step.py`, `src/jarvis/orchestrator/context_builder.py`, `src/jarvis/orchestrator/prompt_builder.py`.
 
 ### `policy/`
 

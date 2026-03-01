@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -175,5 +176,55 @@ def test_exec_host_none_sandbox_does_not_apply_ulimit(
             )
         assert result["exit_code"] == 0
         assert captured["cmd"] == ["/bin/bash", "-lc", "echo ok"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_exec_host_sqlite_preflight_hints_unknown_table(tmp_path: Path) -> None:
+    os.environ["EXEC_HOST_ALLOWED_CWD_PREFIXES"] = str(tmp_path)
+    get_settings.cache_clear()
+    db_path = tmp_path / "sqlite-preflight.db"
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute("CREATE TABLE bug_reports(id TEXT PRIMARY KEY)")
+        conn.execute(
+            "CREATE TABLE schema_migrations(name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO schema_migrations(name, applied_at) VALUES('001_initial.sql','2026-01-01')"
+        )
+    try:
+        with get_conn() as conn:
+            ensure_system_state(conn)
+            result = execute_host_command(
+                conn,
+                command=f"sqlite3 {db_path} \"SELECT * FROM feature_requests LIMIT 1;\"",
+                cwd=str(tmp_path),
+                trace_id="trc_host_sqlite_preflight",
+                caller_id="coder",
+            )
+        assert result["exit_code"] == 2
+        assert "sqlite preflight" in str(result["stderr"])
+        assert "feature_requests -> bug_reports" in str(result["stderr"])
+    finally:
+        get_settings.cache_clear()
+
+
+def test_exec_host_workspace_write_denied_for_non_feature_builder(tmp_path: Path) -> None:
+    os.environ["EXEC_HOST_ALLOWED_CWD_PREFIXES"] = str(tmp_path)
+    os.environ["FEATURE_ISOLATION_TMP_PREFIX"] = "/tmp/jarvis-feature"
+    get_settings.cache_clear()
+    workspace_dir = Path("/tmp/jarvis-feature-bug_test-123")
+    try:
+        with get_conn() as conn:
+            ensure_system_state(conn)
+            result = execute_host_command(
+                conn,
+                command=f"touch {workspace_dir}/new.txt",
+                cwd=str(tmp_path),
+                trace_id="trc_host_workspace_guard",
+                caller_id="coder",
+            )
+        assert result["exit_code"] == 126
+        assert "workspace write denied" in str(result["stderr"])
     finally:
         get_settings.cache_clear()

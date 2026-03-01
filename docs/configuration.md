@@ -25,10 +25,10 @@ Source of truth: `src/jarvis/config.py`.
 |---|---|---|---|
 | `COMPACTION_EVERY_N_EVENTS` | int | `25` | Trigger compaction every N events. |
 | `COMPACTION_INTERVAL_SECONDS` | int | `600` | Min interval between compactions. |
-| `PROMPT_BUDGET_GEMINI_TOKENS` | int | `200000` | Prompt budget for Gemini lane. |
+| `PROMPT_BUDGET_OPENROUTER_TOKENS` | int | `200000` | Prompt budget for OpenRouter lane. |
 | `PROMPT_BUDGET_SGLANG_TOKENS` | int | `110000` | Prompt budget for SGLang lane. |
 
-### Lockdown and Queue Controls
+### Lockdown Controls
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
@@ -38,32 +38,93 @@ Source of truth: `src/jarvis/config.py`.
 | `LOCKDOWN_ROLLBACK_WINDOW_MINUTES` | int | `30` | Rollback window in minutes. |
 | `LOCKDOWN_EXEC_HOST_FAIL_THRESHOLD` | int | `5` | Exec-host failure threshold. |
 | `LOCKDOWN_EXEC_HOST_FAIL_WINDOW_MINUTES` | int | `10` | Exec-host failure window. |
-| `QUEUE_THRESHOLD_AGENT_PRIORITY` | int | `200` | Queue warning threshold. |
-| `QUEUE_THRESHOLD_AGENT_DEFAULT` | int | `500` | Queue warning threshold. |
-| `QUEUE_THRESHOLD_TOOLS_IO` | int | `500` | Queue warning threshold. |
-| `QUEUE_THRESHOLD_LOCAL_LLM` | int | `10` | Queue warning threshold. |
 
 ### Self-Update
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `SELFUPDATE_AUTO_APPLY_DEV` | int | `1` | Auto-apply in dev. |
-| `SELFUPDATE_AUTO_APPLY_PROD` | int | `0` | Auto-apply in prod. |
+| `SELFUPDATE_AUTO_APPLY_DEV` | int | `1` | When `1` (default), self-update patches apply without manual approval in dev/staging. Set to `0` to require admin approval in dev too. |
+| `SELFUPDATE_AUTO_APPLY_PROD` | int | `0` | When `0` (default), prod requires explicit admin approval via `POST /api/v1/selfupdate/patches/{trace_id}/approve` before applying. Set to `1` to skip approval in prod (not recommended). |
 | `SELFUPDATE_PATCH_DIR` | str | `/var/lib/agent/patches` | Patch state directory. |
 | `SELFUPDATE_SMOKE_PROFILE` | str | `dev` | Smoke profile (`dev`/`prod`). |
 | `SELFUPDATE_READYZ_URL` | str | `` | Readiness URL for apply watchdog. |
 | `SELFUPDATE_READYZ_ATTEMPTS` | int | `3` | Readiness retry attempts. |
+| `SELFUPDATE_SANDBOX_ENABLED` | int | `0` | When `1`, run smoke-gate checks inside Docker sandbox instead of host process. |
+| `SELFUPDATE_SANDBOX_IMAGE` | str | `jarvis-sandbox:latest` | Docker image used for sandboxed smoke checks. |
+| `SELFUPDATE_SANDBOX_TIMEOUT_SECONDS` | int | `300` | Timeout for each sandboxed smoke command. |
+| `SELFUPDATE_CRITICAL_PATHS` | str | `src/jarvis/policy/**,src/jarvis/tools/runtime.py,src/jarvis/auth/**,src/jarvis/routes/api/**,src/jarvis/db/migrations/**` | Comma-delimited critical path globs used for self-update risk checks. |
+| `SELFUPDATE_PR_AUTORAISE` | int | `0` | Automatically open PRs for self-update patches when enabled. |
+| `SELFUPDATE_FITNESS_GATE_MODE` | str | `warn` | Fitness gate mode (`warn` or `enforce`). |
+| `SELFUPDATE_TEST_GATE_MODE` | str | `warn` | Test gate mode (`warn` or `enforce`). |
+| `SELFUPDATE_MAX_FILES_PER_PATCH` | int | `20` | Max changed files allowed per patch proposal. |
+| `SELFUPDATE_MAX_RISK_SCORE` | int | `100` | Max risk score allowed for self-update execution. |
+| `SELFUPDATE_MAX_PATCH_ATTEMPTS_PER_DAY` | int | `10` | Daily cap for patch attempts. |
+| `SELFUPDATE_MAX_PRS_PER_DAY` | int | `5` | Daily cap for auto-raised PRs. |
+| `SELFUPDATE_TEST_GATE_MIN_COVERAGE_PCT` | float | `0.0` | Minimum required coverage percentage when test gate is enforced. |
+| `SELFUPDATE_TEST_GATE_REQUIRE_CRITICAL_TESTS` | int | `1` | Require critical test suites in self-update gate evaluation. |
+| `SELFUPDATE_FITNESS_MAX_AGE_MINUTES` | int | `180` | Maximum accepted age for cached fitness metrics. |
+| `SELFUPDATE_MIN_BUILD_SUCCESS_RATE` | float | `0.8` | Minimum build success rate threshold for self-update safety checks. |
+| `SELFUPDATE_MAX_REGRESSION_FREQ` | float | `0.4` | Maximum allowed regression frequency threshold. |
+| `SELFUPDATE_MAX_ROLLBACK_FREQ` | int | `3` | Maximum allowed rollback frequency threshold. |
 
-### Scheduler, Restart, and RabbitMQ Mgmt
+### Scheduler and Orchestration
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
 | `SCHEDULER_MAX_CATCHUP` | int | `10` | Global catch-up cap per schedule tick. |
-| `RABBITMQ_MGMT_URL` | str | `` | Optional RabbitMQ mgmt endpoint. |
-| `RABBITMQ_MGMT_USER` | str | `` | RabbitMQ mgmt username. |
-| `RABBITMQ_MGMT_PASSWORD` | str | `` | RabbitMQ mgmt password. |
-| `RESTART_DRAIN_TIMEOUT_SECONDS` | int | `20` | Drain timeout for controlled restart. |
-| `RESTART_DRAIN_POLL_SECONDS` | int | `2` | Drain poll interval. |
+| `TASK_RUNNER_MAX_CONCURRENT` | int | `20` | Max concurrent in-process background tasks. |
+| `TASK_RUNNER_SHUTDOWN_TIMEOUT_SECONDS` | int | `30` | Shutdown grace timeout for in-flight background tasks. |
+| `FOLLOWUP_HEARTBEAT_INTERVAL_SECONDS` | int | `300` | Interval for proactive follow-up heartbeat evaluation (`0` disables). |
+| `FOLLOWUP_MAX_THREADS_PER_TICK` | int | `20` | Max enabled threads evaluated each follow-up heartbeat tick. |
+| `FOLLOWUP_MIN_IDLE_SECONDS` | int | `300` | Minimum idle age for a thread before follow-up evaluation. |
+| `FOLLOWUP_EMIT_IDLE_TICKS` | int | `0` | Emit `followup.tick.*` events even when no followups are enabled (`1` to keep idle telemetry). |
+| `STALL_DETECT_ENABLED` | int | `1` | Enable periodic runtime stall watchdog and auto-recovery triggers. |
+| `STALL_DETECT_THRESHOLD_SECONDS` | int | `90` | Age threshold for inbound-without-progress before declaring a stall. |
+| `STALL_RECOVERY_COOLDOWN_SECONDS` | int | `600` | Minimum delay between consecutive stall-triggered recovery attempts. |
+| `AGENT_STEP_MAX_ATTEMPTS` | int | `3` | Max in-process attempts for one `trace_id` before exhaustion. |
+| `AGENT_STEP_RETRY_BASE_SECONDS` | int | `2` | Base backoff for retryable agent-step failures. |
+| `AGENT_STEP_RETRY_MAX_SECONDS` | int | `20` | Max backoff cap for retryable agent-step failures. |
+| `FEATURE_BUILD_RETRY_ON_DEGRADED` | int | `1` | When `1`, feature builds auto-retry retryable degraded terminal outcomes. |
+| `FEATURE_BUILD_RETRY_MAX_ATTEMPTS` | int | `5` | Max total attempts per feature build run (initial attempt included). |
+| `FEATURE_BUILD_RETRY_BACKOFF_SECONDS` | str | `30,120,300,600` | Comma-delimited retry delays (seconds) for scheduled feature-build retries. |
+| `FEATURE_BUILD_RETRY_DISPATCH_INTERVAL_SECONDS` | int | `15` | Periodic interval for scanning and dispatching due scheduled feature-build retries. |
+| `FEATURE_BUILD_ESCALATE_ON_EXHAUSTED` | int | `1` | When `1`, exhausted feature-build terminal failures trigger configured human escalation dispatch. |
+| `FEATURE_BUILD_FAIL_FAST_PLACEHOLDER_REPEAT` | int | `1` | When `1`, repeated consecutive `placeholder_response_after_tool_loop` outcomes fail fast instead of re-scheduling retries. |
+| `FEATURE_BUILD_DELIVERABLE_GATE_ENABLED` | int | `1` | When `1`, feature-build runs require deliverable evidence (diff/no-op blockers + safety checks) before success finalization. |
+| `FEATURE_BUILD_ATTEMPT_CAPSULES_ENABLED` | int | `1` | Enable attempt-level failure capsule generation for feature-build runs. |
+| `FEATURE_BUILD_REPEAT_LIMIT` | int | `2` | Cap repeated equivalent attempt outcomes before terminal escalation/fallback behavior. |
+| `FEATURE_BUILD_LOOP_CAP_THRESHOLD` | int | `8` | Max repeated identical tool-call signature count per build attempt before forcing terminal synthesis fallback. |
+| `FEATURE_BUILD_REQUIRE_TEST_GATES` | int | `1` | Require test-gate evidence before feature-build success finalization. |
+| `FEATURE_BUILD_USE_RLM` | int | `0` | When `1`, enable pre-build RLM decomposition (requires `RLM_ENABLED=1`). |
+| `FEATURE_BUILD_AUTO_DECOMPOSE` | int | `1` | When `1`, broad-scope feature builds automatically attempt decomposition even when RLM toggles are disabled. |
+| `FEATURE_BUILD_DECOMPOSE_FALLBACK` | int | `1` | When `1`, failed decomposition falls back to deterministic layer-based subtask splitting before terminal guidance. |
+| `FEATURE_BUILD_THREAD_TARGET` | str | `reporter` | Preferred thread target for build status updates (`reporter` or `admin`). |
+| `FEATURE_BUILD_SUBTASK_LAYER_STRICT` | int | `1` | When `1`, decomposition fallback enforces one-layer-per-child subtask planning. |
+| `FEATURE_ISOLATION_ENABLED` | int | `1` | When `1`, feature-build runs use isolated `/tmp` workspaces and enforce validation before execution. |
+| `FEATURE_ISOLATION_TMP_PREFIX` | str | `/tmp/jarvis-feature` | Prefix used for per-feature ephemeral workspace paths. |
+| `FEATURE_ISOLATION_MIN_DISK_GB` | int | `10` | Minimum required free disk in workspace volume before validation/build starts. |
+| `FEATURE_ISOLATION_TTL_HOURS` | int | `24` | Workspace retention TTL before cleanup. |
+| `FEATURE_ISOLATION_CLONE_REF` | str | `origin/dev` | Source ref metadata used for isolated clone provenance. |
+| `RLM_ENABLED` | int | `0` | Toggles the RLM decomposition runtime (must match `FEATURE_BUILD_USE_RLM` to activate). |
+| `RLM_CONTEXT_FILES_LIMIT` | int | `8` | Max number of source files injected as context for decomposition prompts. |
+| `RLM_CONTEXT_TOKEN_LIMIT` | int | `4000` | Token budget for context injection (4 chars/token approximation). |
+| `RLM_PROMPT_TOKEN_LIMIT` | int | `8000` | Max `max_tokens` passed to the provider when building prompts. |
+| `RLM_VALIDATION_ATTEMPTS` | int | `2` | Total provider attempts (initial + repairs) before failing with human escalation. |
+| `RLM_MAX_ATTEMPTS` | int | `2` | Max full decomposition attempts before terminal failure. |
+| `RLM_MAX_REFINEMENTS` | int | `3` | Max number of repair prompts allowed when validation errors occur. |
+| `RLM_TIMEOUT_S` | int | `120` | Timeout (seconds) for each decomposition provider call. |
+| `RLM_BUDGET_PER_1K_TOKENS` | float | `0.02` | Conservative cost estimate per 1,000 tokens for budgeting and logging. |
+| `ORCHESTRATOR_MAX_TOOL_ITERATIONS` | int | `8` | Hard cap on tool-call loop iterations per orchestrator attempt. |
+| `ORCHESTRATOR_FALLBACK_ONLY_RETRIES` | int | `2` | Retry allowance when execution is already on fallback provider paths only. |
+| `HUMAN_ESCALATION_CHANNEL_TYPE` | str | `whatsapp` | Outbound channel used for escalation dispatch (`whatsapp`, `telegram`, etc. as configured). |
+| `HUMAN_ESCALATION_TARGETS` | str | `` | Comma-separated external channel IDs to notify when escalation is requested. |
+| `HUMAN_ESCALATION_DEFAULT_PRIORITY` | str | `normal` | Default escalation priority when caller does not provide one. |
+| `HUMAN_ESCALATION_DISPATCH_INTERVAL_SECONDS` | int | `15` | Periodic interval for dispatching queued human escalations (`0` disables periodic sweep). |
+| `AGENT_RUN_REAPER_INTERVAL_SECONDS` | int | `30` | Periodic stale-attempt recovery scan interval. |
+| `AGENT_RUN_MODEL_STALE_MIN_SECONDS` | int | `780` | Minimum stale cutoff while phase=`model.run`. |
+| `AGENT_RUN_TOOL_STALE_MIN_SECONDS` | int | `240` | Minimum stale cutoff while phase=`tool.exec`. |
+| `AGENT_RUN_FINALIZE_STALE_MIN_SECONDS` | int | `120` | Minimum stale cutoff while phase=`state.extract`/`finalize`. |
+| `AGENT_RUN_STALE_HARD_CAP_SECONDS` | int | `2700` | Absolute per-attempt runtime cap before stale recovery. |
 | `RESTART_COMMAND` | str | `` | Host restart command. |
 
 ### Channel/Auth Providers
@@ -73,13 +134,15 @@ Source of truth: `src/jarvis/config.py`.
 | `WHATSAPP_VERIFY_TOKEN` | str | `dev-verify-token` | WhatsApp webhook verification token. |
 | `WHATSAPP_ACCESS_TOKEN` | str | `` | WhatsApp API access token. |
 | `WHATSAPP_PHONE_NUMBER_ID` | str | `` | WhatsApp phone number ID. |
-| `WHATSAPP_INSTANCE` | str | `personal` | Evolution instance name. |
-| `WHATSAPP_AUTO_CREATE_ON_STARTUP` | int | `0` | Auto-create Evolution instance on API startup. |
+| `WHATSAPP_INSTANCE` | str | `personal` | Baileys sidecar instance name. |
+| `BAILEYS_AUTO_CREATE_ON_STARTUP` | int | `0` | Auto-create Baileys connection on API startup. |
 | `WHATSAPP_WEBHOOK_SECRET` | str | `` | Shared secret header required by WhatsApp webhook route when set. |
 | `WHATSAPP_MEDIA_DIR` | str | `/tmp/jarvis/whatsapp-media` | Local media staging directory for inbound WhatsApp media/voice notes. |
 | `WHATSAPP_MEDIA_MAX_BYTES` | int | `10485760` | Max bytes accepted per inbound media download; oversized payloads are blocked. |
 | `WHATSAPP_MEDIA_ALLOWED_MIME_PREFIXES` | str | `audio/,image/,video/,application/pdf` | Comma-separated MIME prefixes allowed for inbound media persistence. |
 | `WHATSAPP_MEDIA_ALLOWED_HOSTS` | str | `` | Optional comma-separated HTTPS host allowlist for inbound media URLs. |
+| `MEDIA_STORAGE_DIR` | str | `/var/lib/jarvis/media` | Root directory for unified media attachment storage (`media_attachments`). |
+| `MEDIA_MAX_UPLOAD_BYTES` | int | `20971520` | Maximum bytes accepted by `POST /api/v1/media/upload`. |
 | `WHATSAPP_VOICE_TRANSCRIBE_ENABLED` | int | `1` | Enable voice-note transcript generation for inbound audio messages. |
 | `WHATSAPP_VOICE_TRANSCRIBE_BACKEND` | str | `stub` | Voice-note transcription backend selector (`stub`, `faster_whisper`). |
 | `WHATSAPP_VOICE_TRANSCRIBE_TIMEOUT_SECONDS` | int | `20` | Timeout for media download/transcription operations on voice notes. |
@@ -89,24 +152,40 @@ Source of truth: `src/jarvis/config.py`.
 | `WHATSAPP_VOICE_LANGUAGE` | str | `` | Optional fixed language code for transcription; empty enables auto-detect. |
 | `WHATSAPP_REVIEW_MODE` | str | `unknown_only` | Sender review policy mode (`off`, `unknown_only`, `strict`) for WhatsApp ingress gating. |
 | `WHATSAPP_ALLOWED_SENDERS` | str | `` | Comma-separated sender allowlist for strict sender review mode. |
-| `EVOLUTION_API_URL` | str | `` | Evolution API base URL for Baileys sidecar. |
-| `EVOLUTION_API_KEY` | str | `` | Evolution API key header value. |
-| `EVOLUTION_WEBHOOK_URL` | str | `` | Callback URL Evolution should post inbound events to (usually `/webhooks/whatsapp`). |
-| `EVOLUTION_WEBHOOK_BY_EVENTS` | int | `1` | When `1`, Evolution filters callback delivery to configured events only. |
-| `EVOLUTION_WEBHOOK_EVENTS` | str | `messages.upsert` | Comma-separated Evolution event names allowed for callback delivery. |
-| `GOOGLE_OAUTH_CLIENT_ID` | str | `` | Google OAuth client ID. |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | str | `` | Google OAuth client secret. |
-| `GOOGLE_OAUTH_REFRESH_TOKEN` | str | `` | OAuth refresh token. |
-| `PRIMARY_PROVIDER` | str | `gemini` | Primary chat provider (`gemini` or `sglang`). |
-| `GEMINI_MODEL` | str | `gemini-2.5-flash` | Default Gemini model. |
-| `GEMINI_CODE_ASSIST_PLAN_TIER` | str | `free` | Gemini Code Assist tier (`free`, `pro`, `ultra`, `standard`, `enterprise`). |
-| `GEMINI_CODE_ASSIST_REQUESTS_PER_MINUTE` | int | `0` | Local cap for Gemini requests per minute (`0` uses tier default). |
-| `GEMINI_CODE_ASSIST_REQUESTS_PER_DAY` | int | `0` | Local cap for Gemini requests per day (`0` uses tier default). |
-| `GEMINI_CLI_TIMEOUT_SECONDS` | int | `120` | Gemini CLI timeout. |
-| `GEMINI_QUOTA_COOLDOWN_DEFAULT_SECONDS` | int | `60` | Fallback cooldown after quota errors when reset time is not provided. |
+| `NON_WEB_REPLY_APPROVAL_REQUIRED` | int | `1` | When `1`, assistant replies on non-web channels require explicit approval unless sender+channel is already allowed. |
+| `WHATSAPP_TYPING_TTL_SECONDS` | int | `20` | TTL for stale WhatsApp typing markers before periodic auto-clear emits `paused`. |
+| `BAILEYS_API_URL` | str | `http://127.0.0.1:8081` | Baileys sidecar API base URL. |
+| `BAILEYS_WEBHOOK_URL` | str | `` | Callback URL sidecar forwards inbound events to (usually `/webhooks/whatsapp`). |
+| `BAILEYS_WEBHOOK_BY_EVENTS` | int | `1` | Callback metadata flag for event-filtered delivery mode. |
+| `BAILEYS_WEBHOOK_EVENTS` | str | `messages.upsert` | Comma-separated webhook event names expected from sidecar forwarding. |
+| `BAILEYS_WEBHOOK_SECRET_HEADER` | str | `X-WhatsApp-Secret` | Header name sidecar uses to send webhook secret. |
+| `TELEGRAM_BOT_TOKEN` | str | `` | Telegram bot token for Bot API integration. |
+| `TELEGRAM_ALLOWED_CHAT_IDS` | str | `` | Comma-separated Telegram chat IDs allowed for inbound/outbound routing. |
+| `GOOGLE_OAUTH_CLIENT_ID` | str | `` | Optional Google OAuth client ID for auth integrations. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | str | `` | Optional Google OAuth client secret for auth integrations. |
+| `PRIMARY_PROVIDER` | str | `openrouter` | Primary chat provider (`openrouter`, `sglang`, or `lmstudio`). |
+| `FALLBACK_PROVIDER` | str | `` | Optional explicit fallback provider (`openrouter`, `sglang`, or `lmstudio`); when unset, fallback is derived from primary. |
+| `OPENROUTER_API_KEY` | str | `` | OpenRouter API key. |
+| `OPENROUTER_MODEL` | str | `google/gemini-2.5-flash` | OpenRouter model name. |
+| `OPENROUTER_BASE_URL` | str | `https://openrouter.ai/api/v1` | OpenRouter API base URL. |
+| `OPENROUTER_TIMEOUT_SECONDS` | int | `120` | OpenRouter request timeout. |
 | `SGLANG_BASE_URL` | str | `http://localhost:30000/v1` | SGLang endpoint. |
 | `SGLANG_MODEL` | str | `openai/gpt-oss-120b` | SGLang model name. |
 | `SGLANG_TIMEOUT_SECONDS` | int | `600` | SGLang timeout. |
+| `SGLANG_PARALLEL_TOOL_CALLS` | int | `0` | When `0` (default), disables parallel tool calls for SGLang/OSS models that handle them poorly. Set to `1` to enable. |
+| `SGLANG_TOOL_CHOICE` | str | `auto` | Tool choice mode for SGLang provider (`auto`, `none`, or a specific function). |
+| `OPENROUTER_TOOL_CHOICE` | str | `auto` | Tool choice mode for OpenRouter provider (`auto`, `none`, or a specific function). |
+| `OPENROUTER_PARALLEL_TOOL_CALLS` | int | `1` | When `1` (default), allows parallel tool calls for OpenRouter/frontier models. Set to `0` to disable. |
+| `LMSTUDIO_BASE_URL` | str | `http://127.0.0.1:1234` | LM Studio base URL (runtime normalizes to `/v1` automatically). |
+| `LMSTUDIO_MODEL` | str | `local-model` | LM Studio model name. |
+| `LMSTUDIO_API_KEY` | str | `` | Optional LM Studio API key. |
+| `LMSTUDIO_TIMEOUT_SECONDS` | int | `600` | LM Studio request timeout. |
+| `LMSTUDIO_TOOL_CHOICE` | str | `auto` | Tool choice mode for LM Studio provider (`auto`, `none`, or a specific function). |
+| `LMSTUDIO_PARALLEL_TOOL_CALLS` | int | `0` | Parallel tool call flag for LM Studio provider. |
+
+Provider admin runtime note:
+- Saving provider settings from the admin API/UI updates `.env` and applies provider keys (`PRIMARY_PROVIDER`, `FALLBACK_PROVIDER`, `OPENROUTER_MODEL`, `SGLANG_MODEL`, `LMSTUDIO_MODEL`, `LMSTUDIO_BASE_URL`, `OPENROUTER_API_KEY`, `LMSTUDIO_API_KEY`) to the live API runtime immediately.
+- OpenRouter and LM Studio API key reads are masked in API responses; raw key retrieval is not supported.
 
 ### Memory and Search
 
@@ -120,21 +199,52 @@ Source of truth: `src/jarvis/config.py`.
 | `STATE_EXTRACTION_MAX_MESSAGES` | int | `20` | Message window used for state extraction candidates. |
 | `STATE_EXTRACTION_MERGE_THRESHOLD` | float | `0.92` | Similarity threshold for state merge decisions. |
 | `STATE_EXTRACTION_CONFLICT_THRESHOLD` | float | `0.85` | Similarity threshold for conflict queue insertion. |
-| `STATE_EXTRACTION_TIMEOUT_SECONDS` | int | `15` | Timeout for state extraction model operations. |
+| `STATE_EXTRACTION_TIMEOUT_SECONDS` | int | `180` | End-to-end timeout for state extraction run. |
+| `STATE_EXTRACTION_LLM_TIMEOUT` | int | `45` | Timeout for the extraction LLM phase (`router.generate`). |
+| `STATE_EXTRACTION_EMBED_TIMEOUT` | int | `15` | Timeout for batched state-item embedding generation. |
+| `STATE_EXTRACTION_DB_TIMEOUT` | int | `10` | Timeout budget for extraction DB merge/upsert phase. |
+| `STATE_EXTRACTION_BACKOFF_BASE_SECONDS` | int | `30` | Base retry delay for per-thread extraction backoff after failures. |
+| `STATE_EXTRACTION_BACKOFF_MAX_SECONDS` | int | `600` | Max retry delay for per-thread extraction backoff. |
 | `STATE_MAX_ACTIVE_ITEMS` | int | `40` | Max active state items maintained per scope before archival pressure. |
 | `MEMORY_SECRET_SCAN_ENABLED` | int | `1` | Enable secret-pattern scanning before persistence. |
 | `MEMORY_PII_REDACT_MODE` | str | `mask` | PII handling mode for memory text persistence. |
 | `MEMORY_RETENTION_DAYS` | int | `180` | Retention horizon for memory maintenance/archival decisions. |
+| `EVENT_RETENTION_DAYS` | int | `90` | Retention horizon for event records. |
 | `MEMORY_TIERS_ENABLED` | int | `0` | Enable tiered memory lifecycle (`working/episodic/semantic`). |
 | `MEMORY_IMPORTANCE_ENABLED` | int | `0` | Enable score-based promotion/demotion decisions. |
 | `MEMORY_GRAPH_ENABLED` | int | `0` | Enable graph relation extraction and traversal surfaces. |
 | `MEMORY_REVIEW_QUEUE_ENABLED` | int | `1` | Enable conflict queue generation in `memory_review_queue`. |
 | `MEMORY_FAILURE_BRIDGE_ENABLED` | int | `1` | Enable failure capsule bridge into state memory. |
 | `MEMORY_SENTENCE_TRANSFORMERS_MODEL` | str | `all-MiniLM-L6-v2` | Sentence-transformers model used by memory similarity operations. |
+| `MEMORY_REFLECTION_ENABLED` | int | `1` | Enable periodic reflection job that synthesizes worldview/insights. |
+| `MEMORY_REFLECTION_INTERVAL_SECONDS` | int | `21600` | Interval (seconds) between automatic reflection runs. |
+| `MEMORY_REFLECTION_BATCH_SIZE` | int | `10` | Maximum open threads processed per reflection run. |
+| `MEMORY_REFLECTION_INSIGHT_LIMIT` | int | `3` | Max insights synthesized per reflection execution. |
+| `MEMORY_REFLECTION_PRUNE_THRESHOLD` | float | `0.35` | Importance score threshold for reflection-driven pruning. |
+| `MEMORY_REFLECTION_PRUNE_AGE_DAYS` | int | `30` | Minimum age window before low-importance reflection pruning applies. |
+| `AUTO_KNOWLEDGE_EXTRACTION_ENABLED` | int | `0` | Enable event-driven task lesson extraction after complex tool-use steps. |
+| `AUTO_KNOWLEDGE_EXTRACTION_MIN_TOOL_CALLS` | int | `5` | Minimum total tool calls in a step before task lesson extraction is queued. |
+| `AUTO_KNOWLEDGE_EXTRACTION_MAX_PER_DAY` | int | `6` | Per-user cap on `knowledge.extraction.complete` runs in a rolling 24-hour window. |
+| `AUTO_KNOWLEDGE_EXTRACTION_COOLDOWN_MINUTES` | int | `25` | Per-thread cooldown between successful task lesson extraction completions. |
+| `AUTO_KNOWLEDGE_EXTRACTION_NOTIFY` | int | `1` | Emit a web notification when task lesson extraction writes at least one new triple. |
+| `AUTO_KNOWLEDGE_EXTRACTION_CONFIDENCE_THRESHOLD` | float | `0.75` | Minimum confidence required for accepting extracted task lessons. |
+| `REFLECTION_MODEL` | str | `` | Optional model hint used by cross-thread profile/KG synthesis (`empty` = default provider routing). |
 | `SEARXNG_BASE_URL` | str | `http://localhost:8080` | SearXNG base URL. |
 | `SEARXNG_API_KEY` | str | `` | SearXNG API key. |
 | `SEARXNG_API_KEY_HEADER` | str | `X-API-Key` | SearXNG API key header name. |
 | `WEB_SEARCH_USER_AGENT` | str | `Mozilla/5.0 (compatible; Jarvis/1.0; +https://localhost)` | Outbound user agent for web search requests. |
+
+### Governance and Approval
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `GOVERNANCE_ENFORCE` | int | `1` | Enable governance enforcement checks in runtime decision paths. |
+| `APPROVAL_TTL_MINUTES` | int | `30` | Default TTL for approval tokens in the approvals system. |
+| `DEPENDENCY_STEWARD_ENABLED` | int | `0` | Enable dependency steward governance agent workflows. |
+| `DEPENDENCY_STEWARD_MAX_UPGRADES` | int | `10` | Max dependency upgrade candidates processed per steward run. |
+| `RELEASE_CANDIDATE_AGENT_ENABLED` | int | `0` | Enable release-candidate governance agent workflows. |
+| `USER_SIMULATOR_ENABLED` | int | `0` | Enable user-simulator governance workflows. |
+| `USER_SIMULATOR_REQUIRED_PACK` | str | `p0` | Required simulator story pack when user simulator is enabled. |
 
 ### Admin and Backup
 
@@ -162,6 +272,7 @@ Source of truth: `src/jarvis/config.py`.
 |---|---|---|---|
 | `GITHUB_TOKEN` | str | `` | GitHub App installation token or PAT for API calls. |
 | `GITHUB_WEBHOOK_SECRET` | str | `` | Secret used to verify `X-Hub-Signature-256`. |
+| `WEBHOOK_REPLAY_WINDOW_MINUTES` | int | `15` | Replay-detection window for GitHub delivery IDs. |
 | `GITHUB_API_BASE_URL` | str | `https://api.github.com` | GitHub API base URL. |
 | `GITHUB_REPO_ALLOWLIST` | str | `` | Optional CSV allowlist (supports globs, e.g. `my-org/*`). |
 | `GITHUB_BOT_LOGIN` | str | `jarvis` | Bot login used for `@mention` trigger matching and self-reply guard. |
@@ -182,6 +293,15 @@ Source of truth: `src/jarvis/config.py`.
 | `MAINTENANCE_TIMEOUT_SECONDS` | int | `1800` | Per-command timeout in seconds. |
 | `MAINTENANCE_CREATE_BUGS` | int | `1` | Create bug reports on command failures. |
 | `MAINTENANCE_WORKDIR` | str | `` | Optional override working directory for maintenance commands. |
+| `DEVSWARM_MONITOR_INTERVAL_SECONDS` | int | `600` | In-process deterministic DevSwarm monitor interval (`0` disables). |
+| `DEVSWARM_WORKTREES_ROOT` | str | `` | Optional absolute root for DevSwarm worktree directories (default `.jarvis/worktrees`). |
+| `DEVSWARM_LOGS_ROOT` | str | `` | Optional absolute root for worker log files (default `.jarvis/logs`). |
+| `DEVSWARM_PROMPTS_ROOT` | str | `` | Optional absolute root for persisted worker prompts (default `.jarvis/prompts`). |
+| `DEVSWARM_MAX_ATTEMPTS` | int | `3` | Max spawn attempts per swarm task before terminal failure. |
+| `DEVSWARM_OPENCODE_COMMAND_TEMPLATE` | str | `` | Optional worker command template override (`{model}`, `{prompt_file}`, `{task_id}` placeholders). When empty, Jarvis auto-detects compatible `opencode run` flags; swarm create/spawn fail fast if OpenCode binary/config preflight fails. Bare model IDs are normalized to `lmstudio/<model>` for OpenCode compatibility. |
+| `DEVSWARM_BLOCKED_ENV_KEYS` | str | `GITHUB_TOKEN,...` | Comma-delimited env keys explicitly removed from worker process environment. |
+| `DEVSWARM_WHATSAPP_NOTIFY_ENABLED` | int | `1` | Enable WhatsApp notifications on `needs_attention`/`ready_for_review` transitions. |
+| `DEVSWARM_WHATSAPP_TARGETS` | str | `` | Optional CSV target override (falls back to `HUMAN_ESCALATION_TARGETS`). |
 
 ### API and Web UI Security
 
@@ -207,6 +327,10 @@ Source of truth: `src/jarvis/config.py`.
 | `EXEC_HOST_MAX_OUTPUT_BYTES` | int | `1000000` | Output cap per command. |
 | `EXEC_HOST_MAX_MEMORY_MB` | int | `512` | Memory cap. |
 | `EXEC_HOST_MAX_CPU_SECONDS` | int | `120` | CPU time cap. |
+| `EXEC_HOST_FULL_LOG_MAX_BYTES` | int | `262144` | Max bytes persisted per full host-exec log file before truncation marker is appended. |
+| `EXEC_HOST_LOG_RETENTION_DAYS` | int | `7` | Remove host-exec logs older than this age (`0` disables age-based pruning). |
+| `EXEC_HOST_LOG_RETENTION_MAX_FILES` | int | `1000` | Max host-exec log files retained per directory (`0` disables file-count pruning). |
+| `EXEC_HOST_LOG_RETENTION_MAX_BYTES` | int | `524288000` | Max total retained bytes per directory for host-exec logs (`0` disables size-based pruning). |
 
 ## Production Validation Rules
 

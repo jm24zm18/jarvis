@@ -41,6 +41,12 @@ Reusable AI-agent prompts for common engineering workflows in this repository.
 - [PR Review Agent](./PR_REVIEW_AGENT_PROMPT.md)
   - Use for structured review focused on bugs, regressions, and safety risks.
 
+- [Feature Builder](./FEATURE_BUILDER_PROMPT.md)
+  - Use for new feature work: design → implement → test → docs, with pre-flight checklist.
+
+- [Docs Agent](./DOCS_AGENT_PROMPT.md)
+  - Use for documentation audits: drift detection, example verification, API coverage.
+
 ## Recommended Pairings
 
 - Feature work: `FEATURE_BUILDER_PROMPT` + `PR_REVIEW_AGENT_PROMPT`

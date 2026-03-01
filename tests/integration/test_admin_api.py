@@ -133,6 +133,7 @@ def test_admin_endpoints_basic_coverage(tmp_path: Path) -> None:
     )
 
     assert client.get("/api/v1/agents", headers=headers).status_code == 200
+    assert client.get("/api/v1/swarm/tasks", headers=headers).status_code == 200
 
     events = client.get("/api/v1/events", headers=headers)
     assert events.status_code == 200
@@ -219,14 +220,15 @@ def test_admin_endpoints_basic_coverage(tmp_path: Path) -> None:
         == 200
     )
     assert client.get("/api/v1/channels/whatsapp/qrcode", headers=headers).status_code == 200
-    assert (
-        client.post(
-            "/api/v1/channels/whatsapp/pairing-code",
-            headers=headers,
-            json={"number": "15555550123"},
-        ).status_code
-        == 200
+    pairing = client.post(
+        "/api/v1/channels/whatsapp/pairing-code",
+        headers=headers,
+        json={"number": "15555550123"},
     )
+    assert pairing.status_code in {200, 400, 503}
+    if pairing.status_code == 400:
+        detail = str(pairing.json().get("detail", ""))
+        assert ("qr_not_ready" in detail) or ("Already connected" in detail)
     assert (
         client.post("/api/v1/channels/whatsapp/disconnect", headers=headers, json={}).status_code
         == 200
@@ -249,20 +251,35 @@ def test_whatsapp_status_reports_callback_health(monkeypatch) -> None:
         webhook_events = ["messages.upsert"]
 
         async def status(self) -> tuple[int, dict[str, object]]:
-            return 200, {"state": "open"}
+            return 200, {
+                "state": "close",
+                "last_disconnect_code": 401,
+                "last_disconnect_reason": "loggedOut",
+                "last_error_at": "2026-02-22T14:00:00Z",
+                "autoheal_attempted": False,
+                "relink_required": True,
+                "can_reconnect": False,
+            }
 
         async def configure_webhook(self) -> tuple[int, dict[str, object]]:
             return 200, {"configured": True}
 
-    monkeypatch.setattr("jarvis.routes.api.channels.EvolutionClient", _FakeEvolutionClient)
+    monkeypatch.setattr("jarvis.routes.api.channels.BaileysClient", _FakeEvolutionClient)
 
     response = client.get("/api/v1/channels/whatsapp/status", headers=headers)
     assert response.status_code == 200
     payload = response.json()
     assert payload["enabled"] is True
+    assert payload["status"] == "close"
     assert payload["callback"]["enabled"] is True
     assert payload["callback"]["configured"] is True
     assert payload["callback"]["events"] == ["messages.upsert"]
+    assert payload["diagnostics"]["disconnect_code"] == 401
+    assert payload["diagnostics"]["disconnect_reason"] == "loggedOut"
+    assert payload["diagnostics"]["autoheal_attempted"] is False
+    assert payload["diagnostics"]["relink_required"] is True
+    assert payload["diagnostics"]["can_reconnect"] is False
+    assert payload["diagnostics"]["recoverable"] is False
 
 
 def test_whatsapp_create_includes_callback_result(monkeypatch) -> None:
@@ -286,7 +303,7 @@ def test_whatsapp_create_includes_callback_result(monkeypatch) -> None:
         async def configure_webhook(self) -> tuple[int, dict[str, object]]:
             return 200, {"configured": True}
 
-    monkeypatch.setattr("jarvis.routes.api.channels.EvolutionClient", _FakeEvolutionClient)
+    monkeypatch.setattr("jarvis.routes.api.channels.BaileysClient", _FakeEvolutionClient)
 
     response = client.post("/api/v1/channels/whatsapp/create", headers=headers, json={})
     assert response.status_code == 200
@@ -309,6 +326,30 @@ def test_whatsapp_pairing_code_rejects_non_numeric_input() -> None:
         json={"number": "abc-not-a-phone"},
     )
     assert response.status_code == 422
+
+
+def test_whatsapp_pairing_code_propagates_upstream_qr_not_ready(monkeypatch) -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    get_settings.cache_clear()
+    client = TestClient(app)
+    token = _login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    class _FakeBaileysClient:
+        enabled = True
+
+        async def pairing_code(self, _number: str) -> tuple[int, dict[str, object]]:
+            return 503, {"error": "QR state not reached — click Initialize Connection first"}
+
+    monkeypatch.setattr("jarvis.routes.api.channels.BaileysClient", _FakeBaileysClient)
+
+    response = client.post(
+        "/api/v1/channels/whatsapp/pairing-code",
+        headers=headers,
+        json={"number": "15555550123"},
+    )
+    assert response.status_code == 503
+    assert "qr_not_ready" in str(response.json().get("detail", ""))
 
 
 def test_whatsapp_review_queue_list_and_resolve() -> None:

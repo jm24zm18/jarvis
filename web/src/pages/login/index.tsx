@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot } from "lucide-react";
 import Button from "../../components/ui/Button";
 import Input from "../../components/ui/Input";
 import { login } from "../../api/endpoints";
@@ -28,27 +27,31 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[var(--bg-primary)] p-4">
-      <div className="w-full max-w-sm animate-[fadeIn_0.4s_ease-out] rounded-2xl border border-[var(--border-default)] bg-surface p-8 shadow-xl">
-        <div className="mb-6 flex flex-col items-center">
-          <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#13293d] text-white dark:bg-slate-200 dark:text-slate-900">
-            <Bot size={28} />
+    <div className="flex min-h-screen items-center justify-center bg-bg p-4">
+      <div className="w-full max-w-xs rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-8">
+        <div className="mb-6 flex flex-col items-center gap-3">
+          <div className="font-mono text-2xl font-bold text-accent">&gt;_</div>
+          <div className="text-center">
+            <h1 className="font-mono text-sm font-semibold uppercase tracking-widest text-text">
+              JARVIS
+            </h1>
+            <p className="mt-1 font-mono text-xs text-text3">enter passphrase</p>
           </div>
-          <h1 className="font-display text-2xl text-[var(--text-primary)]">Jarvis</h1>
-          <p className="text-sm text-[var(--text-muted)]">Enter your password to continue</p>
         </div>
         <Input
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          placeholder="Password"
+          placeholder="passphrase"
           onKeyDown={(e) => {
             if (e.key === "Enter" && password) submit();
           }}
         />
-        {error ? <p className="mt-2 text-sm text-ember">{error}</p> : null}
+        {error ? (
+          <p className="mt-2 font-mono text-xs text-danger">{error}</p>
+        ) : null}
         <Button className="mt-4 w-full" onClick={submit} disabled={loading || !password}>
-          {loading ? "Signing in..." : "Sign In"}
+          {loading ? "authenticating..." : "authenticate"}
         </Button>
       </div>
     </div>

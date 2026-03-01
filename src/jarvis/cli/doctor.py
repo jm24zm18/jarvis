@@ -13,6 +13,7 @@ from jarvis.cli.checks import (
     check_config_loads,
     check_config_validates,
     check_database,
+    check_db_path_consistency,
     check_env_file,
     check_http_service,
     check_migrations_applied,
@@ -20,8 +21,10 @@ from jarvis.cli.checks import (
     check_task_runner,
     check_tool_exists,
 )
+from jarvis.formatting import supports_utf8, symbol
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_ASCII_ONLY = not supports_utf8(sys.stdout)
 
 
 def _green(text: str) -> str:
@@ -41,7 +44,9 @@ def _bold(text: str) -> str:
 
 
 def _print_result(result: CheckResult) -> None:
-    icon = _green("\u2713") if result.passed else _red("\u2717")
+    icon = _green(symbol("check", ascii_only=_ASCII_ONLY)) if result.passed else _red(
+        symbol("cross", ascii_only=_ASCII_ONLY)
+    )
     print(f"  {icon} {result.name}: {result.message}")
     if not result.passed and result.fix_hint:
         print(f"    {_yellow('Fix:')} {result.fix_hint}")
@@ -54,27 +59,33 @@ def _section(title: str) -> None:
 def run_doctor(*, json_output: bool = False, fix: bool = False) -> None:
     all_results: list[CheckResult] = []
     failed = False
+    auto_fixes: dict[str, bool] = {}
 
     def _run(result: CheckResult) -> bool:
         all_results.append(result)
-        _print_result(result)
+        if not json_output:
+            _print_result(result)
         if not result.passed:
             if fix and result.fix_fn is not None:
                 applied = result.fix_fn()
                 status_text = "applied" if applied else "failed"
-                print(f"    {_yellow('Auto-fix:')} {status_text}")
+                auto_fixes[result.name] = applied
+                if not json_output:
+                    print(f"    {_yellow('Auto-fix:')} {status_text}")
             nonlocal failed
             failed = True
         return result.passed
 
     # --- System Tools ---
-    _section("System Tools")
+    if not json_output:
+        _section("System Tools")
     for tool in ("python3", "uv", "git", "docker"):
         _run(check_tool_exists(tool))
     _run(check_python_version())
 
     # --- Configuration ---
-    _section("Configuration")
+    if not json_output:
+        _section("Configuration")
     env_ok = _run(check_env_file(PROJECT_ROOT))
     config_ok = False
     if env_ok:
@@ -83,7 +94,8 @@ def run_doctor(*, json_output: bool = False, fix: bool = False) -> None:
             _run(check_config_validates())
 
     # --- External Services ---
-    _section("External Services")
+    if not json_output:
+        _section("External Services")
     if config_ok:
         try:
             from jarvis.config import Settings
@@ -101,10 +113,13 @@ def run_doctor(*, json_output: bool = False, fix: bool = False) -> None:
             )
             _run(result)
     else:
-        print(f"  {_yellow('⊘')} skipped (configuration not loaded)")
+        if not json_output:
+            skipped = _yellow(symbol("skip", ascii_only=_ASCII_ONLY))
+            print(f"  {skipped} skipped (configuration not loaded)")
 
     # --- Database ---
-    _section("Database")
+    if not json_output:
+        _section("Database")
     if config_ok:
         try:
             from jarvis.config import Settings
@@ -113,6 +128,7 @@ def run_doctor(*, json_output: bool = False, fix: bool = False) -> None:
             db_ok = _run(check_database(settings.app_db))
             if db_ok:
                 _run(check_migrations_applied(settings.app_db))
+                _run(check_db_path_consistency(settings.app_db, PROJECT_ROOT))
         except Exception as exc:
             _run(
                 CheckResult(
@@ -120,40 +136,52 @@ def run_doctor(*, json_output: bool = False, fix: bool = False) -> None:
                 )
             )
     else:
-        print(f"  {_yellow('⊘')} skipped (configuration not loaded)")
+        if not json_output:
+            skipped = _yellow(symbol("skip", ascii_only=_ASCII_ONLY))
+            print(f"  {skipped} skipped (configuration not loaded)")
 
     # --- Agent Bundles ---
-    _section("Agent Bundles")
+    if not json_output:
+        _section("Agent Bundles")
     _run(check_agent_bundles(PROJECT_ROOT / "agents"))
 
     # --- Runtime ---
-    _section("Runtime (if running)")
+    if not json_output:
+        _section("Runtime (if running)")
     api_result = check_api_running()
     _run(api_result)
     if api_result.passed:
         _run(check_task_runner())
     else:
-        print(f"  {_yellow('⊘')} task runner check skipped (API not running)")
+        if not json_output:
+            skipped = _yellow(symbol("skip", ascii_only=_ASCII_ONLY))
+            print(f"  {skipped} task runner check skipped (API not running)")
 
     # --- Summary ---
     fail_count = sum(1 for r in all_results if not r.passed)
-    print()
-    if fail_count == 0:
-        print(_green("All checks passed!"))
-    else:
-        print(_red(f"{fail_count} check(s) failed."))
-
     if json_output:
-        data = [
+        results = [
             {
                 "name": r.name,
                 "passed": r.passed,
                 "message": r.message,
                 "fix_hint": r.fix_hint,
+                "auto_fix_applied": auto_fixes.get(r.name),
             }
             for r in all_results
         ]
-        print("\n" + json.dumps(data, indent=2))
+        payload = {
+            "ok": fail_count == 0,
+            "failed": fail_count,
+            "results": results,
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        print()
+        if fail_count == 0:
+            print(_green("All checks passed!"))
+        else:
+            print(_red(f"{fail_count} check(s) failed."))
 
     if failed:
         sys.exit(1)

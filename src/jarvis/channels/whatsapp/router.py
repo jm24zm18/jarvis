@@ -37,15 +37,20 @@ from jarvis.db.queries import (
     get_thread_by_whatsapp_remote,
     get_whatsapp_sender_review_latest_decision,
     get_whatsapp_sender_review_open,
+    has_pending_human_escalation,
     insert_message,
     insert_whatsapp_media,
+    prune_whatsapp_thread_map_orphans,
     record_external_message,
+    set_typing_state,
+    thread_exists,
     upsert_whatsapp_thread_map,
 )
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
 from jarvis.tasks import get_task_runner
+from jarvis.tasks.human_escalation import request_human_escalation
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
 
@@ -319,9 +324,24 @@ async def inbound(
             remote_jid = str(msg.thread_key or "").strip()
             if remote_jid:
                 mapped = get_thread_by_whatsapp_remote(conn, instance, remote_jid)
-                if mapped:
+                if mapped is not None and thread_exists(conn, mapped):
                     thread_id = mapped
                 else:
+                    if mapped:
+                        degraded = True
+                        _emit_degraded_event(
+                            conn=conn,
+                            trace_id=trace_id,
+                            thread_id=mapped,
+                            actor_id="whatsapp",
+                            reason="stale_thread_map",
+                            detail={
+                                "instance": instance,
+                                "remote_jid": remote_jid,
+                                "stale_thread_id": mapped,
+                            },
+                        )
+                        prune_whatsapp_thread_map_orphans(conn)
                     thread_id = ensure_open_thread(conn, user_id, channel_id)
                     upsert_whatsapp_thread_map(
                         conn,
@@ -395,6 +415,23 @@ async def inbound(
                         ),
                     ),
                 )
+                if not has_pending_human_escalation(
+                    conn,
+                    thread_id=thread_id,
+                    reason="whatsapp_review_required",
+                ):
+                    request_human_escalation(
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        requested_by_actor_id="whatsapp",
+                        source_agent_id="main",
+                        reason="whatsapp_review_required",
+                        message=(
+                            "WhatsApp review queue requires a human decision."
+                            f" Queue ID: {review_id}, sender: {sender_jid}"
+                        ),
+                        priority="high",
+                    )
                 continue
             if review_state == "deny":
                 blocked_sender = True
@@ -440,14 +477,117 @@ async def inbound(
                     target = str(reaction_key.get("id") or "")
                 text = f"[reaction] {emoji} {target}".strip()
             elif msg.message_type in {"image", "video", "document", "audio", "sticker"}:
-                media_result = await _process_media_payload(
-                    external_msg_id=msg.external_msg_id,
-                    message_type=msg.message_type,
-                    text=text,
-                    media_url=str(msg.media_url or msg.media.get("url") or ""),
-                    mime_type=str(msg.media.get("mime_type") or ""),
-                    settings=settings,
-                )
+                # For audio messages from Baileys, download via Baileys server
+                # (handles decryption of encrypted WhatsApp CDN media)
+                baileys_downloaded = False
+                if msg.message_type == "audio" and isinstance(msg.raw, dict):
+                    raw_record = msg.raw.get("record")
+                    raw_envelope = msg.raw.get("envelope")
+                    raw_message_obj: dict[str, Any] | None = None
+                    if isinstance(raw_record, dict):
+                        record_message = raw_record.get("message")
+                        if isinstance(record_message, dict):
+                            raw_message_obj = record_message
+                    if raw_message_obj is None:
+                        raw_data = (
+                            raw_envelope.get("data")
+                            if isinstance(raw_envelope, dict)
+                            else msg.raw.get("data", msg.raw)
+                        )
+                        raw_messages = (
+                            raw_data.get("messages", []) if isinstance(raw_data, dict) else []
+                        )
+                        for rm in raw_messages:
+                            if not isinstance(rm, dict):
+                                continue
+                            rm_key_obj = rm.get("key")
+                            rm_key_id = (
+                                str(rm_key_obj.get("id") or "")
+                                if isinstance(rm_key_obj, dict)
+                                else ""
+                            )
+                            rm_id = rm_key_id or str(rm.get("id") or "")
+                            if rm_id != msg.external_msg_id:
+                                continue
+                            if isinstance(rm.get("message"), dict):
+                                raw_message_obj = rm.get("message")
+                            break
+                    if raw_message_obj and "audioMessage" in raw_message_obj:
+                        from jarvis.channels.whatsapp.baileys_client import BaileysClient
+                        from jarvis.channels.whatsapp.media_security import (
+                            ensure_media_root,
+                            media_filename,
+                            resolve_media_output_path,
+                        )
+                        try:
+                            baileys = BaileysClient()
+                            if baileys.enabled:
+                                media_root = ensure_media_root(settings.whatsapp_media_dir)
+                                _mime = str(
+                                    raw_message_obj["audioMessage"].get("mimetype", "audio/ogg")
+                                )
+                                file_name = media_filename(
+                                    msg.external_msg_id, "audio", _mime
+                                )
+                                target_path = resolve_media_output_path(media_root, file_name)
+                                total = await baileys.download_media(
+                                    message=raw_message_obj,
+                                    target_path=str(target_path),
+                                )
+                                if total > 0:
+                                    baileys_downloaded = True
+                                    mime_type = str(
+                                        raw_message_obj["audioMessage"].get("mimetype", "audio/ogg")
+                                    )
+                                    media_result = {
+                                        "text": "",
+                                        "degraded": False,
+                                        "reason": "",
+                                        "mime_type": mime_type,
+                                        "local_path": str(target_path),
+                                        "bytes": total,
+                                        "transcription_status": "n/a",
+                                        "transcript_backend": "",
+                                    }
+                                    # Run transcription if enabled
+                                    if int(settings.whatsapp_voice_transcribe_enabled) == 1:
+                                        try:
+                                            transcriber = build_voice_transcriber(settings)
+                                            transcript = await transcribe_with_timeout(
+                                                transcriber=transcriber,
+                                                file_path=target_path,
+                                                mime_type=mime_type,
+                                                timeout_seconds=int(
+                                                    settings.whatsapp_voice_transcribe_timeout_seconds
+                                                ),
+                                            )
+                                            media_result["text"] = f"[voice] {transcript.strip()}"
+                                            media_result["transcription_status"] = "ok"
+                                            backend_name = (
+                                                settings.whatsapp_voice_transcribe_backend.strip().lower()
+                                                or "stub"
+                                            )
+                                            media_result["transcript_backend"] = backend_name
+                                        except VoiceTranscriptionError as exc:
+                                            media_result["degraded"] = True
+                                            media_result["reason"] = exc.reason
+                                            media_result["text"] = "[voice note unavailable]"
+                                            media_result["transcription_status"] = "failed"
+                                    else:
+                                        media_result["text"] = "[voice note]"
+                                        media_result["transcription_status"] = "disabled"
+                        except Exception:
+                            pass  # Fall back to regular media download
+
+                if not baileys_downloaded:
+                    media_result = await _process_media_payload(
+                        external_msg_id=msg.external_msg_id,
+                        message_type=msg.message_type,
+                        text=text,
+                        media_url=str(msg.media_url or msg.media.get("url") or ""),
+                        mime_type=str(msg.media.get("mime_type") or ""),
+                        settings=settings,
+                    )
                 text = str(media_result["text"])
                 if bool(media_result["degraded"]):
                     degraded = True
@@ -465,7 +605,16 @@ async def inbound(
             elif msg.message_type == "unknown" and not text:
                 text = "[unsupported message]"
 
-            message_id = insert_message(conn, thread_id, "user", text)
+            _media_path: str | None = None
+            _mime_type: str | None = None
+            if msg.message_type in {"image", "video", "document", "audio", "sticker"}:
+                _local = str(media_result.get("local_path", "") or "").strip()
+                if _local:
+                    _media_path = _local
+                    _mime_type = str(media_result.get("mime_type", "") or "").strip() or None
+            message_id = insert_message(
+                conn, thread_id, "user", text, media_path=_media_path, mime_type=_mime_type
+            )
 
             media_id = ""
             if msg.message_type in {"image", "video", "document", "audio", "sticker"}:
@@ -473,6 +622,7 @@ async def inbound(
                 if local_path:
                     bytes_value = media_result.get("bytes", 0)
                     num_bytes = int(bytes_value) if isinstance(bytes_value, int | str) else 0
+                    mime_str = str(media_result.get("mime_type", ""))
                     try:
                         media_id = insert_whatsapp_media(
                             conn,
@@ -480,7 +630,7 @@ async def inbound(
                             message_id=message_id,
                             media_type=msg.message_type,
                             local_path=local_path,
-                            mime_type=str(media_result.get("mime_type", "")),
+                            mime_type=mime_str,
                             num_bytes=num_bytes,
                         )
                     except Exception:
@@ -496,6 +646,21 @@ async def inbound(
                                 "external_msg_id": msg.external_msg_id,
                             },
                         )
+                    # Also store in the unified media_attachments table.
+                    try:
+                        from jarvis.media.service import MediaService as _MediaService
+                        _file_data = Path(local_path).read_bytes()
+                        _svc = _MediaService()
+                        _svc.upload(
+                            conn,
+                            owner_id=user_id,
+                            file_data=_file_data,
+                            filename=Path(local_path).name,
+                            mime_type=mime_str or "application/octet-stream",
+                            message_id=message_id,
+                        )
+                    except Exception:
+                        pass  # Non-fatal: backward-compat insert_whatsapp_media succeeded
 
             event_payload = {
                 "text": text,
@@ -552,6 +717,38 @@ async def inbound(
                     },
                     "tools_io",
                 )
+            # Send typing indicator ("composing") to show Jarvis is thinking
+            try:
+                _send_presence = getattr(adapter, "send_presence", None)
+                if callable(_send_presence):
+                    recipient_jid = str(msg.sender_id or remote_jid)
+                    await _send_presence(
+                        recipient=recipient_jid,
+                        presence="composing",
+                    )
+                    set_typing_state(conn, thread_id, recipient_jid, "whatsapp")
+                    from jarvis.routes.health import increment_metric
+                    increment_metric("whatsapp_typing_active_threads_set")
+                    emit_event(
+                        conn,
+                        EventInput(
+                            trace_id=trace_id,
+                            span_id=new_id("spn"),
+                            parent_span_id=None,
+                            thread_id=thread_id,
+                            event_type="channel.typing.set",
+                            component="channels.whatsapp",
+                            actor_type="system",
+                            actor_id="whatsapp",
+                            payload_json=json.dumps(
+                                {"reason": "inbound_acknowledged", "recipient": recipient_jid}
+                            ),
+                            payload_redacted_json=json.dumps({"reason": "inbound_acknowledged"}),
+                        ),
+                    )
+            except Exception:
+                pass  # Typing indicator is best-effort, don't block on failure
+
             step_ok = _safe_send_task(
                 "jarvis.tasks.agent.agent_step",
                 {"trace_id": trace_id, "thread_id": thread_id},

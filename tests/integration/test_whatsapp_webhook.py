@@ -9,7 +9,6 @@ from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.main import app
 from jarvis.tasks.agent import agent_step
-from jarvis.tasks.channel import send_whatsapp_message
 
 PAYLOAD = {
     "entry": [
@@ -145,6 +144,82 @@ def test_inbound_strict_mode_queues_unknown_sender_without_message_insert() -> N
             os.environ.pop("ADMIN_WHATSAPP_IDS", None)
         else:
             os.environ["ADMIN_WHATSAPP_IDS"] = old_admin_ids
+        get_settings.cache_clear()
+
+
+def test_inbound_strict_mode_triggers_human_escalation(monkeypatch) -> None:
+    old_review_mode = os.environ.get("WHATSAPP_REVIEW_MODE")
+    old_allowed_senders = os.environ.get("WHATSAPP_ALLOWED_SENDERS")
+    old_admin_ids = os.environ.get("ADMIN_WHATSAPP_IDS")
+    old_escalation_targets = os.environ.get("HUMAN_ESCALATION_TARGETS")
+    old_escalation_channel = os.environ.get("HUMAN_ESCALATION_CHANNEL_TYPE")
+    called: list[dict[str, object]] = []
+    try:
+        os.environ["WHATSAPP_REVIEW_MODE"] = "strict"
+        os.environ["WHATSAPP_ALLOWED_SENDERS"] = ""
+        os.environ["ADMIN_WHATSAPP_IDS"] = ""
+        os.environ["HUMAN_ESCALATION_TARGETS"] = "usr_admin"
+        os.environ["HUMAN_ESCALATION_CHANNEL_TYPE"] = "web"
+        get_settings.cache_clear()
+
+        from jarvis.channels.whatsapp import router as whatsapp_router
+
+        def fake_request(**kwargs: object) -> dict[str, object]:
+            called.append(kwargs)
+            return {"ok": True, "count": 1}
+
+        monkeypatch.setattr(
+            whatsapp_router,
+            "request_human_escalation",
+            fake_request,
+        )
+        client = TestClient(app)
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "messages": [
+                                    {
+                                        "id": "wamid.TEST.REVIEW.ESCALATE",
+                                        "from": "15555559002",
+                                        "text": {"body": "please help"},
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        response = client.post("/webhooks/whatsapp", json=payload)
+        assert response.status_code == 200
+        assert response.json()["queued_for_review"] is True
+        assert len(called) == 1
+        assert called[0]["reason"] == "whatsapp_review_required"
+        assert "Queue ID" in str(called[0]["message"])
+    finally:
+        if old_review_mode is None:
+            os.environ.pop("WHATSAPP_REVIEW_MODE", None)
+        else:
+            os.environ["WHATSAPP_REVIEW_MODE"] = old_review_mode
+        if old_allowed_senders is None:
+            os.environ.pop("WHATSAPP_ALLOWED_SENDERS", None)
+        else:
+            os.environ["WHATSAPP_ALLOWED_SENDERS"] = old_allowed_senders
+        if old_admin_ids is None:
+            os.environ.pop("ADMIN_WHATSAPP_IDS", None)
+        else:
+            os.environ["ADMIN_WHATSAPP_IDS"] = old_admin_ids
+        if old_escalation_targets is None:
+            os.environ.pop("HUMAN_ESCALATION_TARGETS", None)
+        else:
+            os.environ["HUMAN_ESCALATION_TARGETS"] = old_escalation_targets
+        if old_escalation_channel is None:
+            os.environ.pop("HUMAN_ESCALATION_CHANNEL_TYPE", None)
+        else:
+            os.environ["HUMAN_ESCALATION_CHANNEL_TYPE"] = old_escalation_channel
         get_settings.cache_clear()
 
 
@@ -305,26 +380,20 @@ def test_webhook_to_outbound_flow_emits_events(monkeypatch) -> None:
         )
         and item["queue"] == "tools_io"
     ]
-    assert len(outbound_calls) == 1
-    outbound_kwargs = outbound_calls[0]["kwargs"]
-    assert isinstance(outbound_kwargs, dict)
-    assert outbound_kwargs["thread_id"] == thread_id
-    assert outbound_kwargs["message_id"] == message_id
-
-    outbound_result = send_whatsapp_message(thread_id=thread_id, message_id=message_id)
-    assert outbound_result["status"] == "sent"
+    assert len(outbound_calls) == 0
 
     with get_conn() as conn:
-        outbound_events = conn.execute(
+        approval_row = conn.execute(
             (
-                "SELECT event_type FROM events "
-                "WHERE thread_id=? AND event_type='channel.outbound' "
-                "ORDER BY created_at ASC"
+                "SELECT status, source_thread_id, source_message_id FROM "
+                "channel_reply_approval_requests WHERE source_message_id=? LIMIT 1"
             ),
-            (thread_id,),
+            (message_id,),
         ).fetchall()
-
-    assert len(outbound_events) >= 2
+    assert len(approval_row) == 1
+    assert str(approval_row[0]["status"]) == "pending"
+    assert str(approval_row[0]["source_thread_id"]) == thread_id
+    assert str(approval_row[0]["source_message_id"]) == message_id
 
 
 def test_inbound_rejects_invalid_secret(monkeypatch) -> None:
@@ -667,6 +736,96 @@ def test_inbound_voice_note_uses_faster_whisper_backend(monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_inbound_multi_audio_uses_matching_record_mimetype(monkeypatch) -> None:
+    from jarvis.channels.whatsapp import router as whatsapp_router
+    from jarvis.channels.whatsapp.baileys_client import BaileysClient
+
+    old_transcribe = os.environ.get("WHATSAPP_VOICE_TRANSCRIBE_ENABLED")
+    old_baileys_api_url = os.environ.get("BAILEYS_API_URL")
+    try:
+        os.environ["WHATSAPP_VOICE_TRANSCRIBE_ENABLED"] = "0"
+        os.environ["BAILEYS_API_URL"] = "http://127.0.0.1:8081"
+        get_settings.cache_clear()
+
+        payload = {
+            "event": "messages.upsert",
+            "data": {
+                "type": "notify",
+                "messages": [
+                    {
+                        "key": {
+                            "id": "BAE5AUDIO001",
+                            "remoteJid": "15555550877@s.whatsapp.net",
+                            "participant": "15555550877@s.whatsapp.net",
+                        },
+                        "message": {
+                            "audioMessage": {
+                                "seconds": 2,
+                                "url": "https://cdn.example/a1.ogg",
+                                "mimetype": "audio/ogg; codecs=opus",
+                            }
+                        },
+                    },
+                    {
+                        "key": {
+                            "id": "BAE5AUDIO002",
+                            "remoteJid": "15555550877@s.whatsapp.net",
+                            "participant": "15555550877@s.whatsapp.net",
+                        },
+                        "message": {
+                            "audioMessage": {
+                                "seconds": 2,
+                                "url": "https://cdn.example/a2.mp4",
+                                "mimetype": "audio/mp4",
+                            }
+                        },
+                    },
+                ],
+            },
+        }
+
+        class _Runner:
+            def send_task(self, *_args, **_kwargs) -> bool:
+                return True
+
+        async def _fake_download_media(self, message, target_path):  # type: ignore[no-untyped-def]
+            del self, message
+            path = os.fspath(target_path)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as handle:
+                handle.write(b"audio")
+            return 5
+
+        monkeypatch.setattr(whatsapp_router, "get_task_runner", lambda: _Runner())
+        monkeypatch.setattr(BaileysClient, "download_media", _fake_download_media)
+
+        client = TestClient(app)
+        response = client.post("/webhooks/whatsapp", json=payload)
+        assert response.status_code in {200, 202}
+        assert response.json().get("accepted") is True
+
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT mime_type FROM whatsapp_media "
+                "WHERE message_id IN ("
+                "  SELECT id FROM messages WHERE role='user' ORDER BY created_at DESC LIMIT 2"
+                ")"
+            ).fetchall()
+        mime_types = {str(row["mime_type"]) for row in rows}
+        assert "audio/ogg; codecs=opus" in mime_types
+        assert "audio/mp4" in mime_types
+    finally:
+        if old_transcribe is None:
+            os.environ.pop("WHATSAPP_VOICE_TRANSCRIBE_ENABLED", None)
+        else:
+            os.environ["WHATSAPP_VOICE_TRANSCRIBE_ENABLED"] = old_transcribe
+        if old_baileys_api_url is None:
+            os.environ.pop("BAILEYS_API_URL", None)
+        else:
+            os.environ["BAILEYS_API_URL"] = old_baileys_api_url
+        get_settings.cache_clear()
+
+
 def test_inbound_ignores_non_upsert_evolution_event() -> None:
     payload = {
         "event": "connection.update",
@@ -687,3 +846,75 @@ def test_inbound_ignores_non_upsert_evolution_event() -> None:
 
     assert after_messages == before_messages
     assert after_events == before_events
+
+
+def test_inbound_heals_stale_whatsapp_thread_mapping(monkeypatch) -> None:
+    from jarvis.channels.whatsapp import router as whatsapp_router
+
+    payload = {
+        "event": "messages.upsert",
+        "data": {
+            "messages": [
+                {
+                    "key": {
+                        "id": "BAE5STALEMAP1",
+                        "remoteJid": "15855098110@s.whatsapp.net",
+                        "fromMe": True,
+                    },
+                    "message": {"conversation": "healed path"},
+                }
+            ],
+            "type": "notify",
+        },
+    }
+
+    class _Runner:
+        def send_task(self, *_args, **_kwargs) -> bool:
+            return True
+
+    monkeypatch.setattr(whatsapp_router, "get_task_runner", lambda: _Runner())
+
+    with get_conn() as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            (
+                "INSERT INTO whatsapp_thread_map("
+                "thread_id, instance, remote_jid, participant_jid, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?)"
+            ),
+            (
+                "thr_stale_missing",
+                "personal",
+                "15855098110@s.whatsapp.net",
+                "",
+                "2026-02-21T00:00:00+00:00",
+                "2026-02-21T00:00:00+00:00",
+            ),
+        )
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    client = TestClient(app)
+    response = client.post("/webhooks/whatsapp", json=payload)
+    assert response.status_code == 202
+    assert response.json() == {"accepted": True, "degraded": True}
+
+    with get_conn() as conn:
+        msg_row = conn.execute(
+            "SELECT thread_id, content FROM messages "
+            "WHERE role='user' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        map_row = conn.execute(
+            "SELECT thread_id FROM whatsapp_thread_map "
+            "WHERE instance='personal' AND remote_jid='15855098110@s.whatsapp.net' "
+            "LIMIT 1"
+        ).fetchone()
+        degraded = conn.execute(
+            "SELECT payload_json FROM events "
+            "WHERE event_type='channel.inbound.degraded' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    assert msg_row is not None
+    assert str(msg_row["content"]) == "healed path"
+    assert map_row is not None
+    assert str(map_row["thread_id"]) == str(msg_row["thread_id"])
+    assert degraded is not None
+    assert "\"stale_thread_map\"" in str(degraded["payload_json"])

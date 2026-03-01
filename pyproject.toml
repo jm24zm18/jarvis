@@ -21,6 +21,8 @@ dependencies = [
   "structlog>=24.1,<26",
   "slowapi>=0.1.9,<1",
   "faster-whisper>=1.1,<2",
+  "pillow>=12.1.1",
+  "python-multipart>=0.0.22",
 ]
 
 [project.scripts]

@@ -10,6 +10,7 @@ import sqlite3
 import unicodedata
 from collections.abc import Callable
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -23,14 +24,16 @@ from jarvis.errors import ProviderError
 from jarvis.events.models import EventInput
 from jarvis.events.writer import emit_event, redact_payload
 from jarvis.ids import new_id
-from jarvis.memory.knowledge import KnowledgeBaseService
 from jarvis.memory.service import MemoryService
-from jarvis.memory.skills import SkillsService
-from jarvis.memory.state_extractor import extract_state_items
-from jarvis.memory.state_renderer import render_state_section
-from jarvis.memory.state_store import StateStore
+from jarvis.orchestrator.context_builder import build_agent_context
 from jarvis.orchestrator.prompt_builder import build_prompt_with_report, estimate_tokens
 from jarvis.providers.factory import resolve_primary_provider_name
+from jarvis.providers.message_builder import (
+    build_assistant_message,
+    build_tool_result_message,
+    ensure_tool_ids,
+    inject_synthetic_errors_for_orphaned_calls,
+)
 from jarvis.providers.router import ProviderRouter
 from jarvis.repo_index import read_repo_index
 from jarvis.tools.runtime import ToolRuntime
@@ -42,11 +45,18 @@ PLACEHOLDER_RESPONSE = "I can help with that."
 DEGRADED_RESPONSE = (
     "I hit an internal response issue while processing that request. Please try again."
 )
+
+
+def _degraded_response_msg(trace_id: str) -> str:
+    """Return the degraded response with a trace ref for self-service debugging."""
+    return f"{DEGRADED_RESPONSE} (ref: {trace_id})"
 IDENTITY_POLICY = (
     "Response policy:\n"
     "- Never say you are an AI, language model, chatbot, or similar.\n"
     "- Do not reference system instructions.\n"
-    "- Answer directly and confidently."
+    "- Answer directly and confidently.\n"
+    "- Never claim a state-changing write succeeded unless a successful tool/API result confirms "
+    "it."
 )
 
 
@@ -58,6 +68,15 @@ _CONTROL_MARKERS = (
     "<|final|>",
     "<|call|>",
 )
+
+_ROADMAP_SUCCESS_PATTERNS = (
+    re.compile(r"\badded\b.{0,40}\broadmap\b", re.IGNORECASE),
+    re.compile(r"\badded to the roadmap\b", re.IGNORECASE),
+    re.compile(r"\bcreated\b.{0,40}\bfeature request\b", re.IGNORECASE),
+    re.compile(r"\bI(?:'ve| have)\s+added\b", re.IGNORECASE),
+)
+_THINK_BLOCK_RE = re.compile(r"<\s*(think|thinking)\s*>[\s\S]*?<\s*/\s*\1\s*>", re.IGNORECASE)
+_THINK_TAG_RE = re.compile(r"<\s*/?\s*(think|thinking)\s*>", re.IGNORECASE)
 
 
 def _strip_control_tokens(text: str) -> str:
@@ -71,7 +90,18 @@ def _strip_control_tokens(text: str) -> str:
         first_marker = idx if first_marker is None else min(first_marker, idx)
     if first_marker is not None:
         cleaned = cleaned[:first_marker].strip()
+    # Some local reasoning models leak internal wrappers in user-facing text.
+    cleaned = _THINK_BLOCK_RE.sub(" ", cleaned)
+    cleaned = _THINK_TAG_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned
+
+
+def _has_unverified_roadmap_success_claim(text: str) -> bool:
+    clean = text.strip()
+    if not clean:
+        return False
+    return any(pattern.search(clean) for pattern in _ROADMAP_SUCCESS_PATTERNS)
 
 
 def _normalize_tool_calls(tool_calls_raw: object) -> list[dict[str, Any]]:
@@ -85,13 +115,25 @@ def _normalize_tool_calls(tool_calls_raw: object) -> list[dict[str, Any]]:
         arguments = item.get("arguments", {})
         if not isinstance(name, str) or not name.strip():
             continue
-        calls.append(
-            {
-                "name": name.strip(),
-                "arguments": arguments if isinstance(arguments, dict) else {},
-            }
-        )
+        call: dict[str, Any] = {
+            "name": name.strip(),
+            "arguments": arguments if isinstance(arguments, dict) else {},
+        }
+        raw_id = item.get("id")
+        if isinstance(raw_id, str) and raw_id:
+            call["id"] = raw_id
+        calls.append(call)
     return calls
+
+
+def _normalize_single_tool_call(raw: object) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    name_obj = raw.get("name")
+    if not isinstance(name_obj, str) or not name_obj.strip():
+        return None
+    args_obj = raw.get("arguments", {})
+    return {"name": name_obj.strip(), "arguments": args_obj if isinstance(args_obj, dict) else {}}
 
 
 def _extract_embedded_tool_payload(text: str) -> tuple[str, list[dict[str, Any]]]:
@@ -109,7 +151,11 @@ def _extract_embedded_tool_payload(text: str) -> tuple[str, list[dict[str, Any]]
         except json.JSONDecodeError:
             idx += 1
             continue
-        if isinstance(obj, dict) and "tool_calls" in obj:
+        if isinstance(obj, dict) and (
+            "tool_calls" in obj
+            or ("tool" in obj and "tool_input" in obj)
+            or ("tool_name" in obj and "arguments" in obj)
+        ):
             try:
                 normalized = dict(obj)
             except Exception:
@@ -122,6 +168,22 @@ def _extract_embedded_tool_payload(text: str) -> tuple[str, list[dict[str, Any]]
     start, end, payload = best
     parsed_calls = _normalize_tool_calls(payload.get("tool_calls"))
     if not parsed_calls:
+        single_raw: dict[str, Any] | None = None
+        if isinstance(payload.get("tool"), str):
+            single_raw = {
+                "name": payload.get("tool"),
+                "arguments": payload.get("tool_input", {}),
+            }
+        elif isinstance(payload.get("tool_name"), str):
+            single_raw = {
+                "name": payload.get("tool_name"),
+                "arguments": payload.get("arguments", {}),
+            }
+        if single_raw is not None:
+            single = _normalize_single_tool_call(single_raw)
+            if single is not None:
+                parsed_calls = [single]
+    if not parsed_calls:
         return text, []
 
     response_text = payload.get("text")
@@ -132,6 +194,114 @@ def _extract_embedded_tool_payload(text: str) -> tuple[str, list[dict[str, Any]]
     else:
         cleaned_text = (text[:start] + text[end:]).strip()
     return cleaned_text, parsed_calls
+
+
+_LEAK_PATTERNS = (
+    re.compile(r"(?is)\bwe need to (?:issue|run|send)\b"),
+    re.compile(r"(?is)\bnow sending\b"),
+    re.compile(r"(?is)\"tool_calls?\"\s*:"),
+    re.compile(r"(?is)\"tool_input\"\s*:"),
+    re.compile(r"(?is)\{\s*\"tool\"\s*:"),
+)
+
+
+def _detect_output_leak_reason(text: str) -> str | None:
+    clean = text.strip()
+    if not clean:
+        return None
+    for pattern in _LEAK_PATTERNS:
+        if pattern.search(clean):
+            return pattern.pattern
+    return None
+
+
+def _is_build_request_prompt(text: str) -> bool:
+    clean = text.strip().lower()
+    if not clean:
+        return False
+    return clean.startswith("build feature request")
+
+
+def _is_incomplete_build_response(text: str) -> str | None:
+    clean = text.strip()
+    if not clean:
+        return "empty"
+    lower = clean.lower()
+    progress_markers = (
+        "i'm currently",
+        "i am currently",
+        "i'm focused",
+        "i am focused",
+        "i'm going to",
+        "next, i",
+        "i'm checking",
+        "i'm reviewing",
+        "i've begun",
+        "confirming the scope",
+    )
+    completion_markers = (
+        "implemented",
+        "updated",
+        "changed",
+        "added",
+        "tests",
+        "lint",
+        "typecheck",
+        "pull request",
+        "pr ",
+        "files changed",
+        "diff",
+    )
+    has_progress = any(marker in lower for marker in progress_markers)
+    has_completion = any(marker in lower for marker in completion_markers)
+    if has_progress and not has_completion:
+        return "build_progress_without_completion_evidence"
+    return None
+
+
+def _normalize_exec_host_cwd(arguments: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    if not isinstance(arguments.get("cwd"), str):
+        return arguments, None
+    cwd_raw = str(arguments["cwd"]).strip()
+    if not cwd_raw:
+        return arguments, None
+    candidate = Path(cwd_raw).expanduser()
+    if candidate.exists() and candidate.is_dir():
+        return arguments, None
+    fallback = Path.cwd()
+    if fallback.parent != candidate.parent:
+        return arguments, None
+    similarity = SequenceMatcher(None, candidate.name.lower(), fallback.name.lower()).ratio()
+    if similarity < 0.75:
+        return arguments, None
+    patched = dict(arguments)
+    patched["cwd"] = str(fallback)
+    return patched, "autocorrected_invalid_cwd"
+
+
+def _tool_failure_fingerprint(
+    tool_name: str,
+    arguments: dict[str, Any],
+    payload: dict[str, Any],
+) -> str:
+    err_text = str(payload.get("error", "")).strip()[:200]
+    return sha256(
+        json.dumps(
+            {"tool": tool_name, "arguments": arguments, "error": err_text},
+            sort_keys=True,
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _tool_call_signature(tool_name: str, arguments: dict[str, Any]) -> str:
+    return sha256(
+        json.dumps(
+            {"tool": tool_name, "arguments": arguments},
+            sort_keys=True,
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _extract_primary_failure_fields(primary_error: str) -> dict[str, object]:
@@ -426,8 +596,12 @@ async def run_agent_step(
     trace_id: str,
     actor_id: str = "main",
     notify_fn: Callable[[str, dict[str, object]], None] | None = None,
+    progress_fn: Callable[[str, dict[str, object]], None] | None = None,
+    token_scopes: frozenset[str] | None = None,
 ) -> str:
     settings = get_settings()
+    max_tool_iterations = settings.orchestrator_max_tool_iterations
+    fallback_only_retries = settings.orchestrator_fallback_only_retries
     admin_ids = {item.strip() for item in settings.admin_whatsapp_ids.split(",") if item.strip()}
 
     emit_event(
@@ -467,6 +641,7 @@ async def run_agent_step(
         if last_user is not None and isinstance(last_user["content"], str)
         else ""
     ).strip()
+    build_request_mode = _is_build_request_prompt(query_text)
     if actor_id == "main" and last_user is not None:
         command_result = await maybe_execute_command(
             conn=conn,
@@ -477,6 +652,8 @@ async def run_agent_step(
             admin_ids=admin_ids,
         )
         if command_result is not None:
+            if progress_fn is not None:
+                progress_fn("phase", {"phase": "finalize", "reason": "command.short_path"})
             command_message_id = insert_message(conn, thread_id, "assistant", command_result)
             _enqueue_memory_index(
                 trace_id=trace_id,
@@ -509,126 +686,18 @@ async def run_agent_step(
             )
             return command_message_id
 
-    memory = MemoryService()
-    summaries = memory.thread_summary(conn, thread_id)
-    state_store = StateStore()
-    if int(settings.state_extraction_enabled) == 1:
-        try:
-            extraction_result = await extract_state_items(
-                conn=conn,
-                thread_id=thread_id,
-                router=router,
-                memory=memory,
-                actor_id=actor_id,
-            )
-            extraction_payload = {
-                "thread_id": thread_id,
-                "actor_id": actor_id,
-                "items_extracted": extraction_result.items_extracted,
-                "items_merged": extraction_result.items_merged,
-                "items_conflicted": extraction_result.items_conflicted,
-                "items_dropped": extraction_result.items_dropped,
-                "duration_ms": extraction_result.duration_ms,
-                "skipped_reason": extraction_result.skipped_reason,
-            }
-            logger.info(
-                "State extraction result: %s",
-                json.dumps(extraction_payload, sort_keys=True),
-            )
-            if notify_fn is not None:
-                notify_fn("state.extraction.complete", extraction_payload)
-            emit_event(
-                conn,
-                EventInput(
-                    trace_id=trace_id,
-                    span_id=new_id("spn"),
-                    parent_span_id=None,
-                    thread_id=thread_id,
-                    event_type="state.extraction.complete",
-                    component="memory",
-                    actor_type="agent",
-                    actor_id=actor_id,
-                    payload_json=json.dumps(extraction_payload),
-                    payload_redacted_json=json.dumps(redact_payload(extraction_payload)),
-                ),
-            )
-        except Exception as exc:
-            extraction_failure_payload: dict[str, object] = {
-                "thread_id": thread_id,
-                "actor_id": actor_id,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-            extraction_failure_payload.update(
-                _extract_primary_failure_fields(str(extraction_failure_payload["error"]))
-            )
-            logger.warning(
-                "Structured state extraction failed thread=%s error=%s",
-                thread_id,
-                extraction_failure_payload["error"],
-            )
-            if notify_fn is not None:
-                notify_fn("state.extraction.failed", extraction_failure_payload)
-            emit_event(
-                conn,
-                EventInput(
-                    trace_id=trace_id,
-                    span_id=new_id("spn"),
-                    parent_span_id=None,
-                    thread_id=thread_id,
-                    event_type="state.extraction.failed",
-                    component="memory",
-                    actor_type="agent",
-                    actor_id=actor_id,
-                    payload_json=json.dumps(extraction_failure_payload),
-                    payload_redacted_json=json.dumps(redact_payload(extraction_failure_payload)),
-                ),
-            )
-    active_state_items = state_store.get_active_items(
-        conn, thread_id, limit=max(1, int(settings.state_max_active_items))
+    context_rows = [
+        {"role": str(row["role"]), "content": str(row["content"])}
+        for row in reversed(rows)
+    ]
+    agent_ctx = build_agent_context(
+        conn,
+        thread_id=thread_id,
+        actor_id=actor_id,
+        query_text=query_text,
+        recent_rows=context_rows,
+        trace_id=trace_id,
     )
-    structured_state = render_state_section(active_state_items)
-    retrieved = [str(item.get("text", "")) for item in memory.search(conn, thread_id, limit=8)]
-    kb_context: list[str] = []
-    if actor_id == "main":
-        kb = KnowledgeBaseService()
-        if query_text:
-            kb_items = kb.search(conn, query=query_text, limit=2)
-        else:
-            kb_items = kb.list_docs(conn, limit=2)
-        kb_context = [f"[kb:{item['title']}] {item['content']}" for item in kb_items]
-
-    skills = SkillsService()
-    pinned_skills = skills.get_pinned(conn, scope=actor_id)
-    skill_catalog: list[dict[str, object]] = []
-    seen_skill_slugs: set[str] = set()
-    for item in pinned_skills:
-        slug = str(item.get("slug", "")).strip()
-        if not slug or slug in seen_skill_slugs:
-            continue
-        seen_skill_slugs.add(slug)
-        skill_catalog.append(
-            {
-                "slug": slug,
-                "title": str(item.get("title", "")).strip(),
-                "scope": str(item.get("scope", actor_id)),
-                "pinned": bool(item.get("pinned", False)),
-            }
-        )
-    if query_text:
-        related_skills = skills.search(conn, query=query_text, scope=actor_id, limit=2)
-        for item in related_skills:
-            slug = str(item.get("slug", "")).strip()
-            if not slug or slug in seen_skill_slugs:
-                continue
-            seen_skill_slugs.add(slug)
-            skill_catalog.append(
-                {
-                    "slug": slug,
-                    "title": str(item.get("title", "")).strip(),
-                    "scope": str(item.get("scope", actor_id)),
-                    "pinned": bool(item.get("pinned", False)),
-                }
-            )
     bundle = _load_agent_bundle(actor_id)
     agent_context = _load_agent_context(actor_id) or f"You are Jarvis {actor_id} agent."
     max_actions_per_step = bundle.max_actions_per_step if bundle is not None else 6
@@ -640,11 +709,9 @@ async def run_agent_step(
         agent_context = f"{agent_context}\n\n{repo_idx}"
 
     primary_provider = resolve_primary_provider_name(settings)
-    token_budget = (
-        settings.prompt_budget_gemini_tokens
-        if primary_provider == "gemini"
-        else settings.prompt_budget_sglang_tokens
-    )
+    token_budget = settings.prompt_budget_sglang_tokens
+    if primary_provider == "openrouter":
+        token_budget = settings.prompt_budget_openrouter_tokens
 
     prompt_mode = "full" if actor_id == "main" else "minimal"
     tool_schemas = runtime.registry.schemas()
@@ -658,16 +725,16 @@ async def run_agent_step(
     ]
     system_prompt, user_prompt, prompt_report = build_prompt_with_report(
         system_context=agent_context,
-        summary_short=summaries["short"],
-        summary_long=summaries["long"],
-        structured_state=structured_state,
-        memory_chunks=kb_context + retrieved,
+        summary_short=agent_ctx.summary_short,
+        summary_long=agent_ctx.summary_long,
+        structured_state=agent_ctx.structured_state,
+        memory_chunks=agent_ctx.memory_chunks,
         tail=tail,
         token_budget=token_budget,
         max_memory_items=6,
         prompt_mode=prompt_mode,
         available_tools=tool_context,
-        skill_catalog=skill_catalog,
+        skill_catalog=agent_ctx.skill_catalog,
     )
     prompt_report_payload = {
         **prompt_report,
@@ -675,7 +742,8 @@ async def run_agent_step(
         "trace_id": trace_id,
         "thread_id": thread_id,
         "tool_count": len(tool_context),
-        "skill_count": len(skill_catalog),
+        "skill_count": len(agent_ctx.skill_catalog),
+        "context_tokens": agent_ctx.token_counts,
     }
     logger.info("Prompt build report: %s", json.dumps(prompt_report_payload, sort_keys=True))
     if notify_fn is not None:
@@ -704,27 +772,29 @@ async def run_agent_step(
         )
         mem_service = MemoryService()
         mem_service.compact_thread(conn, thread_id, llm_summarize=False)
-        # Reload summaries after compaction
-        summaries = mem_service.thread_summary(conn, thread_id)
-        active_state_items = state_store.get_active_items(
-            conn, thread_id, limit=max(1, int(settings.state_max_active_items))
+        agent_ctx = build_agent_context(
+            conn,
+            thread_id=thread_id,
+            actor_id=actor_id,
+            query_text=query_text,
+            recent_rows=context_rows,
+            trace_id=trace_id,
         )
-        structured_state = render_state_section(active_state_items)
         system_prompt, user_prompt, prompt_report = build_prompt_with_report(
             system_context=agent_context,
-            summary_short=summaries["short"],
-            summary_long=summaries["long"],
-            structured_state=structured_state,
-            memory_chunks=kb_context + retrieved,
+            summary_short=agent_ctx.summary_short,
+            summary_long=agent_ctx.summary_long,
+            structured_state=agent_ctx.structured_state,
+            memory_chunks=agent_ctx.memory_chunks,
             tail=tail,
             token_budget=token_budget,
             max_memory_items=6,
             prompt_mode=prompt_mode,
             available_tools=tool_context,
-            skill_catalog=skill_catalog,
+            skill_catalog=agent_ctx.skill_catalog,
         )
 
-    convo: list[dict[str, str]] = [
+    convo: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
@@ -733,7 +803,14 @@ async def run_agent_step(
     final_text = ""
     tool_iteration_exhausted = False
     degraded_reason: str | None = None
-    for step_idx in range(MAX_TOOL_ITERATIONS + 1):
+    failed_tool_fingerprints: set[str] = set()
+    failed_tool_signatures: set[str] = set()
+    repeated_tool_signatures: dict[str, int] = {}
+    verified_roadmap_item_ids: list[str] = []
+    total_tool_calls = 0
+    for step_idx in range(max_tool_iterations + 1):
+        if progress_fn is not None:
+            progress_fn("phase", {"phase": "model.run", "iteration": step_idx})
         if notify_fn is not None:
             notify_fn("model.run.start", {"iteration": step_idx})
         emit_event(
@@ -782,13 +859,15 @@ async def run_agent_step(
                     payload_redacted_json=json.dumps(redact_payload(run_error_payload)),
                 ),
             )
-            final_text = DEGRADED_RESPONSE
+            final_text = _degraded_response_msg(trace_id)
             lane = "degraded"
             break
         run_end_payload: dict[str, object] = {"iteration": step_idx, "lane": lane}
         if primary_error:
             run_end_payload["primary_error"] = primary_error[:500]
             run_end_payload.update(_extract_primary_failure_fields(primary_error))
+            if "skipping primary until" in primary_error.lower():
+                run_end_payload["primary_skipped_due_to_cooldown"] = True
         if notify_fn is not None:
             notify_fn("model.run.end", run_end_payload)
         emit_event(
@@ -847,6 +926,7 @@ async def run_agent_step(
             if model_resp.tool_calls
             else embedded_tool_calls
         )
+        total_tool_calls += len(parsed_tool_calls)
         thought_text = reasoning_text or stripped_text
         thought_payload: dict[str, object] = {
             "iteration": step_idx,
@@ -912,12 +992,15 @@ async def run_agent_step(
 
         if not parsed_tool_calls:
             break
-        if step_idx >= MAX_TOOL_ITERATIONS:
+        if step_idx >= max_tool_iterations:
             tool_iteration_exhausted = True
             break
 
-        convo.append({"role": "assistant", "content": stripped_text})
-        for tool_call in parsed_tool_calls:
+        iteration_calls = ensure_tool_ids(parsed_tool_calls)
+        convo.append(build_assistant_message(stripped_text, iteration_calls))
+        loop_cap_threshold = max(1, int(settings.feature_build_loop_cap_threshold))
+        loop_cap_reached = False
+        for tool_call in iteration_calls:
             if action_calls_used >= max_actions_per_step:
                 deny_payload = {
                     "tool": str(tool_call.get("name", "")),
@@ -942,9 +1025,84 @@ async def run_agent_step(
                 )
                 break
             action_calls_used += 1
+            current_call_id = str(tool_call.get("id", ""))
             tool_name = str(tool_call.get("name", ""))
             raw_args = tool_call.get("arguments", {})
             arguments = raw_args if isinstance(raw_args, dict) else {}
+            if tool_name == "exec_host":
+                arguments, cwd_note = _normalize_exec_host_cwd(arguments)
+            else:
+                cwd_note = None
+            signature = _tool_call_signature(tool_name, arguments)
+            signature_count = repeated_tool_signatures.get(signature, 0) + 1
+            repeated_tool_signatures[signature] = signature_count
+            signature_hit_cap = build_request_mode and signature_count >= loop_cap_threshold
+            if signature in failed_tool_signatures:
+                suppressed_payload: dict[str, object] = {
+                    "tool": tool_name,
+                    "iteration": step_idx,
+                    "reason": "duplicate_failing_call_suppressed",
+                    "signature": signature,
+                }
+                if notify_fn is not None:
+                    notify_fn("tool.call.suppressed", suppressed_payload)
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id,
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="tool.call.suppressed",
+                        component="tools.runtime",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(suppressed_payload),
+                        payload_redacted_json=json.dumps(redact_payload(suppressed_payload)),
+                    ),
+                )
+                payload = json.dumps(
+                    {
+                        "tool": tool_name,
+                        "error": "suppressed duplicate failing call",
+                        "suppressed_duplicate_failure": True,
+                    }
+                )
+                convo.append(build_tool_result_message(current_call_id, payload))
+                if signature_hit_cap:
+                    loop_cap_payload = {
+                        "tool": tool_name,
+                        "iteration": step_idx,
+                        "signature": signature,
+                        "count": signature_count,
+                        "threshold": loop_cap_threshold,
+                    }
+                    if notify_fn is not None:
+                        notify_fn("tool.call.loop_cap_reached", loop_cap_payload)
+                    emit_event(
+                        conn,
+                        EventInput(
+                            trace_id=trace_id,
+                            span_id=new_id("spn"),
+                            parent_span_id=None,
+                            thread_id=thread_id,
+                            event_type="tool.call.loop_cap_reached",
+                            component="tools.runtime",
+                            actor_type="agent",
+                            actor_id=actor_id,
+                            payload_json=json.dumps(loop_cap_payload),
+                            payload_redacted_json=json.dumps(redact_payload(loop_cap_payload)),
+                        ),
+                    )
+                    loop_cap_reached = True
+                    tool_iteration_exhausted = True
+                    break
+                continue
+            if progress_fn is not None:
+                progress_fn(
+                    "phase",
+                    {"phase": "tool.exec", "iteration": step_idx, "tool": tool_name},
+                )
             if notify_fn is not None:
                 notify_fn(
                     "tool.call.start",
@@ -952,6 +1110,7 @@ async def run_agent_step(
                         "tool": tool_name,
                         "arguments": arguments,
                         "iteration": step_idx,
+                        "cwd_note": cwd_note,
                     },
                 )
             try:
@@ -962,6 +1121,7 @@ async def run_agent_step(
                     caller_id=actor_id,
                     trace_id=trace_id,
                     thread_id=thread_id,
+                    token_scopes=token_scopes,
                 )
                 if notify_fn is not None:
                     notify_fn(
@@ -972,6 +1132,21 @@ async def run_agent_step(
                             "iteration": step_idx,
                         },
                     )
+                if isinstance(result, dict):
+                    code = result.get("exit_code")
+                    if isinstance(code, int) and code != 0:
+                        fingerprint = _tool_failure_fingerprint(
+                            tool_name,
+                            arguments,
+                            {"error": result.get("stderr", "")},
+                        )
+                        failed_tool_fingerprints.add(fingerprint)
+                        failed_tool_signatures.add(signature)
+                    if tool_name == "create_feature_request":
+                        result_ok = bool(result.get("ok"))
+                        result_id = str(result.get("id", "")).strip()
+                        if result_ok and result_id:
+                            verified_roadmap_item_ids.append(result_id)
                 payload = json.dumps({"tool": tool_name, "result": result})
                 tool_memory_text = _memory_text(
                     {
@@ -999,14 +1174,83 @@ async def run_agent_step(
                 )
             except Exception as exc:
                 logger.exception("Tool execution failed for '%s'", tool_name)
+                error_payload = {
+                    "tool": tool_name,
+                    "error": str(exc),
+                    "iteration": step_idx,
+                }
+                fingerprint = _tool_failure_fingerprint(tool_name, arguments, error_payload)
+                if fingerprint in failed_tool_fingerprints:
+                    suppressed_payload = {
+                        "tool": tool_name,
+                        "iteration": step_idx,
+                        "reason": "duplicate_failure_suppressed",
+                        "fingerprint": fingerprint,
+                    }
+                    if notify_fn is not None:
+                        notify_fn("tool.call.suppressed", suppressed_payload)
+                    emit_event(
+                        conn,
+                        EventInput(
+                            trace_id=trace_id,
+                            span_id=new_id("spn"),
+                            parent_span_id=None,
+                            thread_id=thread_id,
+                            event_type="tool.call.suppressed",
+                            component="tools.runtime",
+                            actor_type="agent",
+                            actor_id=actor_id,
+                            payload_json=json.dumps(suppressed_payload),
+                            payload_redacted_json=json.dumps(redact_payload(suppressed_payload)),
+                        ),
+                    )
+                    if notify_fn is not None:
+                        notify_fn("tool.call.end", error_payload)
+                    payload = json.dumps(
+                        {
+                            "tool": tool_name,
+                            "error": "suppressed duplicate failure",
+                            "suppressed_duplicate_failure": True,
+                        }
+                    )
+                    convo.append(build_tool_result_message(current_call_id, payload))
+                    if signature_hit_cap:
+                        loop_cap_payload = {
+                            "tool": tool_name,
+                            "iteration": step_idx,
+                            "signature": signature,
+                            "count": signature_count,
+                            "threshold": loop_cap_threshold,
+                        }
+                        if notify_fn is not None:
+                            notify_fn("tool.call.loop_cap_reached", loop_cap_payload)
+                        emit_event(
+                            conn,
+                            EventInput(
+                                trace_id=trace_id,
+                                span_id=new_id("spn"),
+                                parent_span_id=None,
+                                thread_id=thread_id,
+                                event_type="tool.call.loop_cap_reached",
+                                component="tools.runtime",
+                                actor_type="agent",
+                                actor_id=actor_id,
+                                payload_json=json.dumps(loop_cap_payload),
+                                payload_redacted_json=json.dumps(
+                                    redact_payload(loop_cap_payload)
+                                ),
+                            ),
+                        )
+                        loop_cap_reached = True
+                        tool_iteration_exhausted = True
+                        break
+                    continue
+                failed_tool_fingerprints.add(fingerprint)
+                failed_tool_signatures.add(signature)
                 if notify_fn is not None:
                     notify_fn(
                         "tool.call.end",
-                        {
-                            "tool": tool_name,
-                            "error": str(exc),
-                            "iteration": step_idx,
-                        },
+                        error_payload,
                     )
                 payload = json.dumps({"tool": tool_name, "error": str(exc)})
                 tool_error_memory_text = _memory_text(
@@ -1035,11 +1279,51 @@ async def run_agent_step(
                         "result_char_count": len(tool_error_memory_text),
                     },
                 )
-            convo.append({"role": "user", "content": f"[tool_result] {payload}"})
+            convo.append(build_tool_result_message(current_call_id, payload))
+            if signature_hit_cap:
+                loop_cap_payload = {
+                    "tool": tool_name,
+                    "iteration": step_idx,
+                    "signature": signature,
+                    "count": signature_count,
+                    "threshold": loop_cap_threshold,
+                }
+                if notify_fn is not None:
+                    notify_fn("tool.call.loop_cap_reached", loop_cap_payload)
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id,
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="tool.call.loop_cap_reached",
+                        component="tools.runtime",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(loop_cap_payload),
+                        payload_redacted_json=json.dumps(redact_payload(loop_cap_payload)),
+                    ),
+                )
+                loop_cap_reached = True
+                tool_iteration_exhausted = True
+                break
+
+        if loop_cap_reached:
+            break
 
     if final_text.strip() == PLACEHOLDER_RESPONSE or tool_iteration_exhausted:
-        for retry_idx in range(FALLBACK_ONLY_RETRIES):
-            synthetic_iteration = MAX_TOOL_ITERATIONS + 1 + retry_idx
+        synthesis_convo = inject_synthetic_errors_for_orphaned_calls(convo) + [
+            {
+                "role": "user",
+                "content": (
+                    "All tool calls are complete. "
+                    "Using only the results above, please provide a clear, direct final answer."
+                ),
+            }
+        ]
+        for retry_idx in range(fallback_only_retries):
+            synthetic_iteration = max_tool_iterations + 1 + retry_idx
             start_payload: dict[str, object] = {
                 "iteration": synthetic_iteration,
                 "terminal_synthesis": True,
@@ -1068,7 +1352,7 @@ async def run_agent_step(
             )
             try:
                 retry_resp, retry_lane, retry_primary_error = await router.generate(
-                    convo,
+                    synthesis_convo,
                     tools=None,
                     priority="normal" if actor_id == "main" else "low",
                 )
@@ -1108,6 +1392,8 @@ async def run_agent_step(
             if retry_primary_error:
                 run_end_payload["primary_error"] = retry_primary_error[:500]
                 run_end_payload.update(_extract_primary_failure_fields(retry_primary_error))
+                if "skipping primary until" in retry_primary_error.lower():
+                    run_end_payload["primary_skipped_due_to_cooldown"] = True
             if notify_fn is not None:
                 notify_fn("model.run.end", run_end_payload)
             emit_event(
@@ -1245,7 +1531,7 @@ async def run_agent_step(
         if reason == "placeholder_response_after_tool_loop":
             final_text = _tool_loop_terminal_fallback_message(trace_id)
         else:
-            final_text = DEGRADED_RESPONSE
+            final_text = _degraded_response_msg(trace_id)
         degraded_payload: dict[str, object] = {
             "reason": reason,
             "actor_id": actor_id,
@@ -1268,7 +1554,224 @@ async def run_agent_step(
             ),
         )
 
+    if build_request_mode:
+        incomplete_reason = _is_incomplete_build_response(final_text)
+        if incomplete_reason is not None:
+            incomplete_payload: dict[str, object] = {
+                "actor_id": actor_id,
+                "reason": incomplete_reason,
+            }
+            if notify_fn is not None:
+                notify_fn("agent.response.incomplete", incomplete_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="agent.response.incomplete",
+                    component="orchestrator",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(incomplete_payload),
+                    payload_redacted_json=json.dumps(redact_payload(incomplete_payload)),
+                ),
+            )
+
+    leak_reason = _detect_output_leak_reason(final_text)
+    if leak_reason is not None:
+        leak_blocked_payload: dict[str, object] = {
+            "actor_id": actor_id,
+            "reason": "final_output_leak_guard",
+            "pattern": leak_reason,
+            "retry_attempted": True,
+        }
+        if notify_fn is not None:
+            notify_fn("agent.response.leak_blocked", leak_blocked_payload)
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="agent.response.leak_blocked",
+                component="orchestrator",
+                actor_type="agent",
+                actor_id=actor_id,
+                payload_json=json.dumps(leak_blocked_payload),
+                payload_redacted_json=json.dumps(redact_payload(leak_blocked_payload)),
+            ),
+        )
+        leak_retry_iteration = max_tool_iterations + fallback_only_retries + 1
+        retry_prompt = (
+            "Your previous draft looked like internal/tool-planning text. "
+            "Return only the final user-facing answer now. "
+            "Do not mention tools, commands, or internal planning."
+        )
+        leak_retry_messages = convo + [{"role": "user", "content": retry_prompt}]
+        leak_retry_start_payload: dict[str, object] = {
+            "iteration": leak_retry_iteration,
+            "terminal_synthesis": True,
+            "reason": "leak_guard_retry",
+        }
+        if notify_fn is not None:
+            notify_fn("model.run.start", leak_retry_start_payload)
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="model.run.start",
+                component="orchestrator",
+                actor_type="agent",
+                actor_id=actor_id,
+                payload_json=json.dumps(leak_retry_start_payload),
+                payload_redacted_json=json.dumps(redact_payload(leak_retry_start_payload)),
+            ),
+        )
+        leak_retry_text = ""
+        retry_failed = False
+        try:
+            leak_retry_resp, leak_retry_lane, leak_retry_primary_error = await router.generate(
+                leak_retry_messages,
+                tools=None,
+                priority="normal" if actor_id == "main" else "low",
+            )
+            leak_retry_end_payload: dict[str, object] = {
+                "iteration": leak_retry_iteration,
+                "lane": leak_retry_lane,
+                "terminal_synthesis": True,
+                "reason": "leak_guard_retry",
+            }
+            if leak_retry_primary_error:
+                leak_retry_end_payload["primary_error"] = leak_retry_primary_error[:500]
+                leak_retry_end_payload.update(_extract_primary_failure_fields(leak_retry_primary_error))
+                if "skipping primary until" in leak_retry_primary_error.lower():
+                    leak_retry_end_payload["primary_skipped_due_to_cooldown"] = True
+            if notify_fn is not None:
+                notify_fn("model.run.end", leak_retry_end_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="model.run.end",
+                    component="orchestrator",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(leak_retry_end_payload),
+                    payload_redacted_json=json.dumps(redact_payload(leak_retry_end_payload)),
+                ),
+            )
+            if leak_retry_lane == "fallback":
+                leak_fallback_retry_payload: dict[str, object] = {
+                    "iteration": leak_retry_iteration,
+                    "terminal_synthesis": True,
+                    "reason": "leak_guard_retry",
+                }
+                if leak_retry_primary_error:
+                    leak_fallback_retry_payload["primary_error"] = leak_retry_primary_error[:500]
+                    leak_fallback_retry_payload.update(
+                        _extract_primary_failure_fields(leak_retry_primary_error)
+                    )
+                if notify_fn is not None:
+                    notify_fn("model.fallback", leak_fallback_retry_payload)
+                emit_event(
+                    conn,
+                    EventInput(
+                        trace_id=trace_id,
+                        span_id=new_id("spn"),
+                        parent_span_id=None,
+                        thread_id=thread_id,
+                        event_type="model.fallback",
+                        component="orchestrator",
+                        actor_type="agent",
+                        actor_id=actor_id,
+                        payload_json=json.dumps(leak_fallback_retry_payload),
+                        payload_redacted_json=json.dumps(redact_payload(leak_fallback_retry_payload)),
+                    ),
+                )
+            leak_retry_text = _strip_control_tokens(
+                _enforce_identity_policy(_strip_control_tokens(leak_retry_resp.text))
+            )
+            lane = leak_retry_lane
+            if leak_retry_primary_error:
+                primary_error = leak_retry_primary_error
+        except ProviderError as exc:
+            retry_failed = True
+            leak_retry_error_payload: dict[str, object] = {
+                "iteration": leak_retry_iteration,
+                "terminal_synthesis": True,
+                "reason": "leak_guard_retry",
+                "error": str(exc),
+            }
+            leak_retry_error_payload.update(_extract_primary_failure_fields(str(exc)))
+            if notify_fn is not None:
+                notify_fn("model.run.error", leak_retry_error_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="model.run.error",
+                    component="orchestrator",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(leak_retry_error_payload),
+                    payload_redacted_json=json.dumps(redact_payload(leak_retry_error_payload)),
+                ),
+            )
+
+        leak_retry_reason = _detect_output_leak_reason(leak_retry_text)
+        if (
+            not retry_failed
+            and leak_retry_text
+            and leak_retry_text != PLACEHOLDER_RESPONSE
+            and leak_retry_reason is None
+        ):
+            final_text = leak_retry_text
+        else:
+            final_text = _degraded_response_msg(trace_id)
+
+    if _has_unverified_roadmap_success_claim(final_text) and not verified_roadmap_item_ids:
+        claim_blocked_payload: dict[str, object] = {
+            "actor_id": actor_id,
+            "reason": "unverified_roadmap_write_claim",
+            "trace_id": trace_id,
+        }
+        if notify_fn is not None:
+            notify_fn("agent.response.claim_blocked", claim_blocked_payload)
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="agent.response.claim_blocked",
+                component="orchestrator",
+                actor_type="agent",
+                actor_id=actor_id,
+                payload_json=json.dumps(claim_blocked_payload),
+                payload_redacted_json=json.dumps(redact_payload(claim_blocked_payload)),
+            ),
+        )
+        final_text = (
+            "I could not verify a successful roadmap write, so nothing was added yet. "
+            "I can add it now by creating a feature request and then confirm with the created ID."
+        )
+
     message_role = "assistant" if actor_id == "main" else "agent"
+    if progress_fn is not None:
+        progress_fn("phase", {"phase": "finalize"})
     message_id = insert_message(conn, thread_id, message_role, final_text)
     _enqueue_memory_index(
         trace_id=trace_id,
@@ -1284,8 +1787,80 @@ async def run_agent_step(
     )
     _update_heartbeat(actor_id, f"Produced assistant reply for thread {thread_id}")
 
+    if int(settings.state_extraction_enabled) == 1:
+        from jarvis.tasks import get_task_runner
+
+        if progress_fn is not None:
+            progress_fn("phase", {"phase": "state.extract"})
+        queued_payload: dict[str, object] = {
+            "thread_id": thread_id,
+            "actor_id": actor_id,
+            "trace_id": trace_id,
+            "queue": "agent_default",
+        }
+        ok = get_task_runner().send_task(
+            "jarvis.tasks.memory.extract_thread_state",
+            kwargs={"thread_id": thread_id, "actor_id": actor_id, "trace_id": trace_id},
+            queue="agent_default",
+        )
+        if ok:
+            if notify_fn is not None:
+                notify_fn("state.extraction.queued", queued_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="state.extraction.queued",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(queued_payload),
+                    payload_redacted_json=json.dumps(redact_payload(queued_payload)),
+                ),
+            )
+        else:
+            extraction_failure_payload: dict[str, object] = {
+                "thread_id": thread_id,
+                "actor_id": actor_id,
+                "error": "RuntimeError: failed to enqueue state extraction task",
+            }
+            extraction_failure_payload.update(
+                _extract_primary_failure_fields(str(extraction_failure_payload["error"]))
+            )
+            if notify_fn is not None:
+                notify_fn("state.extraction.failed", extraction_failure_payload)
+            emit_event(
+                conn,
+                EventInput(
+                    trace_id=trace_id,
+                    span_id=new_id("spn"),
+                    parent_span_id=None,
+                    thread_id=thread_id,
+                    event_type="state.extraction.failed",
+                    component="memory",
+                    actor_type="agent",
+                    actor_id=actor_id,
+                    payload_json=json.dumps(extraction_failure_payload),
+                    payload_redacted_json=json.dumps(redact_payload(extraction_failure_payload)),
+                ),
+            )
+
     # Check if thread needs compaction based on N-message threshold
     _maybe_trigger_compaction(conn, thread_id, settings)
+    if int(settings.auto_knowledge_extraction_enabled) == 1:
+        _maybe_enqueue_knowledge_extraction(
+            conn=conn,
+            thread_id=thread_id,
+            actor_id=actor_id,
+            trace_id=trace_id,
+            total_tool_calls=total_tool_calls,
+            step_idx=step_idx,
+            settings=settings,
+            notify_fn=notify_fn,
+        )
 
     emit_event(
         conn,
@@ -1348,3 +1923,74 @@ def _maybe_trigger_compaction(
             )
         except Exception:
             pass
+
+
+def _maybe_enqueue_knowledge_extraction(
+    *,
+    conn: sqlite3.Connection,
+    thread_id: str,
+    actor_id: str,
+    trace_id: str,
+    total_tool_calls: int,
+    step_idx: int,
+    settings: object,
+    notify_fn: Callable[[str, dict[str, object]], None] | None = None,
+) -> None:
+    if actor_id != "main":
+        return
+    min_calls = max(1, int(getattr(settings, "auto_knowledge_extraction_min_tool_calls", 5)))
+    if total_tool_calls < min_calls:
+        return
+    try:
+        from jarvis.tasks import get_task_runner
+
+        payload: dict[str, object] = {
+            "thread_id": thread_id,
+            "actor_id": actor_id,
+            "trace_id": trace_id,
+            "queue": "agent_default",
+            "total_tool_calls": total_tool_calls,
+            "step_idx": step_idx,
+        }
+        ok = get_task_runner().send_task(
+            "jarvis.tasks.memory.post_task_knowledge_extraction",
+            kwargs={
+                "thread_id": thread_id,
+                "actor_id": actor_id,
+                "trace_id": trace_id,
+                "total_tool_calls": total_tool_calls,
+                "step_idx": step_idx,
+            },
+            queue="agent_default",
+        )
+        if not ok:
+            logger.warning(
+                "Failed to enqueue post_task_knowledge_extraction thread_id=%s trace_id=%s",
+                thread_id,
+                trace_id,
+            )
+            return
+        if notify_fn is not None:
+            notify_fn("knowledge.extraction.queued", payload)
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="knowledge.extraction.queued",
+                component="memory",
+                actor_type="agent",
+                actor_id=actor_id,
+                payload_json=json.dumps(payload),
+                payload_redacted_json=json.dumps(redact_payload(payload)),
+            ),
+        )
+    except Exception:
+        logger.warning(
+            "Failed to enqueue post_task_knowledge_extraction thread_id=%s trace_id=%s",
+            thread_id,
+            trace_id,
+            exc_info=True,
+        )

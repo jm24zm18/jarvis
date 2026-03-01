@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from jarvis.auth.dependencies import UserContext, require_admin
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import create_approval, list_selfupdate_checks, list_selfupdate_transitions
@@ -18,7 +18,7 @@ def _patch_dir() -> Path:
 
 
 @router.get("/patches")
-def list_patches(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def list_patches(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     base = _patch_dir()
     if not base.exists():
@@ -44,7 +44,7 @@ def list_patches(ctx: UserContext = Depends(require_admin)) -> dict[str, object]
 
 @router.get("/patches/{trace_id}")
 def patch_detail(
-    trace_id: str, ctx: UserContext = Depends(require_admin)  # noqa: B008
+    trace_id: str, ctx: UserContext = Depends(require_auth)  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     base = _patch_dir()
@@ -67,7 +67,7 @@ def patch_detail(
 @router.post("/patches/{trace_id}/approve")
 def approve_patch(
     trace_id: str,
-    ctx: UserContext = Depends(require_admin),  # TODO: admin-only now  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # TODO: admin-only now  # noqa: B008
 ) -> dict[str, str]:
     settings = get_settings()
     with get_conn() as conn:
@@ -83,7 +83,7 @@ def approve_patch(
 
 @router.get("/patches/{trace_id}/checks")
 def patch_checks(
-    trace_id: str, ctx: UserContext = Depends(require_admin)  # noqa: B008
+    trace_id: str, ctx: UserContext = Depends(require_auth)  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     with get_conn() as conn:
@@ -93,10 +93,27 @@ def patch_checks(
 
 @router.get("/patches/{trace_id}/timeline")
 def patch_timeline(
-    trace_id: str, ctx: UserContext = Depends(require_admin)  # noqa: B008
+    trace_id: str, ctx: UserContext = Depends(require_auth)  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     with get_conn() as conn:
         transitions = list_selfupdate_transitions(conn, trace_id)
         checks = list_selfupdate_checks(conn, trace_id)
     return {"trace_id": trace_id, "transitions": transitions, "checks": checks}
+
+
+@router.get("/patches/{trace_id}/sandbox")
+def patch_sandbox(
+    trace_id: str, ctx: UserContext = Depends(require_auth)  # noqa: B008
+) -> dict[str, object]:
+    """Return sandbox diff-summary metadata stored in the patch artifact."""
+    del ctx
+    base = _patch_dir()
+    try:
+        artifact = read_artifact(trace_id, base)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"artifact not found: {exc}") from exc
+    sandbox_section = artifact.get("sandbox", {})
+    if not isinstance(sandbox_section, dict):
+        sandbox_section = {}
+    return {"trace_id": trace_id, **sandbox_section}

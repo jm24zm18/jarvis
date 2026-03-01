@@ -1,4 +1,4 @@
-"""WhatsApp channel adapter implementation (Evolution-first, Cloud fallback)."""
+"""WhatsApp channel adapter implementation (Baileys-first, Cloud fallback)."""
 
 from __future__ import annotations
 
@@ -33,6 +33,13 @@ class WhatsAppAdapter:
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(url, json=payload, headers=headers)
         return response.status_code
+
+    async def send_presence(self, recipient: str, presence: str = "composing") -> int:
+        """Send typing indicator (composing/paused) to a WhatsApp contact."""
+        baileys = BaileysClient()
+        if baileys.enabled:
+            return await baileys.send_presence(recipient=recipient, presence=presence)
+        return 200  # Cloud API doesn't support presence updates
 
     def parse_inbound(self, payload: dict[str, Any]) -> list[InboundMessage]:
         if self._looks_like_evolution(payload):
@@ -77,7 +84,10 @@ class WhatsAppAdapter:
         event = str(payload.get("event") or "")
         if event != "messages.upsert":
             return []
-        records = self._evolution_records(payload.get("data"))
+        data = payload.get("data")
+        if isinstance(data, dict) and str(data.get("type") or "").lower() == "append":
+            return []  # skip history-sync flood
+        records = self._evolution_records(data)
         messages: list[InboundMessage] = []
         for data in records:
             parsed = self._parse_evolution_record(payload, data)
@@ -90,11 +100,13 @@ class WhatsAppAdapter:
     ) -> InboundMessage | None:
         key = data.get("key", {}) if isinstance(data.get("key"), dict) else {}
 
-        # Skip messages sent via the API (bot's own outgoing messages echoed back).
-        # In personal WhatsApp mode, ALL user messages arrive with fromMe=true
-        # because the Baileys session IS the user's phone (linked device).
-        # We distinguish bot-sent msgs by status="PENDING" (set by Baileys sendMessage API).
-        if key.get("fromMe") is True and str(data.get("status", "")).upper() == "PENDING":
+        # Skip outbound API echoes created by sendMessage calls.
+        # Personal WhatsApp sessions can mark inbound contact messages as fromMe=true,
+        # so direction is determined with a narrow outbound-status filter.
+        if key.get("fromMe") is True and str(data.get("status", "")).upper() in {
+            "PENDING",
+            "SERVER_ACK",
+        }:
             return None
 
         # Skip protocol messages (history sync, key distribution, etc.)
@@ -147,7 +159,7 @@ class WhatsAppAdapter:
                 mentions=mentions,
                 group_context=group_context,
                 thread_key=thread_key,
-                raw=payload,
+                raw={"envelope": payload, "record": data},
             )
 
         extended = message.get("extendedTextMessage")
@@ -161,7 +173,7 @@ class WhatsAppAdapter:
                 mentions=mentions,
                 group_context=group_context,
                 thread_key=thread_key,
-                raw=payload,
+                raw={"envelope": payload, "record": data},
             )
 
         reaction = message.get("reactionMessage")
@@ -179,7 +191,7 @@ class WhatsAppAdapter:
                 mentions=mentions,
                 group_context=group_context,
                 thread_key=thread_key,
-                raw=payload,
+                raw={"envelope": payload, "record": data},
             )
 
         media_candidates: list[tuple[str, str]] = [
@@ -210,7 +222,7 @@ class WhatsAppAdapter:
                 mentions=mentions,
                 group_context=group_context,
                 thread_key=thread_key,
-                raw=payload,
+                raw={"envelope": payload, "record": data},
             )
 
         return InboundMessage(
@@ -221,7 +233,7 @@ class WhatsAppAdapter:
             mentions=mentions,
             group_context=group_context,
             thread_key=thread_key,
-            raw=payload,
+            raw={"envelope": payload, "record": data},
         )
 
     @staticmethod

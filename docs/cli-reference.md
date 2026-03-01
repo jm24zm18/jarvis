@@ -12,7 +12,6 @@ uv run jarvis --help
 
 - `setup`: interactive setup wizard.
 - `doctor`: diagnostics (`--fix`, `--json`).
-- `gemini-login`: manual OAuth token bootstrap for Gemini Code Assist.
 - `ask`: single prompt/reply interaction.
 - `chat`: interactive chat loop.
 - `export`: export thread data as JSONL.
@@ -33,10 +32,32 @@ uv run jarvis --help
 - `uv run jarvis maintenance run [--json]`
 - `uv run jarvis maintenance enqueue`
 
+### `swarm`
+
+- `uv run jarvis swarm create --task "<description>" --repo <path> [--model <id>] [--type feature|bugfix|refactor]`
+- `uv run jarvis swarm status [--json] [--limit 50]`
+- `uv run jarvis swarm nudge <task_id> --message "<text>"`
+- `uv run jarvis swarm cleanup [--task-id <id>] [--keep-worktrees]`
+
 ### `memory`
 
 - `uv run jarvis memory review --conflicts [--limit 50]`
 - `uv run jarvis memory export [--format jsonl] [--tier <tier>] [--thread-id <thr_...>] [-o <file>] [--limit 1000]`
+
+## Setup Wizard Env Groups
+
+`uv run jarvis setup` prompts by environment category (from `src/jarvis/cli/env_groups.py`):
+
+- `Core` (required)
+- `Task Runner` (required)
+- `WhatsApp` (optional)
+- `OpenRouter` (optional)
+- `Local LLM (SGLang)` (required for local dev profile)
+- `Local LLM (LM Studio)` (optional)
+- `Embeddings (Ollama)` (required for local dev profile)
+- `Search (SearXNG)` (required for local dev profile)
+- `Backup & Alerting` (optional)
+- `GitHub PR Automation` (optional)
 
 ## Common Examples
 
@@ -55,7 +76,6 @@ uv run jarvis skill list
 
 - API runtime should be active (`make api`) for chat/ask/build flows.
 - DB migrations should be current (`make migrate`).
-- For `gemini-login`, environment must include Gemini provider config in `.env`.
 
 ## Diagnostics Error Contract
 
@@ -65,6 +85,9 @@ uv run jarvis skill list
 - `network_unreachable`
 - `provider_unavailable`
 
+Doctor also validates DB-path consistency to detect split-brain local setups
+(for example, querying an empty `jarvis.db` while `APP_DB` points to `app.db`).
+
 Use targeted evidence checks:
 
 ```bash
@@ -72,6 +95,14 @@ uv run pytest tests/unit/test_cli_checks.py -q
 uv run pytest tests/unit/test_cli_chat.py -q
 uv run jarvis doctor --json
 ```
+
+## Output Formatting Policy
+
+- Human mode (`default`) is optimized for readability.
+- JSON mode (`--json`) is machine-only payload output:
+  - `jarvis doctor --json` prints only JSON.
+  - `jarvis test-gates --json` prints only JSON.
+- CLI export writes text files with explicit UTF-8 encoding.
 
 ## Related Docs
 

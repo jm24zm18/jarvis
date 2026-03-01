@@ -5,6 +5,7 @@ This repo supports GitHub automation in three stages:
 - Verify inbound GitHub webhook signatures.
 - Receive `pull_request` events.
 - Queue an in-process task that posts or updates a single PR summary comment.
+- DevSwarm monitor can post/update a single PR status comment marker (`Jarvis Swarm Status`).
 - Receive PR comment events and reply when triggered by `/jarvis ...` or `@jarvis`.
 - Sync bug/feature requests from Jarvis into GitHub Issues when requested.
 - Auto-create a bug report in `/api/v1/bugs` storage if PR automation fails.
@@ -20,6 +21,7 @@ This repo supports GitHub automation in three stages:
 - Scope:
   - Only PRs targeting `dev` are summarized.
   - No approve/merge/write-to-branches behavior is performed.
+  - Swarm status comments are informational only and never approve/merge PRs.
 
 ## Required Setup
 

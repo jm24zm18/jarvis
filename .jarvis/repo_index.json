@@ -34,6 +34,13 @@
       "skill_read",
       "skill_write"
     ],
+    "feature_builder": [
+      "echo",
+      "exec_host",
+      "skill_list",
+      "skill_read",
+      "skill_write"
+    ],
     "lintfixer": [
       "echo",
       "exec_host",
@@ -42,14 +49,18 @@
       "skill_write"
     ],
     "main": [
+      "create_feature_request",
       "echo",
       "exec_host",
+      "memory_search",
+      "request_human_escalation",
       "session_history",
       "session_list",
       "session_send",
       "skill_list",
       "skill_read",
       "skill_write",
+      "thread_logs",
       "update_persona",
       "web_search"
     ],
@@ -107,22 +118,34 @@
       "skill_list",
       "skill_read",
       "skill_write"
+    ],
+    "zoe": [
+      "devswarm.check_tasks",
+      "devswarm.cleanup",
+      "devswarm.send_tmux",
+      "devswarm.spawn_worker"
     ]
   },
   "api_routes": [
     "src/jarvis/routes/api/__init__.py",
     "src/jarvis/routes/api/agents.py",
+    "src/jarvis/routes/api/approvals.py",
     "src/jarvis/routes/api/auth.py",
     "src/jarvis/routes/api/bugs.py",
+    "src/jarvis/routes/api/channel_reply_approvals.py",
     "src/jarvis/routes/api/channels.py",
     "src/jarvis/routes/api/events.py",
+    "src/jarvis/routes/api/followups.py",
     "src/jarvis/routes/api/governance.py",
+    "src/jarvis/routes/api/media.py",
     "src/jarvis/routes/api/memory.py",
     "src/jarvis/routes/api/messages.py",
     "src/jarvis/routes/api/permissions.py",
+    "src/jarvis/routes/api/repo.py",
     "src/jarvis/routes/api/schedules.py",
     "src/jarvis/routes/api/selfupdate.py",
     "src/jarvis/routes/api/stories.py",
+    "src/jarvis/routes/api/swarm.py",
     "src/jarvis/routes/api/system.py",
     "src/jarvis/routes/api/threads.py",
     "src/jarvis/routes/api/webhooks.py"
@@ -134,7 +157,7 @@
     },
     {
       "recipe": [
-        "uv run uvicorn jarvis.main:app --reload --app-dir src"
+        "uv run uvicorn jarvis.main:app --host 0.0.0.0 --reload --app-dir src --reload-exclude '.jarvis/worktrees/*' --reload-exclude '.jarvis/logs/*' --reload-exclude '.jarvis/prompts/*'"
       ],
       "target": "api"
     },
@@ -297,7 +320,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-20T01:08:31.348083+00:00",
+  "generated_at": "2026-03-01T00:40:18.570064+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -513,6 +536,134 @@
     {
       "file": "src/jarvis/db/migrations/056_whatsapp_sender_review_queue.sql",
       "number": 56
+    },
+    {
+      "file": "src/jarvis/db/migrations/057_fix_jarvis_permissions.sql",
+      "number": 57
+    },
+    {
+      "file": "src/jarvis/db/migrations/058_message_media_support.sql",
+      "number": 58
+    },
+    {
+      "file": "src/jarvis/db/migrations/059_memory_consistency_reports.sql",
+      "number": 59
+    },
+    {
+      "file": "src/jarvis/db/migrations/060_agent_run_attempts.sql",
+      "number": 60
+    },
+    {
+      "file": "src/jarvis/db/migrations/061_cbac_scopes.sql",
+      "number": 61
+    },
+    {
+      "file": "src/jarvis/db/migrations/062_media_attachments.sql",
+      "number": 62
+    },
+    {
+      "file": "src/jarvis/db/migrations/063_channel_typing_state.sql",
+      "number": 63
+    },
+    {
+      "file": "src/jarvis/db/migrations/064_user_memory.sql",
+      "number": 64
+    },
+    {
+      "file": "src/jarvis/db/migrations/065_thread_followups.sql",
+      "number": 65
+    },
+    {
+      "file": "src/jarvis/db/migrations/066_feature_request_approval.sql",
+      "number": 66
+    },
+    {
+      "file": "src/jarvis/db/migrations/067_feature_request_build_runs.sql",
+      "number": 67
+    },
+    {
+      "file": "src/jarvis/db/migrations/068_feature_request_idempotency_and_tool_permission.sql",
+      "number": 68
+    },
+    {
+      "file": "src/jarvis/db/migrations/069_feature_build_retry_metadata.sql",
+      "number": 69
+    },
+    {
+      "file": "src/jarvis/db/migrations/070_human_escalations.sql",
+      "number": 70
+    },
+    {
+      "file": "src/jarvis/db/migrations/071_request_human_escalation_tool_permission.sql",
+      "number": 71
+    },
+    {
+      "file": "src/jarvis/db/migrations/072_feature_build_run_diagnostics.sql",
+      "number": 72
+    },
+    {
+      "file": "src/jarvis/db/migrations/073_feature_requests_compat_view.sql",
+      "number": 73
+    },
+    {
+      "file": "src/jarvis/db/migrations/074_agent_run_attempts_dirty_files.sql",
+      "number": 74
+    },
+    {
+      "file": "src/jarvis/db/migrations/075_memory_reflection_watermarks.sql",
+      "number": 75
+    },
+    {
+      "file": "src/jarvis/db/migrations/076_feature_build_capsule.sql",
+      "number": 76
+    },
+    {
+      "file": "src/jarvis/db/migrations/077_rlm_and_parent.sql",
+      "number": 77
+    },
+    {
+      "file": "src/jarvis/db/migrations/078_reconcile_escalation_tool_permissions.sql",
+      "number": 78
+    },
+    {
+      "file": "src/jarvis/db/migrations/079_feature_build_isolation_metadata.sql",
+      "number": 79
+    },
+    {
+      "file": "src/jarvis/db/migrations/080_feature_build_run_routing_mode.sql",
+      "number": 80
+    },
+    {
+      "file": "src/jarvis/db/migrations/081_channel_reply_approvals.sql",
+      "number": 81
+    },
+    {
+      "file": "src/jarvis/db/migrations/082_extraction_status.sql",
+      "number": 82
+    },
+    {
+      "file": "src/jarvis/db/migrations/083_user_profiles.sql",
+      "number": 83
+    },
+    {
+      "file": "src/jarvis/db/migrations/084_knowledge_graph.sql",
+      "number": 84
+    },
+    {
+      "file": "src/jarvis/db/migrations/085_user_reflection_watermarks.sql",
+      "number": 85
+    },
+    {
+      "file": "src/jarvis/db/migrations/086_task_lesson_extraction_type.sql",
+      "number": 86
+    },
+    {
+      "file": "src/jarvis/db/migrations/087_devswarm_tasks.sql",
+      "number": 87
+    },
+    {
+      "file": "src/jarvis/db/migrations/088_single_admin_auth.sql",
+      "number": 88
     }
   ],
   "protected_modules": [
@@ -521,5 +672,5 @@
     "src/jarvis/policy/engine.py",
     "src/jarvis/tools/runtime.py"
   ],
-  "repo_root": "/home/justin/jarvis2"
+  "repo_root": "/home/justin/jarvis"
 }

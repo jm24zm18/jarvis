@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import hashlib
 import json
 from collections.abc import Iterable
 
@@ -18,6 +19,8 @@ from jarvis.providers.router import ProviderRouter
 
 SUMMARY_MARKER = "<!-- jarvis:pr-summary -->"
 CHAT_MARKER = "<!-- jarvis:pr-chat -->"
+FEATURE_VALIDATION_MARKER = "<!-- jarvis:feature-validation -->"
+SWARM_STATUS_MARKER = "<!-- jarvis:swarm-status -->"
 
 
 def _github_headers(token: str) -> dict[str, str]:
@@ -192,6 +195,52 @@ def _fetch_issue_comments(
     if not isinstance(payload, list):
         return []
     return [item for item in payload if isinstance(item, dict)]
+
+
+def _upsert_issue_comment_with_marker(
+    *,
+    client: httpx.Client,
+    base_url: str,
+    owner: str,
+    repo: str,
+    number: int,
+    marker: str,
+    body: str,
+) -> dict[str, object]:
+    comments_resp = client.get(
+        f"{base_url}/repos/{owner}/{repo}/issues/{number}/comments",
+        params={"per_page": 100},
+    )
+    comments_resp.raise_for_status()
+    comments = comments_resp.json()
+    if not isinstance(comments, list):
+        comments = []
+    existing_id: int | None = None
+    for item in comments:
+        if not isinstance(item, dict):
+            continue
+        existing_body = item.get("body")
+        if isinstance(existing_body, str) and marker in existing_body:
+            comment_id = item.get("id")
+            if isinstance(comment_id, int):
+                existing_id = comment_id
+                break
+    if existing_id is None:
+        created = _post_issue_comment(
+            client=client,
+            base_url=base_url,
+            owner=owner,
+            repo=repo,
+            number=number,
+            body=body,
+        )
+        return {"action": "created", "comment_id": int(created.get("comment_id", 0) or 0)}
+    patch_resp = client.patch(
+        f"{base_url}/repos/{owner}/{repo}/issues/comments/{existing_id}",
+        json={"body": body},
+    )
+    patch_resp.raise_for_status()
+    return {"action": "updated", "comment_id": existing_id}
 
 
 def _render_prompt_context(
@@ -474,6 +523,122 @@ def github_issue_sync_bug_report(*, bug_id: str) -> dict[str, object]:
         "bug_id": bug_id,
         "issue_number": issue_number,
         "issue_url": issue_url,
+    }
+
+
+def github_feature_validation_comment(
+    *,
+    feature_id: str,
+    run_id: str,
+    validation_status: str,
+    validation_log_path: str,
+    dependency_snapshot_json: str,
+    error: str = "",
+) -> dict[str, object]:
+    settings = get_settings()
+    if int(settings.github_issue_sync_enabled) != 1:
+        return {"ok": True, "skipped": "github_issue_sync_disabled", "feature_id": feature_id}
+    repo_pair = _parse_repo_full_name(settings.github_issue_sync_repo)
+    if repo_pair is None:
+        return {"ok": False, "error": "invalid GITHUB_ISSUE_SYNC_REPO", "feature_id": feature_id}
+    owner, repo = repo_pair
+    token = settings.github_token.strip()
+    if not token:
+        return {"ok": False, "error": "missing GITHUB_TOKEN", "feature_id": feature_id}
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT github_issue_number FROM bug_reports WHERE id=? AND kind='feature' LIMIT 1",
+            (feature_id,),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "error": "feature_not_found", "feature_id": feature_id}
+        issue_number_raw = row["github_issue_number"]
+        if issue_number_raw is None:
+            return {"ok": True, "skipped": "feature_not_synced_to_github", "feature_id": feature_id}
+        issue_number = int(issue_number_raw)
+    snapshot_hash = hashlib.sha256(dependency_snapshot_json.encode("utf-8")).hexdigest()[:16]
+    status = validation_status.strip().lower()
+    body = (
+        f"{FEATURE_VALIDATION_MARKER}\n"
+        "## Jarvis Isolated Validation\n"
+        f"- Feature ID: `{feature_id}`\n"
+        f"- Build Run: `{run_id}`\n"
+        f"- Validation Status: `{status}`\n"
+        f"- Dependency Snapshot Digest: `{snapshot_hash}`\n"
+        f"- Validation Log Path: `{validation_log_path or '(none)'}`\n"
+    )
+    if error.strip():
+        body += f"- Error: `{error.strip()[:240]}`\n"
+    base_url = settings.github_api_base_url.rstrip("/")
+    with httpx.Client(timeout=10.0, headers=_github_headers(token)) as client:
+        result = _upsert_issue_comment_with_marker(
+            client=client,
+            base_url=base_url,
+            owner=owner,
+            repo=repo,
+            number=issue_number,
+            marker=FEATURE_VALIDATION_MARKER,
+            body=body,
+        )
+    return {
+        "ok": True,
+        "feature_id": feature_id,
+        "issue_number": issue_number,
+        "result": result,
+    }
+
+
+def github_pr_swarm_status_comment(
+    *,
+    owner: str,
+    repo: str,
+    pull_number: int,
+    task_id: str,
+    status: str,
+    checks: dict[str, object],
+) -> dict[str, object]:
+    settings = get_settings()
+    token = settings.github_token.strip()
+    if not token:
+        return {"ok": False, "error": "missing GITHUB_TOKEN"}
+    base_url = settings.github_api_base_url.rstrip("/")
+    gates = checks.get("gates")
+    gate_lines: list[str] = []
+    if isinstance(gates, dict):
+        for name, value in gates.items():
+            mark = "PASS" if bool(value) else "FAIL"
+            gate_lines.append(f"- `{name}`: **{mark}**")
+    if not gate_lines:
+        gate_lines.append("- No gate details available.")
+
+    ci_state = str(checks.get("ci_state") or "unknown")
+    pr_url = str(checks.get("pr_url") or "")
+    body = (
+        f"{SWARM_STATUS_MARKER}\n"
+        "## Jarvis Swarm Status\n"
+        f"- task_id: `{task_id}`\n"
+        f"- status: **{status.upper()}**\n"
+        f"- PR: {pr_url or '(none)'}\n"
+        f"- CI: `{ci_state}`\n\n"
+        "### Deterministic Gates\n"
+        f"{chr(10).join(gate_lines)}\n\n"
+        "_Automated swarm monitor. No approve/merge actions are performed._"
+    )
+    with httpx.Client(timeout=10.0, headers=_github_headers(token)) as client:
+        result = _upsert_issue_comment_with_marker(
+            client=client,
+            base_url=base_url,
+            owner=owner,
+            repo=repo,
+            number=int(pull_number),
+            marker=SWARM_STATUS_MARKER,
+            body=body,
+        )
+    return {
+        "ok": True,
+        "repo": f"{owner}/{repo}",
+        "pull_number": int(pull_number),
+        "result": result,
     }
 
 

@@ -18,7 +18,7 @@ export default function Pagination({ page, pageSize, total, onPage }: Pagination
   for (let i = start; i <= end; i++) pages.push(i);
 
   return (
-    <div className="mt-3 flex items-center justify-between text-xs text-[var(--text-muted)]">
+    <div className="mt-3 flex items-center justify-between text-xs text-text3">
       <span>
         Page {page} / {pageCount} ({total} items)
       </span>

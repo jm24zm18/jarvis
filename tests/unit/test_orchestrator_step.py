@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
     ensure_channel,
@@ -13,6 +14,7 @@ from jarvis.db.queries import (
     insert_message,
 )
 from jarvis.errors import ProviderError
+from jarvis.memory.service import MemoryService
 from jarvis.memory.skills import SkillsService
 from jarvis.orchestrator.step import (
     DEGRADED_RESPONSE,
@@ -48,8 +50,9 @@ class _FakeRuntime:
         caller_id: str,
         trace_id: str,
         thread_id: str | None = None,
+        token_scopes: frozenset[str] | None = None,
     ) -> dict[str, object]:
-        del conn, tool_name, arguments, caller_id, trace_id, thread_id
+        del conn, tool_name, arguments, caller_id, trace_id, thread_id, token_scopes
         self.execute_calls += 1
         return {"ok": True}
 
@@ -58,11 +61,11 @@ class _SequenceRouter:
     def __init__(self, responses: list[tuple[ModelResponse, str]]) -> None:
         self._responses = responses
         self.calls = 0
-        self.messages_by_call: list[list[dict[str, str]]] = []
+        self.messages_by_call: list[list[dict[str, Any]]] = []
 
     async def generate(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, object]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
@@ -170,6 +173,225 @@ class _ToolLoopThenSynthesisPlaceholderRouter:
             "primary",
             None,
         )
+
+
+def test_run_agent_step_queues_state_extraction_task(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    queued_calls: list[tuple[str, dict[str, object], str | None]] = []
+
+    class _Runner:
+        def send_task(
+            self,
+            name: str,
+            kwargs: dict[str, object] | None = None,
+            queue: str | None = None,
+        ) -> bool:
+            queued_calls.append((name, kwargs or {}, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+    router = _SequenceRouter([(ModelResponse(text="final answer", tool_calls=[]), "primary")])
+    runtime = _FakeRuntime()
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550170")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "hello")
+        _ = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_queue")
+        )
+        row = conn.execute(
+            "SELECT payload_json FROM events "
+            "WHERE trace_id=? AND event_type='state.extraction.queued' "
+            "ORDER BY created_at DESC LIMIT 1",
+            ("trc_step_queue",),
+        ).fetchone()
+
+    assert queued_calls
+    extraction_call = next(
+        call for call in queued_calls if call[0] == "jarvis.tasks.memory.extract_thread_state"
+    )
+    task_name, task_kwargs, task_queue = extraction_call
+    assert task_name == "jarvis.tasks.memory.extract_thread_state"
+    assert task_kwargs["thread_id"] == thread_id
+    assert task_kwargs["actor_id"] == "main"
+    assert task_kwargs["trace_id"] == "trc_step_queue"
+    assert task_queue == "agent_default"
+    assert row is not None
+    payload = json.loads(str(row["payload_json"]))
+    assert payload["thread_id"] == thread_id
+    assert payload["queue"] == "agent_default"
+
+
+def test_run_agent_step_queues_task_knowledge_extraction_when_threshold_met(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_ENABLED", "1")
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_MIN_TOOL_CALLS", "2")
+    get_settings.cache_clear()
+    queued_calls: list[tuple[str, dict[str, object], str | None]] = []
+
+    class _Runner:
+        def send_task(
+            self,
+            name: str,
+            kwargs: dict[str, object] | None = None,
+            queue: str | None = None,
+        ) -> bool:
+            queued_calls.append((name, kwargs or {}, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="calling tools",
+                    tool_calls=[
+                        {"name": "echo", "arguments": {"x": 1}},
+                        {"name": "echo", "arguments": {"x": 2}},
+                    ],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="final answer", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550990")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "please debug this")
+        _ = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_kgq")
+        )
+        row = conn.execute(
+            "SELECT payload_json FROM events "
+            "WHERE trace_id=? AND event_type='knowledge.extraction.queued' "
+            "ORDER BY created_at DESC LIMIT 1",
+            ("trc_step_kgq",),
+        ).fetchone()
+
+    call = next(
+        c for c in queued_calls if c[0] == "jarvis.tasks.memory.post_task_knowledge_extraction"
+    )
+    assert call[2] == "agent_default"
+    assert int(call[1]["total_tool_calls"]) == 2
+    assert row is not None
+    payload = json.loads(str(row["payload_json"]))
+    assert int(payload["total_tool_calls"]) == 2
+
+
+def test_run_agent_step_does_not_queue_task_knowledge_extraction_below_threshold(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_ENABLED", "1")
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_MIN_TOOL_CALLS", "3")
+    get_settings.cache_clear()
+    queued_calls: list[tuple[str, dict[str, object], str | None]] = []
+
+    class _Runner:
+        def send_task(
+            self,
+            name: str,
+            kwargs: dict[str, object] | None = None,
+            queue: str | None = None,
+        ) -> bool:
+            queued_calls.append((name, kwargs or {}, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="calling tool",
+                    tool_calls=[{"name": "echo", "arguments": {"x": 1}}],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="final answer", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550991")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "please debug this")
+        _ = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_kgq_skip",
+            )
+        )
+
+    assert all(
+        call[0] != "jarvis.tasks.memory.post_task_knowledge_extraction" for call in queued_calls
+    )
+
+
+def test_run_agent_step_non_main_actor_does_not_queue_task_knowledge_extraction(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_ENABLED", "1")
+    monkeypatch.setenv("AUTO_KNOWLEDGE_EXTRACTION_MIN_TOOL_CALLS", "1")
+    get_settings.cache_clear()
+    queued_calls: list[tuple[str, dict[str, object], str | None]] = []
+
+    class _Runner:
+        def send_task(
+            self,
+            name: str,
+            kwargs: dict[str, object] | None = None,
+            queue: str | None = None,
+        ) -> bool:
+            queued_calls.append((name, kwargs or {}, queue))
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _Runner())
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="calling tool",
+                    tool_calls=[{"name": "echo", "arguments": {"x": 1}}],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="worker final", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550992")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "please debug this")
+        _ = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_kgq_worker",
+                actor_id="researcher",
+            )
+        )
+
+    assert all(
+        call[0] != "jarvis.tasks.memory.post_task_knowledge_extraction" for call in queued_calls
+    )
 
 
 def test_run_agent_step_model_path_with_tool_loop(monkeypatch) -> None:
@@ -444,6 +666,128 @@ def test_run_agent_step_includes_skills_and_environment_context(monkeypatch) -> 
     assert captured["prompt_mode"] == "full"
 
 
+def test_run_agent_step_resolves_explicit_memory_id_into_context(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr(MemoryService, "_embed_text", lambda self, _text: [1.0, 0.0])
+    captured: dict[str, object] = {}
+
+    def _fake_build_prompt_with_report(
+        system_context: str,
+        summary_short: str,
+        summary_long: str,
+        structured_state: str,
+        memory_chunks: list[str],
+        tail: list[str],
+        token_budget: int,
+        max_memory_items: int = 6,
+        prompt_mode: str = "full",
+        available_tools: list[dict[str, str]] | None = None,
+        skill_catalog: list[dict[str, object]] | None = None,
+    ) -> tuple[str, str, dict[str, object]]:
+        del (
+            system_context,
+            summary_short,
+            summary_long,
+            structured_state,
+            tail,
+            token_budget,
+            max_memory_items,
+            prompt_mode,
+            available_tools,
+            skill_catalog,
+        )
+        captured["memory_chunks"] = memory_chunks
+        return "system", "user", {"sections": {}}
+
+    monkeypatch.setattr(
+        "jarvis.orchestrator.step.build_prompt_with_report",
+        _fake_build_prompt_with_report,
+    )
+    router = _SequenceRouter([(ModelResponse(text="done", tool_calls=[]), "primary")])
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550155")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        source_thread = ensure_open_thread(conn, user_id, channel_id)
+        target_thread = ensure_open_thread(conn, user_id, channel_id)
+        memory_id = MemoryService().write(conn, source_thread, "user said their dog is Oreo")
+        insert_message(conn, target_thread, "user", f"{memory_id} has it")
+        _ = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=target_thread,
+                trace_id="trc_step_mem_id",
+            )
+        )
+    chunks = captured.get("memory_chunks")
+    assert isinstance(chunks, list)
+    assert any(str(chunk).startswith(f"[memory:{memory_id}]") for chunk in chunks)
+
+
+def test_run_agent_step_uses_cross_thread_memory_fallback(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr(MemoryService, "_embed_text", lambda self, _text: [1.0, 0.0])
+    captured: dict[str, object] = {}
+
+    def _fake_build_prompt_with_report(
+        system_context: str,
+        summary_short: str,
+        summary_long: str,
+        structured_state: str,
+        memory_chunks: list[str],
+        tail: list[str],
+        token_budget: int,
+        max_memory_items: int = 6,
+        prompt_mode: str = "full",
+        available_tools: list[dict[str, str]] | None = None,
+        skill_catalog: list[dict[str, object]] | None = None,
+    ) -> tuple[str, str, dict[str, object]]:
+        del (
+            system_context,
+            summary_short,
+            summary_long,
+            structured_state,
+            tail,
+            token_budget,
+            max_memory_items,
+            prompt_mode,
+            available_tools,
+            skill_catalog,
+        )
+        captured["memory_chunks"] = memory_chunks
+        return "system", "user", {"sections": {}}
+
+    monkeypatch.setattr(
+        "jarvis.orchestrator.step.build_prompt_with_report",
+        _fake_build_prompt_with_report,
+    )
+    router = _SequenceRouter([(ModelResponse(text="done", tool_calls=[]), "primary")])
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550156")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        source_thread = ensure_open_thread(conn, user_id, channel_id)
+        target_thread = ensure_open_thread(conn, user_id, channel_id)
+        MemoryService().write(conn, source_thread, "my dog Oreo gets anxious when alone")
+        insert_message(conn, target_thread, "user", "oreo")
+        _ = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=target_thread,
+                trace_id="trc_step_mem_fallback",
+            )
+        )
+    chunks = captured.get("memory_chunks")
+    assert isinstance(chunks, list)
+    assert any("oreo" in str(chunk).lower() for chunk in chunks)
+
+
 def test_run_agent_step_sends_system_message(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
     router = _SequenceRouter([(ModelResponse(text="done", tool_calls=[]), "primary")])
@@ -497,6 +841,13 @@ def test_extract_embedded_tool_payload_strips_tool_json_suffix() -> None:
     assert tool_calls == [{"name": "echo", "arguments": {"x": 1}}]
 
 
+def test_extract_embedded_tool_payload_parses_tool_input_shape() -> None:
+    text = '{"tool":"exec_host","tool_input":{"command":"ls","cwd":"/tmp"}}'
+    cleaned, tool_calls = _extract_embedded_tool_payload(text)
+    assert cleaned == ""
+    assert tool_calls == [{"name": "exec_host", "arguments": {"command": "ls", "cwd": "/tmp"}}]
+
+
 def test_run_agent_step_parses_embedded_tool_calls_from_text(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
     router = _SequenceRouter(
@@ -526,6 +877,103 @@ def test_run_agent_step_parses_embedded_tool_calls_from_text(monkeypatch) -> Non
     assert runtime.execute_calls == 1
 
 
+def test_run_agent_step_blocks_internal_leak_output(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text=(
+                        "We need to issue exec_host commands. "
+                        '{"tool":"exec_host","tool_input":{"command":"ls"}}'
+                    ),
+                    tool_calls=[],
+                ),
+                "fallback",
+            )
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550166")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "continue")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_leak")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        leak_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.leak_blocked' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_step_leak",),
+        ).fetchone()
+    assert row is not None
+    assert DEGRADED_RESPONSE in str(row["content"])
+    assert leak_evt is not None
+
+
+def test_run_agent_step_leak_guard_retry_recovers_final_output(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="We need to send a command next.",
+                    tool_calls=[],
+                ),
+                "fallback",
+            ),
+            (
+                ModelResponse(
+                    text="Implemented and verified the requested change.",
+                    tool_calls=[],
+                ),
+                "fallback",
+            ),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550167")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "continue")
+        message_id = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_leak_retry",
+            )
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        leak_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.leak_blocked' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_step_leak_retry",),
+        ).fetchone()
+        degraded_evt = conn.execute(
+            (
+                "SELECT COUNT(*) AS c FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.degraded'"
+            ),
+            ("trc_step_leak_retry",),
+        ).fetchone()
+    assert row is not None
+    assert str(row["content"]) == "Implemented and verified the requested change."
+    assert leak_evt is not None
+    assert degraded_evt is not None and int(degraded_evt["c"]) == 0
+    assert router.calls == 2
+
+
 def test_run_agent_step_rewrites_placeholder_to_degraded_response(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
     router = _SequenceRouter([(ModelResponse(text="I am an AI.", tool_calls=[]), "primary")])
@@ -548,7 +996,7 @@ def test_run_agent_step_rewrites_placeholder_to_degraded_response(monkeypatch) -
             ("trc_step_10",),
         ).fetchone()
     assert row is not None
-    assert row["content"] == DEGRADED_RESPONSE
+    assert DEGRADED_RESPONSE in row["content"]
     assert evt is not None and int(evt["c"]) == 1
 
 
@@ -647,7 +1095,7 @@ def test_run_agent_step_terminal_synthesis_provider_error_sets_specific_reason(
             ("trc_step_14",),
         ).fetchone()
     assert row is not None
-    assert row["content"] == DEGRADED_RESPONSE
+    assert DEGRADED_RESPONSE in row["content"]
     assert degraded_evt is not None
     payload = json.loads(str(degraded_evt["payload_json"]))
     assert payload["reason"] == "provider_error_terminal_synthesis"
@@ -671,7 +1119,12 @@ def test_run_agent_step_tool_loop_placeholder_uses_deterministic_terminal_messag
         user_id = ensure_user(conn, "15555550139")
         channel_id = ensure_channel(conn, user_id, "whatsapp")
         thread_id = ensure_open_thread(conn, user_id, channel_id)
-        insert_message(conn, thread_id, "user", "build loop placeholder")
+        insert_message(
+            conn,
+            thread_id,
+            "user",
+            "Build feature request 'bug_test': 'loop placeholder behavior'",
+        )
         message_id = asyncio.run(
             run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_step_15")
         )
@@ -683,6 +1136,13 @@ def test_run_agent_step_tool_loop_placeholder_uses_deterministic_terminal_messag
             ),
             ("trc_step_15",),
         ).fetchone()
+        loop_cap_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='tool.call.loop_cap_reached' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_step_15",),
+        ).fetchone()
     assert row is not None
     assert "I completed tool execution but could not synthesize a final summary." in str(
         row["content"]
@@ -691,6 +1151,7 @@ def test_run_agent_step_tool_loop_placeholder_uses_deterministic_terminal_messag
     assert degraded_evt is not None
     payload = json.loads(str(degraded_evt["payload_json"]))
     assert payload["reason"] == "placeholder_response_after_tool_loop"
+    assert loop_cap_evt is not None
 
 
 def test_extract_primary_failure_fields_parses_retry_and_request_id() -> None:
@@ -741,7 +1202,7 @@ def test_run_agent_step_provider_failure_writes_degraded_message_and_error_event
             ("trc_step_12",),
         ).fetchone()
     assert message_row is not None
-    assert message_row["content"] == DEGRADED_RESPONSE
+    assert DEGRADED_RESPONSE in message_row["content"]
     assert event_row is not None
     payload = json.loads(str(event_row["payload_json"]))
     assert payload["primary_failure_kind"] == "dns_resolution"
@@ -786,10 +1247,45 @@ class _FailingRuntime(_FakeRuntime):
         caller_id: str,
         trace_id: str,
         thread_id: str | None = None,
+        token_scopes: frozenset[str] | None = None,
     ) -> dict[str, object]:
-        del conn, tool_name, arguments, caller_id, trace_id, thread_id
+        del conn, tool_name, arguments, caller_id, trace_id, thread_id, token_scopes
         self.execute_calls += 1
         raise RuntimeError("tool failed")
+
+
+class _NonZeroExitRuntime(_FakeRuntime):
+    async def execute(
+        self,
+        conn: sqlite3.Connection,
+        tool_name: str,
+        arguments: dict[str, Any],
+        caller_id: str,
+        trace_id: str,
+        thread_id: str | None = None,
+        token_scopes: frozenset[str] | None = None,
+    ) -> dict[str, object]:
+        del conn, tool_name, arguments, caller_id, trace_id, thread_id, token_scopes
+        self.execute_calls += 1
+        return {"exit_code": 2, "stderr": "cwd is not a directory"}
+
+
+class _RoadmapWriteRuntime(_FakeRuntime):
+    async def execute(
+        self,
+        conn: sqlite3.Connection,
+        tool_name: str,
+        arguments: dict[str, Any],
+        caller_id: str,
+        trace_id: str,
+        thread_id: str | None = None,
+        token_scopes: frozenset[str] | None = None,
+    ) -> dict[str, object]:
+        del conn, arguments, caller_id, trace_id, thread_id, token_scopes
+        self.execute_calls += 1
+        if tool_name == "create_feature_request":
+            return {"ok": True, "id": "bug_created", "kind": "feature"}
+        return {"ok": True}
 
 
 def test_run_agent_step_emits_tool_error_notification(monkeypatch) -> None:
@@ -829,6 +1325,66 @@ def test_run_agent_step_emits_tool_error_notification(monkeypatch) -> None:
             )
         )
     assert any(evt == "tool.call.end" and "error" in payload for evt, payload in notifications)
+
+
+def test_run_agent_step_suppresses_duplicate_failing_tool_calls(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="call 1",
+                    tool_calls=[
+                        {
+                            "name": "exec_host",
+                            "arguments": {"command": "ls", "cwd": "/tmpx"},
+                        }
+                    ],
+                ),
+                "fallback",
+            ),
+            (
+                ModelResponse(
+                    text="call 2",
+                    tool_calls=[
+                        {
+                            "name": "exec_host",
+                            "arguments": {"command": "ls", "cwd": "/tmpx"},
+                        }
+                    ],
+                ),
+                "fallback",
+            ),
+            (ModelResponse(text="done", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _NonZeroExitRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550887")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "run check")
+        message_id = asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_step_suppress",
+            )
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        suppressed_evt = conn.execute(
+            (
+                "SELECT COUNT(*) AS c FROM events WHERE trace_id=? "
+                "AND event_type='tool.call.suppressed'"
+            ),
+            ("trc_step_suppress",),
+        ).fetchone()
+    assert row is not None and row["content"] == "done"
+    assert runtime.execute_calls == 1
+    assert suppressed_evt is not None and int(suppressed_evt["c"]) >= 1
 
 
 def test_run_agent_step_enqueues_full_tool_memory_payload(monkeypatch) -> None:
@@ -921,3 +1477,238 @@ def test_run_agent_step_enqueues_thought_memory_payload(monkeypatch) -> None:
     assert "thought_sha256" in metadata
     assert "thought_char_count" in metadata
     assert '"type": "agent.thought"' in str(thought_entries[0]["text"])
+
+
+def test_run_agent_step_blocks_unverified_roadmap_success_claim(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [(ModelResponse(text="I've added both items to the roadmap.", tool_calls=[]), "primary")]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550172")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "add to roadmap")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_claim_blocked")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.claim_blocked' ORDER BY created_at DESC LIMIT 1"
+            ),
+            ("trc_claim_blocked",),
+        ).fetchone()
+    assert row is not None
+    assert "could not verify a successful roadmap write" in str(row["content"]).lower()
+    assert evt is not None
+
+
+def test_run_agent_step_allows_roadmap_claim_with_verified_tool_write(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="creating roadmap item",
+                    tool_calls=[{"name": "create_feature_request", "arguments": {"title": "A"}}],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="I've added it to the roadmap.", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _RoadmapWriteRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550173")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "add feature")
+        message_id = asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_claim_allowed")
+        )
+        row = conn.execute("SELECT content FROM messages WHERE id=?", (message_id,)).fetchone()
+        evt = conn.execute(
+            (
+                "SELECT COUNT(*) AS c FROM events WHERE trace_id=? "
+                "AND event_type='agent.response.claim_blocked'"
+            ),
+            ("trc_claim_allowed",),
+        ).fetchone()
+    assert row is not None
+    assert "added it to the roadmap" in str(row["content"]).lower()
+    assert evt is not None
+    assert int(evt["c"]) == 0
+
+
+class _RecordingSynthesisRouter:
+    """Router that records messages passed during terminal synthesis (tools=None) calls."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.synthesis_messages: list[list[dict[str, Any]]] = []
+
+    async def generate(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, object]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        priority: str = "normal",
+    ) -> tuple[ModelResponse, str, str | None]:
+        self.calls += 1
+        if tools is None:
+            self.synthesis_messages.append(list(messages))
+            return ModelResponse(text="Synthesized answer.", tool_calls=[]), "primary", None
+        return (
+            ModelResponse(
+                text="I can help with that.",
+                tool_calls=[{"name": "echo", "arguments": {"x": 1}}],
+            ),
+            "primary",
+            None,
+        )
+
+
+def test_terminal_synthesis_injects_synthesis_hint_message(monkeypatch) -> None:
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", lambda **_kwargs: None)
+    monkeypatch.setattr("jarvis.events.writer.MemoryService.embed_text", lambda _self, _text: [0.0])
+    monkeypatch.setattr(
+        "jarvis.events.writer.MemoryService.upsert_event_vector",
+        lambda _self, _conn, _event_id, _thread_id, _vector: None,
+    )
+    router = _RecordingSynthesisRouter()
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550180")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "test synthesis hint")
+        asyncio.run(
+            run_agent_step(conn, router, runtime, thread_id=thread_id, trace_id="trc_synth_hint")
+        )
+    assert len(router.synthesis_messages) >= 1
+    last_synthesis_msgs = router.synthesis_messages[0]
+    last_msg = last_synthesis_msgs[-1]
+    assert last_msg["role"] == "user"
+    assert "All tool calls are complete" in last_msg["content"]
+    assert "clear, direct final answer" in last_msg["content"]
+
+
+def test_run_agent_step_conversation_uses_openai_tool_format(monkeypatch) -> None:
+    """After a tool call iteration, the conversation must use OpenAI-standard format:
+    - assistant message MUST include 'tool_calls' key
+    - tool results MUST use role='tool' with 'tool_call_id' (not role='user')
+    """
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", lambda **_kwargs: None)
+
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="thinking",
+                    tool_calls=[{"id": "call_test_99", "name": "echo", "arguments": {"x": 1}}],
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="done", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550991")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "run tool")
+        asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_convo_format",
+            )
+        )
+
+    # The second call receives the conversation built after iteration 0's tool call
+    assert router.calls == 2
+    second_call_msgs = router.messages_by_call[1]
+
+    # Find the assistant message from iteration 0
+    assistant_msgs = [m for m in second_call_msgs if m.get("role") == "assistant"]
+    assert assistant_msgs, "Expected at least one assistant message in second call"
+    asst = assistant_msgs[-1]
+    assert "tool_calls" in asst, "assistant message must include 'tool_calls' key for OSS compat"
+    assert isinstance(asst["tool_calls"], list)
+    assert len(asst["tool_calls"]) >= 1
+
+    # Find the tool result message
+    tool_msgs = [m for m in second_call_msgs if m.get("role") == "tool"]
+    assert tool_msgs, "Expected role='tool' result message, not role='user'"
+    tool_msg = tool_msgs[-1]
+    assert "tool_call_id" in tool_msg, "tool result must have 'tool_call_id'"
+    # Verify 'role: user' with [tool_result] prefix is NOT used
+    user_tool_msgs = [
+        m for m in second_call_msgs
+        if m.get("role") == "user" and str(m.get("content", "")).startswith("[tool_result]")
+    ]
+    assert not user_tool_msgs, "Legacy [tool_result] user messages must not appear"
+
+
+def test_run_agent_step_conversation_assigns_ids_when_model_omits_them(monkeypatch) -> None:
+    """When the model omits tool call IDs, ensure_tool_ids synthesises them so
+    tool results can still be properly paired."""
+    monkeypatch.setattr("jarvis.orchestrator.step._update_heartbeat", lambda *_args: None)
+    monkeypatch.setattr("jarvis.orchestrator.step._enqueue_memory_index", lambda **_kwargs: None)
+
+    # Model response has NO 'id' on tool call
+    router = _SequenceRouter(
+        [
+            (
+                ModelResponse(
+                    text="",
+                    tool_calls=[{"name": "echo", "arguments": {}}],  # no id
+                ),
+                "primary",
+            ),
+            (ModelResponse(text="done", tool_calls=[]), "primary"),
+        ]
+    )
+    runtime = _FakeRuntime()
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550992")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "go")
+        asyncio.run(
+            run_agent_step(
+                conn,
+                router,
+                runtime,
+                thread_id=thread_id,
+                trace_id="trc_synth_ids",
+            )
+        )
+
+    second_call_msgs = router.messages_by_call[1]
+    assistant_msgs = [m for m in second_call_msgs if m.get("role") == "assistant"]
+    assert assistant_msgs
+    asst = assistant_msgs[-1]
+    # Synthesised ID must appear in the assistant message
+    assert "tool_calls" in asst
+    synth_id = asst["tool_calls"][0]["id"]
+    assert synth_id  # not empty
+
+    # And the matching tool result must carry the same synthesised ID
+    tool_msgs = [m for m in second_call_msgs if m.get("role") == "tool"]
+    assert tool_msgs
+    assert tool_msgs[-1]["tool_call_id"] == synth_id

@@ -53,6 +53,23 @@ def get_system_state(conn: sqlite3.Connection) -> dict[str, int]:
     }
 
 
+def clear_stale_restarting_flag(conn: sqlite3.Connection) -> bool:
+    ensure_system_state(conn)
+    row = conn.execute(
+        "SELECT restarting FROM system_state WHERE id='singleton'"
+    ).fetchone()
+    if row is None:
+        return False
+    restarting = int(row["restarting"])
+    if restarting == 0:
+        return False
+    conn.execute(
+        "UPDATE system_state SET restarting=0, updated_at=? WHERE id='singleton'",
+        (now_iso(),),
+    )
+    return True
+
+
 def record_readyz_result(conn: sqlite3.Connection, ok: bool, threshold: int = 3) -> bool:
     ensure_system_state(conn)
     if ok:
@@ -191,34 +208,22 @@ def record_exec_host_result(
 
 
 def ensure_root_user(conn: sqlite3.Connection) -> str:
-    """Ensure a root admin user exists for system/agent operations."""
+    """Ensure a root user exists for system/agent operations."""
     external_id = "system:root"
-    row = conn.execute(
-        "SELECT id, role FROM users WHERE external_id=?", (external_id,)
-    ).fetchone()
-    if row:
-        user_id = str(row["id"])
-        if row["role"] != "admin":
-            conn.execute("UPDATE users SET role='admin' WHERE id=?", (user_id,))
-        return user_id
-    user_id = new_id("usr")
-    conn.execute(
-        "INSERT INTO users(id, external_id, role, created_at) VALUES(?,?,?,?)",
-        (user_id, external_id, "admin", now_iso()),
-    )
-    return user_id
-
-
-def ensure_user(conn: sqlite3.Connection, external_id: str) -> str:
     row = conn.execute("SELECT id FROM users WHERE external_id=?", (external_id,)).fetchone()
     if row:
         return str(row["id"])
     user_id = new_id("usr")
     conn.execute(
-        "INSERT INTO users(id, external_id, role, created_at) VALUES(?,?,?,?)",
-        (user_id, external_id, "user", now_iso()),
+        "INSERT INTO users(id, external_id, created_at) VALUES(?,?,?)",
+        (user_id, external_id, now_iso()),
     )
     return user_id
+
+
+def ensure_user(conn: sqlite3.Connection, external_id: str) -> str:
+    del external_id
+    return ensure_root_user(conn)
 
 
 def ensure_channel(conn: sqlite3.Connection, user_id: str, channel_type: str) -> str:
@@ -236,16 +241,20 @@ def ensure_channel(conn: sqlite3.Connection, user_id: str, channel_type: str) ->
 
 
 def ensure_open_thread(conn: sqlite3.Connection, user_id: str, channel_id: str) -> str:
+    # First, try to find ANY open thread for this user, regardless of channel.
+    # This enforces the "one global chat thread per user" rule.
     row = conn.execute(
         (
             "SELECT id FROM threads "
-            "WHERE user_id=? AND channel_id=? AND status='open' "
+            "WHERE user_id=? AND status='open' "
             "ORDER BY created_at DESC LIMIT 1"
         ),
-        (user_id, channel_id),
+        (user_id,),
     ).fetchone()
     if row:
         return str(row["id"])
+    
+    # If no thread exists, create a new one.
     thread_id = new_id("thr")
     conn.execute(
         (
@@ -282,6 +291,11 @@ def get_thread_by_whatsapp_remote(
     return str(row["thread_id"]) if row is not None else None
 
 
+def thread_exists(conn: sqlite3.Connection, thread_id: str) -> bool:
+    row = conn.execute("SELECT 1 FROM threads WHERE id=? LIMIT 1", (thread_id,)).fetchone()
+    return row is not None
+
+
 def upsert_whatsapp_thread_map(
     conn: sqlite3.Connection,
     *,
@@ -302,6 +316,14 @@ def upsert_whatsapp_thread_map(
         ),
         (thread_id, instance, remote_jid, participant_jid, now, now),
     )
+
+
+def prune_whatsapp_thread_map_orphans(conn: sqlite3.Connection) -> int:
+    cursor = conn.execute(
+        "DELETE FROM whatsapp_thread_map "
+        "WHERE thread_id NOT IN (SELECT id FROM threads)"
+    )
+    return int(cursor.rowcount or 0)
 
 
 def upsert_whatsapp_instance(
@@ -611,14 +633,152 @@ def create_thread(conn: sqlite3.Connection, user_id: str, channel_id: str) -> st
     return thread_id
 
 
-def insert_message(conn: sqlite3.Connection, thread_id: str, role: str, content: str) -> str:
+def insert_message(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    role: str,
+    content: str,
+    *,
+    media_path: str | None = None,
+    mime_type: str | None = None,
+) -> str:
     message_id = new_id("msg")
     conn.execute(
-        "INSERT INTO messages(id, thread_id, role, content, created_at) VALUES(?,?,?,?,?)",
-        (message_id, thread_id, role, content, now_iso()),
+        (
+            "INSERT INTO messages("
+            "id, thread_id, role, content, media_path, mime_type, created_at"
+            ") VALUES(?,?,?,?,?,?,?)"
+        ),
+        (message_id, thread_id, role, content, media_path, mime_type, now_iso()),
     )
     conn.execute("UPDATE threads SET updated_at=? WHERE id=?", (now_iso(), thread_id))
     return message_id
+
+
+def create_human_escalation(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    trace_id: str,
+    requested_by_actor_id: str,
+    source_agent_id: str,
+    reason: str,
+    message: str,
+    channel_type: str,
+    target_external_id: str,
+    priority: str = "normal",
+) -> str:
+    escalation_id = new_id("mda")
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO human_escalations("
+            "id, thread_id, trace_id, requested_by_actor_id, source_agent_id, "
+            "reason, message, status, channel_type, target_external_id, priority, "
+            "dispatched_message_id, error, created_at, updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ),
+        (
+            escalation_id,
+            thread_id,
+            trace_id,
+            requested_by_actor_id,
+            source_agent_id,
+            reason[:500],
+            message[:4000],
+            "queued",
+            channel_type[:40],
+            target_external_id[:200],
+            priority[:20],
+            "",
+            "",
+            now,
+            now,
+        ),
+    )
+    return escalation_id
+
+
+def has_pending_human_escalation(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    reason: str | None = None,
+) -> bool:
+    query = (
+        "SELECT 1 FROM human_escalations "
+        "WHERE thread_id=? AND status IN ('queued','dispatched')"
+    )
+    params: list[object] = [thread_id]
+    if reason:
+        query += " AND reason=?"
+        params.append(reason)
+    query += " LIMIT 1"
+    row = conn.execute(query, tuple(params)).fetchone()
+    return row is not None
+
+
+def list_due_human_escalations(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    rows = conn.execute(
+        (
+            "SELECT id, thread_id, trace_id, requested_by_actor_id, source_agent_id, "
+            "reason, message, status, channel_type, target_external_id, priority, "
+            "dispatched_message_id, error, created_at, updated_at "
+            "FROM human_escalations "
+            "WHERE status='queued' "
+            "ORDER BY created_at ASC LIMIT ?"
+        ),
+        (max(1, min(500, int(limit))),),
+    ).fetchall()
+    items: list[dict[str, object]] = []
+    for row in rows:
+        items.append(
+            {
+                "id": str(row["id"]),
+                "thread_id": str(row["thread_id"]),
+                "trace_id": str(row["trace_id"]),
+                "requested_by_actor_id": str(row["requested_by_actor_id"]),
+                "source_agent_id": str(row["source_agent_id"]),
+                "reason": str(row["reason"]),
+                "message": str(row["message"]),
+                "status": str(row["status"]),
+                "channel_type": str(row["channel_type"]),
+                "target_external_id": str(row["target_external_id"]),
+                "priority": str(row["priority"]),
+                "dispatched_message_id": str(row["dispatched_message_id"]),
+                "error": str(row["error"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+            }
+        )
+    return items
+
+
+def update_human_escalation(
+    conn: sqlite3.Connection,
+    escalation_id: str,
+    *,
+    status: str,
+    dispatched_message_id: str | None = None,
+    error: str | None = None,
+) -> None:
+    updates = ["status=?", "updated_at=?"]
+    params: list[object] = [status, now_iso()]
+    if dispatched_message_id is not None:
+        updates.append("dispatched_message_id=?")
+        params.append(dispatched_message_id)
+    if error is not None:
+        updates.append("error=?")
+        params.append(error[:1000])
+    params.append(escalation_id)
+    conn.execute(
+        f"UPDATE human_escalations SET {', '.join(updates)} WHERE id=?",
+        tuple(params),
+    )
 
 
 def record_external_message(
@@ -824,16 +984,16 @@ def get_agent_governance(
 
 def get_whatsapp_outbound(
     conn: sqlite3.Connection, thread_id: str, message_id: str
-) -> dict[str, str] | None:
+) -> dict[str, str | None] | None:
     return get_channel_outbound(conn, thread_id, message_id, "whatsapp")
 
 
 def get_channel_outbound(
     conn: sqlite3.Connection, thread_id: str, message_id: str, channel_type: str
-) -> dict[str, str] | None:
+) -> dict[str, str | None] | None:
     row = conn.execute(
         (
-            "SELECT u.external_id AS recipient, m.content AS text "
+            "SELECT u.external_id AS recipient, m.content AS text, m.media_path, m.mime_type "
             "FROM messages m "
             "JOIN threads t ON t.id=m.thread_id "
             "JOIN users u ON u.id=t.user_id "
@@ -845,7 +1005,44 @@ def get_channel_outbound(
     ).fetchone()
     if row is None:
         return None
-    return {"recipient": str(row["recipient"]), "text": str(row["text"])}
+    return {
+        "recipient": str(row["recipient"]),
+        "text": str(row["text"]),
+        "media_path": str(row["media_path"]) if row["media_path"] else None,
+        "mime_type": str(row["mime_type"]) if row["mime_type"] else None,
+    }
+
+
+def store_consistency_report(
+    conn: sqlite3.Connection,
+    *,
+    thread_id: str,
+    sample_size: int,
+    total_items: int,
+    conflicted_items: int,
+    consistency_score: float,
+    details: dict[str, object] | None = None,
+) -> str:
+    report_id = new_id("csr")
+    conn.execute(
+        (
+            "INSERT INTO memory_consistency_reports("
+            "id, thread_id, sample_size, total_items, conflicted_items, "
+            "consistency_score, details_json, created_at"
+            ") VALUES(?,?,?,?,?,?,?,?)"
+        ),
+        (
+            report_id,
+            thread_id,
+            int(sample_size),
+            int(total_items),
+            int(conflicted_items),
+            float(consistency_score),
+            json.dumps(details or {}, sort_keys=True),
+            now_iso(),
+        ),
+    )
+    return report_id
 
 
 def upsert_selfupdate_run(
@@ -1394,3 +1591,792 @@ def list_evolution_items(
             }
         )
     return items
+
+
+def set_typing_state(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    recipient: str,
+    channel_type: str,
+) -> None:
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO channel_typing_state(thread_id, recipient, channel_type, set_at) "
+            "VALUES(?,?,?,?) "
+            "ON CONFLICT(thread_id, recipient) DO UPDATE "
+            "SET set_at=excluded.set_at, channel_type=excluded.channel_type"
+        ),
+        (thread_id, recipient, channel_type, now),
+    )
+
+
+def clear_typing_state(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    recipient: str,
+) -> None:
+    conn.execute(
+        "DELETE FROM channel_typing_state WHERE thread_id=? AND recipient=?",
+        (thread_id, recipient),
+    )
+
+
+def get_stale_typing_states(
+    conn: sqlite3.Connection,
+    cutoff_iso: str,
+) -> list[dict[str, str]]:
+    rows = conn.execute(
+        (
+            "SELECT thread_id, recipient, channel_type, set_at "
+            "FROM channel_typing_state WHERE set_at < ?"
+        ),
+        (cutoff_iso,),
+    ).fetchall()
+    return [
+        {
+            "thread_id": str(row["thread_id"]),
+            "recipient": str(row["recipient"]),
+            "channel_type": str(row["channel_type"]),
+            "set_at": str(row["set_at"]),
+        }
+        for row in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Feature request approval helpers
+# ---------------------------------------------------------------------------
+
+VALID_APPROVAL_STATUSES = {"pending", "approved", "rejected"}
+VALID_BUG_PRIORITIES = {"low", "medium", "high", "critical"}
+
+
+def create_feature_request(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    description: str,
+    priority: str,
+    reporter_id: str,
+    thread_id: str | None,
+    trace_id: str | None,
+) -> tuple[str, bool]:
+    """Insert a feature request row; dedupe by trace/thread/reporter/title when trace is set.
+
+    Returns (feature_id, created) where created=False indicates an idempotent hit.
+    """
+    normalized_priority = priority.strip().lower()
+    if normalized_priority not in VALID_BUG_PRIORITIES:
+        raise HTTPException(status_code=400, detail=f"Invalid priority: {priority}")
+    normalized_title = title.strip()
+    if not normalized_title:
+        raise HTTPException(status_code=400, detail="title is required")
+    normalized_description = description.strip()
+    normalized_thread_id = thread_id.strip() if isinstance(thread_id, str) else ""
+    normalized_trace_id = trace_id.strip() if isinstance(trace_id, str) else ""
+    if normalized_trace_id:
+        existing = conn.execute(
+            (
+                "SELECT id FROM bug_reports "
+                "WHERE kind='feature' AND reporter_id=? AND "
+                "COALESCE(thread_id,'')=? AND COALESCE(trace_id,'')=? AND title=? "
+                "ORDER BY created_at ASC LIMIT 1"
+            ),
+            (
+                reporter_id,
+                normalized_thread_id,
+                normalized_trace_id,
+                normalized_title,
+            ),
+        ).fetchone()
+        if existing is not None:
+            return str(existing["id"]), False
+
+    feature_id = new_id("bug")
+    ts = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO bug_reports(id, kind, title, description, status, priority, "
+            "reporter_id, assignee_agent, thread_id, trace_id, "
+            "github_issue_number, github_issue_url, github_synced_at, github_sync_error, "
+            "created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ),
+        (
+            feature_id,
+            "feature",
+            normalized_title,
+            normalized_description,
+            "open",
+            normalized_priority,
+            reporter_id,
+            None,
+            normalized_thread_id or None,
+            normalized_trace_id or None,
+            None,
+            None,
+            None,
+            None,
+            ts,
+            ts,
+        ),
+    )
+    return feature_id, True
+
+
+def set_feature_request_approval(
+    conn: sqlite3.Connection,
+    feature_id: str,
+    *,
+    decision: str,
+    actor_id: str,
+    note: str = "",
+) -> None:
+    """Update approval_status for a feature request (kind='feature')."""
+    if decision not in ("approved", "rejected"):
+        raise ValueError(f"Invalid decision: {decision}")
+    row = conn.execute(
+        "SELECT id, kind FROM bug_reports WHERE id=? LIMIT 1",
+        (feature_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Feature request not found")
+    if str(row["kind"]) != "feature":
+        raise HTTPException(status_code=400, detail="Record is not a feature request")
+    ts = now_iso()
+    if decision == "approved":
+        conn.execute(
+            (
+                "UPDATE bug_reports SET approval_status=?, approval_note=?, "
+                "approved_by=?, approved_at=?, rejected_by=NULL, rejected_at=NULL, "
+                "updated_at=? WHERE id=?"
+            ),
+            (decision, note, actor_id, ts, ts, feature_id),
+        )
+    else:
+        conn.execute(
+            (
+                "UPDATE bug_reports SET approval_status=?, approval_note=?, "
+                "rejected_by=?, rejected_at=?, approved_by=NULL, approved_at=NULL, "
+                "updated_at=? WHERE id=?"
+            ),
+            (decision, note, actor_id, ts, ts, feature_id),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Feature request build run helpers
+# ---------------------------------------------------------------------------
+
+BUILD_RUN_STATUSES = {
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "timed_out",
+    "cancelled",
+    "decomposed",
+}
+BUILD_RUN_RETRY_STATES = {"none", "scheduled", "running", "exhausted"}
+
+
+def create_feature_build_run(
+    conn: sqlite3.Connection,
+    *,
+    feature_id: str,
+    created_by: str,
+    trace_id: str = "",
+    thread_id: str = "",
+    source_thread_id: str = "",
+    execution_mode: str = "direct",
+    workspace_path: str = "",
+    workspace_created_at: str = "",
+    workspace_expires_at: str = "",
+    dependency_snapshot_json: str = "{}",
+    validation_status: str = "pending",
+    validation_log_path: str = "",
+    validation_error: str = "",
+) -> str:
+    """Insert a new build run row in 'queued' state and return its id."""
+    run_id = new_id("fbr")
+    ts = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO feature_request_build_runs"
+            "(id, feature_id, trace_id, thread_id, status, summary, attempt_count, max_attempts, "
+            "retry_state, next_retry_at, last_failure_reason, active_attempt, last_progress_at, "
+            "last_event_type, last_trace_id, terminal_reason, workspace_path, "
+            "workspace_created_at, workspace_expires_at, dependency_snapshot_json, "
+            "validation_status, validation_log_path, validation_error, source_thread_id, "
+            "execution_mode, created_by, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ),
+        (
+            run_id,
+            feature_id,
+            trace_id,
+            thread_id,
+            "queued",
+            "",
+            1,
+            5,
+            "none",
+            "",
+            "",
+            1,
+            "",
+            "",
+            "",
+            "",
+            workspace_path,
+            workspace_created_at,
+            workspace_expires_at,
+            dependency_snapshot_json,
+            validation_status,
+            validation_log_path,
+            validation_error,
+            source_thread_id,
+            execution_mode,
+            created_by,
+            ts,
+            ts,
+        ),
+    )
+    return run_id
+
+
+def update_feature_build_run(
+    conn: sqlite3.Connection,
+    run_id: str,
+    *,
+    status: str | None = None,
+    trace_id: str | None = None,
+    thread_id: str | None = None,
+    summary: str | None = None,
+    attempt_count: int | None = None,
+    max_attempts: int | None = None,
+    retry_state: str | None = None,
+    next_retry_at: str | None = None,
+    last_failure_reason: str | None = None,
+    active_attempt: int | None = None,
+    last_progress_at: str | None = None,
+    last_event_type: str | None = None,
+    last_trace_id: str | None = None,
+    terminal_reason: str | None = None,
+    workspace_path: str | None = None,
+    workspace_created_at: str | None = None,
+    workspace_expires_at: str | None = None,
+    dependency_snapshot_json: str | None = None,
+    validation_status: str | None = None,
+    validation_log_path: str | None = None,
+    validation_error: str | None = None,
+    source_thread_id: str | None = None,
+    execution_mode: str | None = None,
+) -> None:
+    """Partial update for a feature build run row."""
+    updates: list[str] = []
+    params: list[object] = []
+    if status is not None:
+        if status not in BUILD_RUN_STATUSES:
+            raise ValueError(f"Invalid status: {status}")
+        updates.append("status=?")
+        params.append(status)
+    if trace_id is not None:
+        updates.append("trace_id=?")
+        params.append(trace_id)
+    if thread_id is not None:
+        updates.append("thread_id=?")
+        params.append(thread_id)
+    if summary is not None:
+        updates.append("summary=?")
+        params.append(summary)
+    if attempt_count is not None:
+        updates.append("attempt_count=?")
+        params.append(max(1, int(attempt_count)))
+    if max_attempts is not None:
+        updates.append("max_attempts=?")
+        params.append(max(1, int(max_attempts)))
+    if retry_state is not None:
+        state = str(retry_state).strip()
+        if state not in BUILD_RUN_RETRY_STATES:
+            raise ValueError(f"Invalid retry_state: {retry_state}")
+        updates.append("retry_state=?")
+        params.append(state)
+    if next_retry_at is not None:
+        updates.append("next_retry_at=?")
+        params.append(str(next_retry_at))
+    if last_failure_reason is not None:
+        updates.append("last_failure_reason=?")
+        params.append(str(last_failure_reason)[:500])
+    if active_attempt is not None:
+        updates.append("active_attempt=?")
+        params.append(max(1, int(active_attempt)))
+    if last_progress_at is not None:
+        updates.append("last_progress_at=?")
+        params.append(str(last_progress_at))
+    if last_event_type is not None:
+        updates.append("last_event_type=?")
+        params.append(str(last_event_type)[:120])
+    if last_trace_id is not None:
+        updates.append("last_trace_id=?")
+        params.append(str(last_trace_id)[:80])
+    if terminal_reason is not None:
+        updates.append("terminal_reason=?")
+        params.append(str(terminal_reason)[:160])
+    if workspace_path is not None:
+        updates.append("workspace_path=?")
+        params.append(str(workspace_path))
+    if workspace_created_at is not None:
+        updates.append("workspace_created_at=?")
+        params.append(str(workspace_created_at))
+    if workspace_expires_at is not None:
+        updates.append("workspace_expires_at=?")
+        params.append(str(workspace_expires_at))
+    if dependency_snapshot_json is not None:
+        updates.append("dependency_snapshot_json=?")
+        params.append(str(dependency_snapshot_json))
+    if validation_status is not None:
+        updates.append("validation_status=?")
+        params.append(str(validation_status)[:40])
+    if validation_log_path is not None:
+        updates.append("validation_log_path=?")
+        params.append(str(validation_log_path))
+    if validation_error is not None:
+        updates.append("validation_error=?")
+        params.append(str(validation_error)[:500])
+    if source_thread_id is not None:
+        updates.append("source_thread_id=?")
+        params.append(str(source_thread_id))
+    if execution_mode is not None:
+        updates.append("execution_mode=?")
+        params.append(str(execution_mode)[:40])
+    if not updates:
+        return
+    updates.append("updated_at=?")
+    params.append(now_iso())
+    params.append(run_id)
+    conn.execute(
+        f"UPDATE feature_request_build_runs SET {', '.join(updates)} WHERE id=?",
+        tuple(params),
+    )
+
+
+def finalize_feature_build_run_by_trace(
+    conn: sqlite3.Connection,
+    trace_id: str,
+    *,
+    status: str,
+    summary: str,
+) -> str | None:
+    """Finalize latest queued/running build run for a trace.
+
+    Returns run_id when a row was updated, else None.
+    """
+    trace = str(trace_id or "").strip()
+    if not trace:
+        return None
+    row = conn.execute(
+        (
+            "SELECT id FROM feature_request_build_runs "
+            "WHERE trace_id=? AND status IN ('queued','running') "
+            "ORDER BY created_at DESC LIMIT 1"
+        ),
+        (trace,),
+    ).fetchone()
+    if row is None:
+        return None
+    run_id = str(row["id"])
+    update_feature_build_run(
+        conn,
+        run_id,
+        status=status,
+        summary=str(summary or "").strip()[:500],
+        retry_state="none",
+        next_retry_at="",
+    )
+    return run_id
+
+
+def get_feature_build_run_by_trace(
+    conn: sqlite3.Connection,
+    trace_id: str,
+) -> dict[str, object] | None:
+    trace = str(trace_id or "").strip()
+    if not trace:
+        return None
+    row = conn.execute(
+        (
+            "SELECT * FROM feature_request_build_runs "
+            "WHERE trace_id=? ORDER BY created_at DESC LIMIT 1"
+        ),
+        (trace,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def get_attempt_initial_dirty_files(
+    conn: sqlite3.Connection,
+    *,
+    trace_id: str,
+) -> list[str] | None:
+    try:
+        row = conn.execute(
+            (
+                "SELECT initial_dirty_files FROM agent_run_attempts "
+                "WHERE trace_id=? ORDER BY attempt DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None:
+        return None
+    raw = str(row["initial_dirty_files"] or "").strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, list):
+        return None
+    filtered: list[str] = []
+    for item in payload:
+        if not isinstance(item, str):
+            continue
+        candidate = item.strip()
+        if not candidate or candidate in filtered:
+            continue
+        filtered.append(candidate)
+    return filtered or None
+
+
+def get_feature_build_run(
+    conn: sqlite3.Connection,
+    run_id: str,
+) -> dict[str, object] | None:
+    row = conn.execute(
+        "SELECT * FROM feature_request_build_runs WHERE id=? LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def list_due_feature_build_retries(
+    conn: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    now_dt = now or datetime.now(UTC)
+    max_rows = max(1, int(limit))
+    rows = conn.execute(
+        (
+            "SELECT id, feature_id, trace_id, thread_id, source_thread_id, execution_mode, "
+            "created_by, attempt_count, max_attempts, retry_state, next_retry_at, status "
+            "FROM feature_request_build_runs "
+            "WHERE status='running' AND retry_state='scheduled' AND next_retry_at!='' "
+            "ORDER BY next_retry_at ASC LIMIT ?"
+        ),
+        (max_rows,),
+    ).fetchall()
+    due: list[dict[str, object]] = []
+    for row in rows:
+        stamp = str(row["next_retry_at"] or "").strip()
+        if not stamp:
+            continue
+        try:
+            at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=UTC)
+        if at.astimezone(UTC) > now_dt:
+            continue
+        due.append(dict(row))
+    return due
+
+
+def list_feature_build_runs(
+    conn: sqlite3.Connection,
+    feature_id: str,
+    limit: int = 20,
+) -> list[dict[str, object]]:
+    rows = conn.execute(
+        (
+            "SELECT id, feature_id, trace_id, thread_id, status, summary, "
+            "attempt_count, max_attempts, retry_state, next_retry_at, last_failure_reason, "
+            "active_attempt, last_progress_at, last_event_type, last_trace_id, terminal_reason, "
+            "workspace_path, workspace_created_at, workspace_expires_at, "
+            "dependency_snapshot_json, validation_status, validation_log_path, validation_error, "
+            "source_thread_id, execution_mode, created_by, created_at, updated_at "
+            "FROM feature_request_build_runs WHERE feature_id=? "
+            "ORDER BY created_at DESC LIMIT ?"
+        ),
+        (feature_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_latest_feature_build_run_for_thread(
+    conn: sqlite3.Connection,
+    thread_id: str,
+) -> dict[str, object] | None:
+    row = conn.execute(
+        (
+            "SELECT r.id, r.feature_id, r.trace_id, r.thread_id, r.status, r.summary, "
+            "r.attempt_count, r.max_attempts, r.retry_state, r.next_retry_at, "
+            "r.last_failure_reason, r.active_attempt, r.last_progress_at, "
+            "r.last_event_type, r.last_trace_id, r.terminal_reason, "
+            "r.workspace_path, r.workspace_created_at, r.workspace_expires_at, "
+            "r.dependency_snapshot_json, r.validation_status, r.validation_log_path, "
+            "r.validation_error, r.source_thread_id, r.execution_mode, r.created_by, "
+            "r.created_at, r.updated_at, b.title AS feature_title, b.approval_status "
+            "FROM feature_request_build_runs r "
+            "JOIN bug_reports b ON b.id=r.feature_id "
+            "WHERE r.thread_id=? AND b.kind='feature' "
+            "ORDER BY r.updated_at DESC LIMIT 1"
+        ),
+        (thread_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def reconcile_stale_feature_build_runs(
+    conn: sqlite3.Connection,
+    *,
+    stale_after_seconds: int = 900,
+    limit: int = 200,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Mark stale running feature-build runs as failed.
+
+    A run is stale if its `updated_at` timestamp is older than `stale_after_seconds`.
+    """
+    threshold = max(1, int(stale_after_seconds))
+    max_rows = max(1, int(limit))
+    now_dt = now or datetime.now(UTC)
+    cutoff = now_dt - timedelta(seconds=threshold)
+    rows = conn.execute(
+        (
+            "SELECT id, updated_at, summary FROM feature_request_build_runs "
+            "WHERE status='running' ORDER BY updated_at ASC LIMIT ?"
+        ),
+        (max_rows,),
+    ).fetchall()
+
+    reconciled_ids: list[str] = []
+    for row in rows:
+        stamp = str(row["updated_at"] or "")
+        if not stamp:
+            continue
+        try:
+            dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        if dt.astimezone(UTC) > cutoff:
+            continue
+        run_id = str(row["id"])
+        summary = str(row["summary"] or "").strip()
+        if not summary:
+            summary = (
+                "Build run reconciled as failed after stale running timeout "
+                f"({threshold}s)"
+            )
+        update_feature_build_run(conn, run_id, status="failed", summary=summary)
+        reconciled_ids.append(run_id)
+
+    return {
+        "reconciled": len(reconciled_ids),
+        "ids": reconciled_ids,
+        "stale_after_seconds": threshold,
+        "cutoff": cutoff.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Approval list / revoke helpers
+# ---------------------------------------------------------------------------
+
+def list_approvals(
+    conn: sqlite3.Connection,
+    *,
+    action: str | None = None,
+    status: str | None = None,
+    target_ref: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, object]]:
+    filters: list[str] = []
+    params: list[object] = []
+    if action:
+        filters.append("action=?")
+        params.append(action)
+    if status:
+        filters.append("status=?")
+        params.append(status)
+    if target_ref is not None:
+        filters.append("target_ref=?")
+        params.append(target_ref)
+    where = f" WHERE {' AND '.join(filters)}" if filters else ""
+    rows = conn.execute(
+        f"SELECT * FROM approvals{where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (*params, limit, offset),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def revoke_approval(conn: sqlite3.Connection, approval_id: str, *, actor_id: str) -> bool:
+    """Mark an active approval as revoked. Returns True if updated."""
+    row = conn.execute(
+        "SELECT id, status FROM approvals WHERE id=? LIMIT 1",
+        (approval_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    if str(row["status"]) != "approved":
+        return False
+    conn.execute(
+        "UPDATE approvals SET status='revoked', consumed_by_trace_id=? WHERE id=?",
+        (f"revoked_by:{actor_id}", approval_id),
+    )
+    return True
+
+
+def create_devswarm_task(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    task_type: str,
+    description: str,
+    repo_path: str,
+    worktree_path: str,
+    branch: str,
+    base_branch: str,
+    tmux_session: str,
+    status: str,
+    max_attempts: int,
+    model: str,
+    provider: str,
+    checks_json: str = "{}",
+) -> None:
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO devswarm_tasks("
+            "id, task_type, description, repo_path, worktree_path, branch, base_branch, "
+            "tmux_session, status, attempt, max_attempts, model, provider, checks_json, "
+            "last_error, completed_at, created_at, updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ),
+        (
+            task_id,
+            task_type,
+            description,
+            repo_path,
+            worktree_path,
+            branch,
+            base_branch,
+            tmux_session,
+            status,
+            0,
+            max(1, int(max_attempts)),
+            model,
+            provider,
+            checks_json,
+            "",
+            None,
+            now,
+            now,
+        ),
+    )
+
+
+def get_devswarm_task(conn: sqlite3.Connection, task_id: str) -> dict[str, object] | None:
+    row = conn.execute(
+        "SELECT * FROM devswarm_tasks WHERE id=? LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def list_devswarm_tasks(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM devswarm_tasks WHERE status=? ORDER BY updated_at DESC LIMIT ?",
+            (status, max(1, min(500, int(limit)))),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM devswarm_tasks ORDER BY updated_at DESC LIMIT ?",
+            (max(1, min(500, int(limit))),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_active_devswarm_tasks(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 200,
+) -> list[dict[str, object]]:
+    rows = conn.execute(
+        (
+            "SELECT * FROM devswarm_tasks "
+            "WHERE status IN ('queued','running','needs_attention','ready_for_review') "
+            "ORDER BY updated_at ASC LIMIT ?"
+        ),
+        (max(1, min(500, int(limit))),),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_devswarm_task(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    status: str | None = None,
+    attempt: int | None = None,
+    pr_number: int | None = None,
+    pr_url: str | None = None,
+    checks_json: str | None = None,
+    last_error: str | None = None,
+    completed_at: str | None = None,
+) -> None:
+    fields: list[str] = []
+    params: list[object] = []
+    if status is not None:
+        fields.append("status=?")
+        params.append(status)
+    if attempt is not None:
+        fields.append("attempt=?")
+        params.append(max(0, int(attempt)))
+    if pr_number is not None:
+        fields.append("pr_number=?")
+        params.append(int(pr_number))
+    if pr_url is not None:
+        fields.append("pr_url=?")
+        params.append(pr_url)
+    if checks_json is not None:
+        fields.append("checks_json=?")
+        params.append(checks_json)
+    if last_error is not None:
+        fields.append("last_error=?")
+        params.append(last_error)
+    if completed_at is not None:
+        fields.append("completed_at=?")
+        params.append(completed_at)
+    fields.append("updated_at=?")
+    params.append(now_iso())
+    params.append(task_id)
+    conn.execute(
+        f"UPDATE devswarm_tasks SET {', '.join(fields)} WHERE id=?",
+        tuple(params),
+    )

@@ -10,6 +10,7 @@ import {
   MessagesSquare,
   RefreshCw,
   Shield,
+  ShieldCheck,
   Scale,
   Server,
   Bug,
@@ -20,10 +21,19 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeft,
+  GitBranch,
+  Map,
+  Rocket,
 } from "lucide-react";
 import { useThemeStore } from "../../stores/theme";
 import { useAuthStore } from "../../stores/auth";
 import { logout } from "../../api/endpoints";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../ui/tooltip";
 
 const navGroups = [
   {
@@ -40,9 +50,13 @@ const navGroups = [
       { label: "Agents", to: "/admin/agents", icon: Bot },
       { label: "Providers", to: "/admin/providers", icon: Server },
       { label: "Channels", to: "/admin/channels", icon: Smartphone },
+      { label: "Repo", to: "/admin/repo", icon: GitBranch },
+      { label: "Roadmap", to: "/admin/roadmap", icon: Map },
+      { label: "Swarm", to: "/admin/swarm", icon: Rocket },
       { label: "Memory", to: "/admin/memory", icon: Brain },
       { label: "Schedules", to: "/admin/schedules", icon: Clock },
       { label: "Self-Update", to: "/admin/selfupdate", icon: RefreshCw },
+      { label: "Approvals", to: "/admin/approvals", icon: ShieldCheck },
       { label: "Governance", to: "/admin/governance", icon: Scale },
       { label: "Permissions", to: "/admin/permissions", icon: Shield },
     ],
@@ -82,80 +96,125 @@ export default function Shell({ children }: PropsWithChildren) {
   };
 
   return (
-    <div className="flex min-h-screen">
-      <aside
-        className={`sticky top-0 flex h-screen flex-col border-r border-[var(--border-default)] bg-surface transition-all ${collapsed ? "w-16" : "w-60"}`}
-      >
-        <div className="flex items-center gap-2 border-b border-[var(--border-default)] px-3 py-4">
-          {!collapsed && (
-            <div className="flex-1">
-              <h1 className="font-display text-lg text-[var(--text-primary)]">Jarvis</h1>
-              <p className="text-[11px] text-[var(--text-muted)]">Control Center</p>
-            </div>
-          )}
-          <button
-            onClick={() => setCollapsed((v) => !v)}
-            className="rounded-md p-1.5 text-[var(--text-muted)] hover:bg-mist"
-          >
-            {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
-          </button>
-        </div>
-
-        <nav className="flex-1 overflow-y-auto px-2 py-3">
-          {navGroups.map((group) => (
-            <div key={group.label} className="mb-4">
-              {!collapsed && (
-                <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                  {group.label}
-                </div>
-              )}
-              <div className="space-y-0.5">
-                {group.items.map((item) => {
-                  const active = location.pathname.startsWith(item.to);
-                  const Icon = item.icon;
-                  return (
-                    <Link
-                      key={item.to}
-                      to={item.to}
-                      title={collapsed ? item.label : undefined}
-                      className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition ${
-                        active
-                          ? "bg-[#13293d] text-white dark:bg-slate-200 dark:text-slate-900"
-                          : "text-[var(--text-secondary)] hover:bg-mist hover:text-[var(--text-primary)]"
-                      } ${collapsed ? "justify-center" : ""}`}
-                    >
-                      <Icon size={18} />
-                      {!collapsed && <span>{item.label}</span>}
-                    </Link>
-                  );
-                })}
+    <TooltipProvider delayDuration={200}>
+      <div className="flex min-h-screen bg-bg">
+        <aside
+          className={`sticky top-0 flex h-screen flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)] transition-all duration-200 ${collapsed ? "w-14" : "w-52"}`}
+        >
+          {/* Logo / header */}
+          <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-4">
+            {!collapsed && (
+              <div className="flex-1 min-w-0">
+                <h1 className="font-mono text-xs font-semibold tracking-widest uppercase text-text2">
+                  JARVIS<span className="cursor-blink text-accent">_</span>
+                </h1>
+                <p className="text-[10px] text-text4 font-mono">control center</p>
               </div>
-            </div>
-          ))}
-        </nav>
+            )}
+            <button
+              onClick={() => setCollapsed((v) => !v)}
+              className="rounded-md p-1.5 text-text3 hover:bg-surface-2"
+            >
+              {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+          </div>
 
-        <div className="border-t border-[var(--border-default)] px-2 py-3 space-y-1">
-          <button
-            onClick={cycleTheme}
-            title={`Theme: ${theme}`}
-            className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-[var(--text-secondary)] hover:bg-mist ${collapsed ? "justify-center" : ""}`}
-          >
-            <ThemeIcon size={18} />
-            {!collapsed && <span className="capitalize">{theme}</span>}
-          </button>
-          <button
-            onClick={handleLogout}
-            className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-[var(--text-secondary)] hover:bg-mist hover:text-red-500 ${collapsed ? "justify-center" : ""}`}
-          >
-            <LogOut size={18} />
-            {!collapsed && <span>Logout</span>}
-          </button>
-        </div>
-      </aside>
+          {/* Nav */}
+          <nav className="flex-1 overflow-y-auto px-2 py-3">
+            {navGroups.map((group) => (
+              <div key={group.label} className="mb-4">
+                {!collapsed && (
+                  <div className="mb-1 px-2 text-[9px] font-medium uppercase tracking-[0.15em] text-text4">
+                    {group.label}
+                  </div>
+                )}
+                <div className="space-y-0.5">
+                  {group.items.map((item) => {
+                    const active = location.pathname.startsWith(item.to);
+                    const Icon = item.icon;
+                    const linkEl = (
+                      <Link
+                        key={item.to}
+                        to={item.to}
+                        className={`flex items-center gap-2.5 border-l-2 px-2 py-2 text-sm transition-colors duration-150 ${
+                          active
+                            ? "border-accent bg-surface-2 text-text"
+                            : "border-transparent text-text3 hover:bg-surface-2 hover:text-text2"
+                        } ${collapsed ? "justify-center" : ""}`}
+                      >
+                        <Icon size={17} />
+                        {!collapsed && (
+                          <span className={active ? "font-medium" : ""}>{item.label}</span>
+                        )}
+                      </Link>
+                    );
+                    if (collapsed) {
+                      return (
+                        <Tooltip key={item.to}>
+                          <TooltipTrigger asChild>{linkEl}</TooltipTrigger>
+                          <TooltipContent side="right">{item.label}</TooltipContent>
+                        </Tooltip>
+                      );
+                    }
+                    return linkEl;
+                  })}
+                </div>
+              </div>
+            ))}
+          </nav>
 
-      <main className="flex-1 overflow-auto p-4 md:p-6">
-        <div className="mx-auto max-w-7xl">{children}</div>
-      </main>
-    </div>
+          {/* Bottom actions */}
+          <div className="border-t border-[var(--color-border)] px-2 py-3 space-y-0.5">
+            {collapsed ? (
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={cycleTheme}
+                      className="flex w-full items-center justify-center rounded-md p-2 text-text3 hover:bg-surface-2"
+                    >
+                      <ThemeIcon size={17} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">Theme: {theme}</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={handleLogout}
+                      className="flex w-full items-center justify-center rounded-md p-2 text-text3 hover:bg-surface-2 hover:text-danger"
+                    >
+                      <LogOut size={17} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">Logout</TooltipContent>
+                </Tooltip>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={cycleTheme}
+                  className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-text3 hover:bg-surface-2 hover:text-text2"
+                >
+                  <ThemeIcon size={17} />
+                  <span className="capitalize">{theme}</span>
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-text3 hover:bg-surface-2 hover:text-danger"
+                >
+                  <LogOut size={17} />
+                  <span>Logout</span>
+                </button>
+              </>
+            )}
+          </div>
+        </aside>
+
+        <main className="flex-1 overflow-auto p-6 bg-bg">
+          <div className="mx-auto max-w-7xl">{children}</div>
+        </main>
+      </div>
+    </TooltipProvider>
   );
 }

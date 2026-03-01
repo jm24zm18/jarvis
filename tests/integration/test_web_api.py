@@ -39,9 +39,10 @@ def _login(client: TestClient) -> str:
 
 
 def _login_payload(client: TestClient, external_id: str = "web_admin") -> dict[str, object]:
+    del external_id
     response = client.post(
         "/api/v1/auth/login",
-        json={"password": "secret", "external_id": external_id},
+        json={"password": "secret"},
     )
     assert response.status_code == 200
     return dict(response.json())
@@ -69,88 +70,173 @@ def test_web_auth_login_me_logout_flow() -> None:
 
 def test_provider_config_get_and_update(monkeypatch) -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
-    os.environ["PRIMARY_PROVIDER"] = "gemini"
-    os.environ["GEMINI_MODEL"] = "gemini-2.5-flash"
+    os.environ["PRIMARY_PROVIDER"] = "sglang"
+    os.environ["FALLBACK_PROVIDER"] = "openrouter"
+    os.environ["OPENROUTER_MODEL"] = "google/gemini-2.5-flash"
     os.environ["SGLANG_MODEL"] = "openai/gpt-oss-120b"
+    os.environ["LMSTUDIO_MODEL"] = "local-model"
+    os.environ["LMSTUDIO_BASE_URL"] = "http://127.0.0.1:1234/v1"
+    os.environ["OPENROUTER_API_KEY"] = ""
+    os.environ["LMSTUDIO_API_KEY"] = ""
     get_settings.cache_clear()
     saved: dict[str, str] = {}
 
     def fake_save_env_values(values: dict[str, str]) -> None:
         saved.update(values)
-        for key, value in values.items():
-            os.environ[key] = value
 
     monkeypatch.setattr("jarvis.routes.api.auth._save_env_values", fake_save_env_values)
     monkeypatch.setattr("jarvis.routes.api.auth.enqueue_settings_reload", lambda: True)
 
     client = _managed_client()
-    first_login = _login_payload(client, "bootstrap-admin")
-    bootstrap_user_id = str(first_login["user_id"])
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET role='admin' WHERE id=?", (bootstrap_user_id,))
-
     admin_login = _login_payload(client, "bootstrap-admin")
-    assert admin_login["role"] == "admin"
     headers = {"Authorization": f"Bearer {admin_login['token']}"}
 
     before = client.get("/api/v1/auth/providers/config", headers=headers)
     assert before.status_code == 200
-    assert before.json()["primary_provider"] == "gemini"
+    before_payload = before.json()
+    assert before_payload["primary_provider"] == "sglang"
+    assert before_payload["fallback_provider"] == "openrouter"
+    assert before_payload["openrouter_api_key_set"] is False
+    assert before_payload["openrouter_api_key_masked"] == ""
+    assert before_payload["lmstudio_api_key_set"] is False
+    assert before_payload["lmstudio_api_key_masked"] == ""
 
     update = client.post(
         "/api/v1/auth/providers/config",
         headers=headers,
         json={
-            "primary_provider": "sglang",
-            "gemini_model": "gemini-2.5-pro",
+            "primary_provider": "lmstudio",
+            "fallback_provider": "openrouter",
+            "openrouter_model": "google/gemini-2.5-pro",
             "sglang_model": "openai/gpt-oss-20b",
+            "lmstudio_model": "qwen2.5-coder-7b-instruct",
+            "lmstudio_base_url": "http://127.0.0.1:1234/v1",
+            "openrouter_api_key": "sk-or-v1-example-secret-123456",
+            "lmstudio_api_key": "lmstudio-secret-123456",
         },
     )
     assert update.status_code == 200
     payload = update.json()
     assert payload["ok"] is True
-    assert payload["primary_provider"] == "sglang"
-    assert payload["gemini_model"] == "gemini-2.5-pro"
+    assert payload["primary_provider"] == "lmstudio"
+    assert payload["fallback_provider"] == "openrouter"
+    assert payload["openrouter_model"] == "google/gemini-2.5-pro"
     assert payload["sglang_model"] == "openai/gpt-oss-20b"
-    assert saved["PRIMARY_PROVIDER"] == "sglang"
-    assert saved["GEMINI_MODEL"] == "gemini-2.5-pro"
+    assert payload["lmstudio_model"] == "qwen2.5-coder-7b-instruct"
+    assert payload["lmstudio_base_url"] == "http://127.0.0.1:1234/v1"
+    assert payload["openrouter_api_key_set"] is True
+    assert payload["lmstudio_api_key_set"] is True
+    assert payload["openrouter_api_key_masked"]
+    assert payload["lmstudio_api_key_masked"]
+    assert "example-secret" not in payload["openrouter_api_key_masked"]
+    assert "lmstudio-secret" not in payload["lmstudio_api_key_masked"]
+    assert saved["PRIMARY_PROVIDER"] == "lmstudio"
+    assert saved["FALLBACK_PROVIDER"] == "openrouter"
+    assert saved["OPENROUTER_MODEL"] == "google/gemini-2.5-pro"
     assert saved["SGLANG_MODEL"] == "openai/gpt-oss-20b"
+    assert saved["LMSTUDIO_MODEL"] == "qwen2.5-coder-7b-instruct"
+    assert saved["LMSTUDIO_BASE_URL"] == "http://127.0.0.1:1234/v1"
+    assert saved["OPENROUTER_API_KEY"] == "sk-or-v1-example-secret-123456"
+    assert saved["LMSTUDIO_API_KEY"] == "lmstudio-secret-123456"
+    assert os.environ["PRIMARY_PROVIDER"] == "lmstudio"
+    assert os.environ["FALLBACK_PROVIDER"] == "openrouter"
+    assert os.environ["OPENROUTER_API_KEY"] == "sk-or-v1-example-secret-123456"
+    assert os.environ["LMSTUDIO_API_KEY"] == "lmstudio-secret-123456"
+
+    clear = client.post(
+        "/api/v1/auth/providers/config",
+        headers=headers,
+        json={"clear_openrouter_api_key": True, "clear_lmstudio_api_key": True},
+    )
+    assert clear.status_code == 200
+    clear_payload = clear.json()
+    assert clear_payload["openrouter_api_key_set"] is False
+    assert clear_payload["openrouter_api_key_masked"] == ""
+    assert clear_payload["lmstudio_api_key_set"] is False
+    assert clear_payload["lmstudio_api_key_masked"] == ""
+    assert saved["OPENROUTER_API_KEY"] == ""
+    assert saved["LMSTUDIO_API_KEY"] == ""
+    assert os.environ["OPENROUTER_API_KEY"] == ""
+    assert os.environ["LMSTUDIO_API_KEY"] == ""
     get_settings.cache_clear()
 
 
-def test_provider_config_requires_admin() -> None:
+def test_provider_config_requires_auth_session() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = _managed_client()
 
-    token = _login(client)
+    user = _login_payload(client, "non-admin-user")
+    token = str(user["token"])
     headers = {"Authorization": f"Bearer {token}"}
     response = client.get("/api/v1/auth/providers/config", headers=headers)
-    assert response.status_code == 403
+    assert response.status_code == 200
 
 
-def test_login_rejects_oversized_external_id() -> None:
+def test_provider_config_rejects_matching_fallback_provider(monkeypatch) -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    os.environ["PRIMARY_PROVIDER"] = "openrouter"
+    os.environ["FALLBACK_PROVIDER"] = "sglang"
+    get_settings.cache_clear()
+    monkeypatch.setattr("jarvis.routes.api.auth.enqueue_settings_reload", lambda: True)
+
+    client = _managed_client()
+    admin_login = _login_payload(client, "bootstrap-admin")
+    headers = {"Authorization": f"Bearer {admin_login['token']}"}
+
+    response = client.post(
+        "/api/v1/auth/providers/config",
+        headers=headers,
+        json={"primary_provider": "lmstudio", "fallback_provider": "lmstudio"},
+    )
+    assert response.status_code == 400
+    assert "fallback_provider must be different" in str(response.json().get("detail", ""))
+
+
+def test_provider_models_catalog_includes_lmstudio_and_sglang(monkeypatch) -> None:
+    os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
+    os.environ["SGLANG_MODEL"] = "openai/gpt-oss-120b"
+    os.environ["LMSTUDIO_MODEL"] = "local-model"
+    get_settings.cache_clear()
+    async def fake_load_models_catalog(_base_url: str, _api_key: str = "") -> list[str]:
+        return ["foo-model"]
+
+    monkeypatch.setattr("jarvis.routes.api.auth._load_models_catalog", fake_load_models_catalog)
+
+    client = _managed_client()
+    admin_login = _login_payload(client, "bootstrap-admin")
+    headers = {"Authorization": f"Bearer {admin_login['token']}"}
+
+    response = client.get("/api/v1/auth/providers/models", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "sglang_models" in payload
+    assert "lmstudio_models" in payload
+    assert payload["sglang_models"]
+    assert payload["lmstudio_models"]
+    assert payload["sglang_source"] == "sglang-/models"
+    assert payload["lmstudio_source"] == "lmstudio-/models"
+
+
+def test_login_rejects_external_id() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = _managed_client()
 
     response = client.post(
         "/api/v1/auth/login",
-        json={"password": "secret", "external_id": "x" * 257},
+        json={"password": "secret", "external_id": "x" * 10},
     )
     assert response.status_code == 422
     assert "external_id" in str(response.json().get("detail", "")).lower()
 
 
-def test_login_accepts_max_sized_external_id() -> None:
+def test_login_without_external_id_succeeds() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = _managed_client()
 
-    response = client.post(
-        "/api/v1/auth/login",
-        json={"password": "secret", "external_id": "x" * 256},
-    )
+    response = client.post("/api/v1/auth/login", json={"password": "secret"})
     assert response.status_code == 200
     payload = response.json()
     assert payload["user_id"].startswith("usr_")
@@ -797,15 +883,17 @@ def test_github_issue_comment_without_trigger_is_ignored() -> None:
     assert response.json()["ignored"] is True
 
 
-def test_evolution_items_require_admin() -> None:
+def test_evolution_items_requires_authenticated_session() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = _managed_client()
-    token = _login(client)
+    _admin = _login_payload(client, "bootstrap-admin")
+    user = _login_payload(client, "non-admin-user-evo")
+    token = str(user["token"])
     headers = {"Authorization": f"Bearer {token}"}
 
     listing = client.get("/api/v1/governance/evolution/items", headers=headers)
-    assert listing.status_code == 403
+    assert listing.status_code == 200
     update = client.post(
         "/api/v1/governance/evolution/items/evo_1/status",
         headers=headers,
@@ -816,7 +904,7 @@ def test_evolution_items_require_admin() -> None:
             "result": {"status": "in_progress"},
         },
     )
-    assert update.status_code == 403
+    assert update.status_code == 200
 
 
 def test_evolution_items_status_flow_and_timeline() -> None:
@@ -824,9 +912,6 @@ def test_evolution_items_status_flow_and_timeline() -> None:
     get_settings.cache_clear()
     client = _managed_client()
 
-    first_login = _login_payload(client, "evo-admin")
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET role='admin' WHERE id=?", (str(first_login["user_id"]),))
     admin = _login_payload(client, "evo-admin")
     headers = {"Authorization": f"Bearer {admin['token']}"}
 
@@ -943,9 +1028,6 @@ def test_evolution_items_reject_invalid_transition() -> None:
     get_settings.cache_clear()
     client = _managed_client()
 
-    first_login = _login_payload(client, "evo-admin-2")
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET role='admin' WHERE id=?", (str(first_login["user_id"]),))
     admin = _login_payload(client, "evo-admin-2")
     headers = {"Authorization": f"Bearer {admin['token']}"}
 

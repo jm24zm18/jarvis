@@ -31,25 +31,25 @@ export default function AdminAgentsPage() {
     switch (activeTab) {
       case "identity":
         return (
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--bg-mist)] p-4 text-xs leading-relaxed text-[var(--text-secondary)]">
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-2 p-4 text-xs leading-relaxed text-text2">
             {detail.data.identity_md || "No identity document found."}
           </pre>
         );
       case "soul":
         return (
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--bg-mist)] p-4 text-xs leading-relaxed text-[var(--text-secondary)]">
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-2 p-4 text-xs leading-relaxed text-text2">
             {detail.data.soul_md || "No soul document found."}
           </pre>
         );
       case "heartbeat":
         return (
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--bg-mist)] p-4 text-xs leading-relaxed text-[var(--text-secondary)]">
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-2 p-4 text-xs leading-relaxed text-text2">
             {detail.data.heartbeat_md || "No heartbeat document found."}
           </pre>
         );
       case "permissions":
         return (
-          <pre className="max-h-96 overflow-auto rounded-lg bg-[var(--bg-mist)] p-4 text-xs leading-relaxed text-[var(--text-secondary)]">
+          <pre className="max-h-96 overflow-auto rounded-lg bg-surface-2 p-4 text-xs leading-relaxed text-text2">
             {JSON.stringify(detail.data.permissions, null, 2)}
           </pre>
         );
@@ -65,7 +65,7 @@ export default function AdminAgentsPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[340px_1fr]">
         {/* Agent list */}
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-text3">
             Registry
           </h3>
           <div className="space-y-2">
@@ -80,8 +80,8 @@ export default function AdminAgentsPage() {
                   }}
                   className={`w-full rounded-xl border p-3 text-left transition ${
                     isActive
-                      ? "border-[var(--border-strong)] bg-surface shadow-sm"
-                      : "border-[var(--border-default)] bg-transparent hover:border-[var(--border-strong)] hover:bg-surface"
+                      ? "border-[var(--color-border-2)] bg-[var(--color-surface)] shadow-sm"
+                      : "border-[var(--color-border)] bg-transparent hover:border-[var(--color-border-2)] hover:bg-[var(--color-surface)]"
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -89,26 +89,26 @@ export default function AdminAgentsPage() {
                       className={`flex h-9 w-9 items-center justify-center rounded-lg ${
                         isActive
                           ? "bg-blue-100 dark:bg-blue-900/30"
-                          : "bg-[var(--bg-mist)]"
+                          : "bg-surface-2"
                       }`}
                     >
                       <Bot
                         className={`h-4 w-4 ${
                           isActive
                             ? "text-blue-600 dark:text-blue-400"
-                            : "text-[var(--text-muted)]"
+                            : "text-text3"
                         }`}
                       />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-semibold text-[var(--text-primary)]">
+                        <span className="truncate text-sm font-semibold text-text">
                           {agent.id}
                         </span>
                         <Badge variant="info">{agent.tool_count} tools</Badge>
                       </div>
                       {agent.description ? (
-                        <p className="mt-0.5 truncate text-xs text-[var(--text-muted)]">
+                        <p className="mt-0.5 truncate text-xs text-text3">
                           {agent.description}
                         </p>
                       ) : null}
@@ -118,10 +118,10 @@ export default function AdminAgentsPage() {
               );
             })}
             {agents.isLoading ? (
-              <p className="py-4 text-center text-sm text-[var(--text-muted)]">Loading agents...</p>
+              <p className="py-4 text-center text-sm text-text3">Loading agents...</p>
             ) : null}
             {!agents.isLoading && (agents.data?.items ?? []).length === 0 ? (
-              <p className="py-4 text-center text-sm text-[var(--text-muted)]">
+              <p className="py-4 text-center text-sm text-text3">
                 No agents registered.
               </p>
             ) : null}
@@ -133,8 +133,8 @@ export default function AdminAgentsPage() {
           {!selected ? (
             <Card className="flex min-h-[300px] items-center justify-center">
               <div className="text-center">
-                <Bot className="mx-auto mb-3 h-10 w-10 text-[var(--text-muted)]" />
-                <p className="text-sm text-[var(--text-muted)]">
+                <Bot className="mx-auto mb-3 h-10 w-10 text-text3" />
+                <p className="text-sm text-text3">
                   Select an agent from the registry to view details.
                 </p>
               </div>
@@ -144,8 +144,8 @@ export default function AdminAgentsPage() {
               header={
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Bot className="h-5 w-5 text-[var(--text-secondary)]" />
-                    <h3 className="font-display text-base text-[var(--text-primary)]">
+                    <Bot className="h-5 w-5 text-text2" />
+                    <h3 className="font-mono text-xs font-semibold uppercase tracking-widest text-text2">
                       {selected}
                     </h3>
                   </div>
@@ -157,8 +157,8 @@ export default function AdminAgentsPage() {
                 </div>
               }
             >
-              {/* Tab navigation */}
-              <div className="mb-4 flex gap-1 rounded-lg bg-[var(--bg-mist)] p-1">
+              {/* Tab navigation - custom tab implementation */}
+              <div className="mb-4 flex gap-1 rounded-lg bg-surface-2 p-1">
                 {tabs.map((tab) => {
                   const Icon = tab.icon;
                   const isTabActive = activeTab === tab.key;
@@ -168,8 +168,8 @@ export default function AdminAgentsPage() {
                       onClick={() => setActiveTab(tab.key)}
                       className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium transition ${
                         isTabActive
-                          ? "bg-surface text-[var(--text-primary)] shadow-sm"
-                          : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                          ? "bg-[var(--color-surface)] text-text shadow-sm"
+                          : "text-text3 hover:text-text2"
                       }`}
                     >
                       <Icon className="h-3.5 w-3.5" />
@@ -184,7 +184,7 @@ export default function AdminAgentsPage() {
                 renderTabContent()
               ) : detail.isLoading ? (
                 <div className="flex h-48 items-center justify-center">
-                  <p className="text-sm text-[var(--text-muted)]">Loading agent data...</p>
+                  <p className="text-sm text-text3">Loading agent data...</p>
                 </div>
               ) : null}
             </Card>

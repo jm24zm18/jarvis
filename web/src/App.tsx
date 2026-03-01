@@ -16,6 +16,10 @@ import AdminProvidersPage from "./pages/admin/providers";
 import AdminBugsPage from "./pages/admin/bugs";
 import AdminGovernancePage from "./pages/admin/governance";
 import AdminChannelsPage from "./pages/admin/channels";
+import AdminRepoPage from "./pages/admin/repo";
+import AdminRoadmapPage from "./pages/admin/roadmap";
+import AdminApprovalsPage from "./pages/admin/approvals";
+import AdminSwarmPage from "./pages/admin/swarm";
 import { me } from "./api/endpoints";
 import { useAuthStore } from "./stores/auth";
 
@@ -39,7 +43,7 @@ function Protected({ children }: { children: JSX.Element }) {
     if (authCheck.isError) clearAuth();
   }, [authCheck.data, authCheck.isError, authCheck.isSuccess, clearAuth, setAuth]);
 
-  if (authCheck.isLoading) return <div className="p-4 text-sm text-ink/70">Checking session...</div>;
+  if (authCheck.isLoading) return <div className="p-4 font-mono text-xs text-text3">Checking session...</div>;
   if (authCheck.isError || !isAuthenticated) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
@@ -70,6 +74,10 @@ export default function App() {
                 <Route path="admin/bugs" element={<AdminBugsPage />} />
                 <Route path="admin/governance" element={<AdminGovernancePage />} />
                 <Route path="admin/channels" element={<AdminChannelsPage />} />
+                <Route path="admin/repo" element={<AdminRepoPage />} />
+                <Route path="admin/roadmap" element={<AdminRoadmapPage />} />
+                <Route path="admin/approvals" element={<AdminApprovalsPage />} />
+                <Route path="admin/swarm" element={<AdminSwarmPage />} />
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Routes>
             </Shell>

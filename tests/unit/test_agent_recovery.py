@@ -1,0 +1,886 @@
+import json
+from datetime import UTC, datetime, timedelta
+
+from jarvis.config import get_settings
+from jarvis.db.connection import get_conn
+from jarvis.db.queries import (
+    create_feature_build_run,
+    ensure_channel,
+    ensure_open_thread,
+    ensure_system_state,
+    ensure_user,
+    insert_message,
+    now_iso,
+    update_feature_build_run,
+)
+from jarvis.events.models import EventInput
+from jarvis.events.writer import emit_event, redact_payload
+from jarvis.ids import new_id
+from jarvis.tasks.agent import _git_changed_files, agent_step
+from jarvis.tasks.agent_attempts import resolve_existing_trace_message_id, start_attempt
+from jarvis.tasks.agent_recovery import reap_stale_agent_runs
+
+
+class _StubRunner:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object], str | None]] = []
+
+    def send_task(
+        self,
+        name: str,
+        kwargs: dict[str, object] | None = None,
+        queue: str | None = None,
+    ) -> bool:
+        self.calls.append((name, kwargs or {}, queue))
+        return True
+
+
+def _emit_trace_step_end_event(conn, *, trace_id: str, thread_id: str, message_id: str) -> None:
+    payload = {"message_id": message_id, "lane": "primary"}
+    emit_event(
+        conn,
+        EventInput(
+            trace_id=trace_id,
+            span_id=new_id("spn"),
+            parent_span_id=None,
+            thread_id=thread_id,
+            event_type="agent.step.end",
+            component="orchestrator",
+            actor_type="agent",
+            actor_id="main",
+            payload_json=json.dumps(payload),
+            payload_redacted_json=json.dumps(redact_payload(payload)),
+        ),
+    )
+
+
+def test_agent_step_retries_and_records_attempt_lifecycle(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    async def fake_run_agent_step(*_args, **kwargs) -> str:
+        calls["count"] += 1
+        notify_fn = kwargs.get("notify_fn")
+        progress_fn = kwargs.get("progress_fn")
+        if callable(progress_fn):
+            progress_fn("phase", {"phase": "model.run", "iteration": calls["count"]})
+        if callable(notify_fn):
+            notify_fn("model.run.start", {"iteration": calls["count"]})
+        if calls["count"] == 1:
+            raise TimeoutError("simulated timeout")
+        return "msg_recovered"
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr("jarvis.tasks.agent.time.sleep", lambda *_args, **_kwargs: None)
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550999")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "check retry")
+
+    trace_id = "trc_retry_lifecycle"
+    message_id = agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+    assert message_id == "msg_recovered"
+    assert calls["count"] == 2
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            (
+                "SELECT attempt, status, failure_kind, final_message_id "
+                "FROM agent_run_attempts WHERE trace_id=? ORDER BY attempt"
+            ),
+            (trace_id,),
+        ).fetchall()
+        notifications = conn.execute(
+            "SELECT event_type FROM web_notifications WHERE thread_id=? ORDER BY id",
+            (thread_id,),
+        ).fetchall()
+
+    assert [int(row["attempt"]) for row in rows] == [1, 2]
+    assert [str(row["status"]) for row in rows] == ["failed", "succeeded"]
+    assert str(rows[0]["failure_kind"]) == "timeout"
+    assert str(rows[1]["final_message_id"]) == "msg_recovered"
+
+    event_types = {str(row["event_type"]) for row in notifications}
+    assert "trace.agent.step.retried" in event_types
+    assert "trace.agent.step.end" in event_types
+
+
+def test_reaper_marks_stale_and_requeues_attempt(monkeypatch) -> None:
+    runner = _StubRunner()
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: runner)
+
+    trace_id = "trc_stale_recover"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550888")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        start_attempt(
+            conn,
+            trace_id=trace_id,
+            thread_id=thread_id,
+            actor_id="main",
+            attempt=1,
+        )
+        stale_at = (datetime.now(UTC) - timedelta(minutes=20)).isoformat()
+        conn.execute(
+            (
+                "UPDATE agent_run_attempts SET phase='model.run', started_at=?, "
+                "last_heartbeat_at=? WHERE trace_id=? AND attempt=1"
+            ),
+            (stale_at, stale_at, trace_id),
+        )
+
+    result = reap_stale_agent_runs()
+    assert result["stale"] == 1
+    assert result["recovered"] == 1
+    assert result["exhausted"] == 0
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, failure_kind FROM agent_run_attempts WHERE trace_id=? AND attempt=1",
+            (trace_id,),
+        ).fetchone()
+        recovered_note = conn.execute(
+            (
+                "SELECT payload_json FROM web_notifications "
+                "WHERE thread_id=? AND event_type='trace.agent.step.recovered' "
+                "ORDER BY id DESC LIMIT 1"
+            ),
+            (thread_id,),
+        ).fetchone()
+
+    assert row is not None
+    assert str(row["status"]) == "abandoned"
+    assert str(row["failure_kind"]) == "stale_timeout"
+    assert recovered_note is not None
+
+
+def test_resolve_existing_trace_message_id_falls_back_to_agent_step_end_event() -> None:
+    trace_id = "trc_existing_via_event"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550777")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        message_id = insert_message(conn, thread_id, "assistant", "already emitted")
+        _emit_trace_step_end_event(
+            conn,
+            trace_id=trace_id,
+            thread_id=thread_id,
+            message_id=message_id,
+        )
+        resolved = resolve_existing_trace_message_id(conn, trace_id=trace_id, thread_id=thread_id)
+    assert resolved == message_id
+
+
+def test_agent_step_returns_existing_event_message_without_new_attempt(monkeypatch) -> None:
+    async def should_not_run(*_args, **_kwargs) -> str:
+        raise AssertionError("run_agent_step should not execute when trace output already exists")
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", should_not_run)
+
+    trace_id = "trc_event_short_circuit"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550778")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "what date is today")
+        message_id = insert_message(conn, thread_id, "assistant", "Today is **February 28, 2026**.")
+        _emit_trace_step_end_event(
+            conn,
+            trace_id=trace_id,
+            thread_id=thread_id,
+            message_id=message_id,
+        )
+
+    returned = agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+    assert returned == message_id
+    with get_conn() as conn:
+        attempt_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM agent_run_attempts WHERE trace_id=?",
+                (trace_id,),
+            ).fetchone()["n"]
+        )
+    assert attempt_count == 0
+
+
+def test_reaper_skips_duplicate_when_message_already_emitted(monkeypatch) -> None:
+    runner = _StubRunner()
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: runner)
+
+    trace_id = "trc_stale_duplicate_skip"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550779")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        message_id = insert_message(conn, thread_id, "assistant", "already sent")
+        _emit_trace_step_end_event(
+            conn,
+            trace_id=trace_id,
+            thread_id=thread_id,
+            message_id=message_id,
+        )
+        start_attempt(
+            conn,
+            trace_id=trace_id,
+            thread_id=thread_id,
+            actor_id="main",
+            attempt=1,
+        )
+        stale_at = (datetime.now(UTC) - timedelta(minutes=20)).isoformat()
+        conn.execute(
+            (
+                "UPDATE agent_run_attempts SET phase='state.extract', started_at=?, "
+                "last_heartbeat_at=? WHERE trace_id=? AND attempt=1"
+            ),
+            (stale_at, stale_at, trace_id),
+        )
+
+    result = reap_stale_agent_runs()
+    assert result["stale"] == 1
+    assert result["recovered"] == 0
+    assert result["exhausted"] == 0
+    assert result["duplicate_skipped"] == 1
+    assert runner.calls == []
+
+    with get_conn() as conn:
+        row = conn.execute(
+            (
+                "SELECT status, failure_kind, final_message_id "
+                "FROM agent_run_attempts WHERE trace_id=? AND attempt=1"
+            ),
+            (trace_id,),
+        ).fetchone()
+        duplicate_note = conn.execute(
+            (
+                "SELECT payload_json FROM web_notifications "
+                "WHERE thread_id=? AND event_type='trace.agent.step.recovery_skipped_duplicate' "
+                "ORDER BY id DESC LIMIT 1"
+            ),
+            (thread_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["status"]) == "succeeded"
+    assert str(row["failure_kind"] or "") == ""
+    assert str(row["final_message_id"]) == message_id
+    assert duplicate_note is not None
+
+
+def test_git_changed_files_subtracts_baseline(monkeypatch) -> None:
+    class FakeProc:
+        returncode = 0
+        stdout = "foo.txt\nbar.txt\n"
+        stderr = ""
+
+    monkeypatch.setattr(
+        "jarvis.tasks.agent.subprocess.run",
+        lambda *args, **kwargs: FakeProc(),
+    )
+    files, err = _git_changed_files(baseline={"foo.txt"})
+    assert err is None
+    assert files == ["bar.txt"]
+
+
+def test_agent_step_keeps_succeeded_attempt_when_post_side_effects_fail(monkeypatch) -> None:
+    async def fake_run_agent_step(*, conn, thread_id, **_kwargs) -> str:
+        return insert_message(conn, thread_id, "assistant", "done")
+
+    class _ExplodingRunner:
+        def send_task(self, *_args, **_kwargs) -> bool:
+            raise RuntimeError("dispatch boom")
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr("jarvis.tasks.get_task_runner", lambda: _ExplodingRunner())
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550991")
+        channel_id = ensure_channel(conn, user_id, "whatsapp")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "hello")
+
+    trace_id = "trc_post_effect_failure"
+    message_id = agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+    assert message_id.startswith("msg_")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, ended_at FROM agent_run_attempts WHERE trace_id=? AND attempt=1",
+            (trace_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["status"]) == "succeeded"
+    assert str(row["ended_at"] or "").strip()
+
+
+def test_agent_step_feature_builder_does_not_emit_relay_message(monkeypatch) -> None:
+    async def fake_run_agent_step(*, conn, thread_id, **_kwargs) -> str:
+        return insert_message(conn, thread_id, "agent", "NEEDS_USER_GUIDANCE: split me")
+
+    relay_calls: list[str] = []
+
+    def _record_session_send(*_args, **_kwargs):
+        relay_calls.append("called")
+        return "evt_test"
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr("jarvis.tasks.agent.session_send", _record_session_send)
+
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550992")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "build")
+
+    trace_id = "trc_feature_builder_no_relay"
+    _ = agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="feature_builder")
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT content FROM messages WHERE thread_id=? ORDER BY created_at",
+            (thread_id,),
+        ).fetchall()
+    assert relay_calls == []
+    assert not any("[feature_builder->main]" in str(row["content"]) for row in rows)
+
+
+def _insert_feature(conn) -> str:
+    feature_id = new_id("bug")
+    now = now_iso()
+    conn.execute(
+        (
+            "INSERT INTO bug_reports"
+            "(id, kind, title, description, status, priority, "
+            "reporter_id, assignee_agent, thread_id, trace_id, "
+            "github_issue_number, github_issue_url, github_synced_at, github_sync_error, "
+            "created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ),
+        (
+            feature_id,
+            "feature",
+            "Feature Build",
+            "",
+            "open",
+            "medium",
+            "usr_test",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            now,
+            now,
+        ),
+    )
+    return feature_id
+
+
+def test_agent_step_finalizes_feature_build_run_succeeded(monkeypatch) -> None:
+    monkeypatch.setenv("FEATURE_BUILD_DELIVERABLE_GATE_ENABLED", "0")
+    get_settings.cache_clear()
+
+    async def fake_run_agent_step(*, conn, thread_id, **_kwargs) -> str:
+        return insert_message(conn, thread_id, "assistant", "Build completed successfully.")
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+
+    trace_id = "trc_build_finalize_success"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550777")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "build it")
+        fid = _insert_feature(conn)
+        run_id = create_feature_build_run(
+            conn,
+            feature_id=fid,
+            created_by=user_id,
+            trace_id=trace_id,
+            thread_id=thread_id,
+        )
+        update_feature_build_run(conn, run_id, status="running")
+
+    agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, summary FROM feature_request_build_runs WHERE id=?",
+            (run_id,),
+        ).fetchone()
+    get_settings.cache_clear()
+    assert row is not None
+    assert str(row["status"]) == "succeeded"
+    assert "completed successfully" in str(row["summary"]).lower()
+
+
+def test_agent_step_finalizes_feature_build_run_failed_on_degraded(monkeypatch) -> None:
+    async def fake_run_agent_step(*, conn, thread_id, trace_id, **_kwargs) -> str:
+        message_id = insert_message(
+            conn,
+            thread_id,
+            "assistant",
+            (
+                "I hit an internal response issue while processing that request. "
+                f"Please try again. (ref: {trace_id})"
+            ),
+        )
+        payload = {"reason": "placeholder_response_after_terminal_synthesis", "actor_id": "main"}
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="agent.response.degraded",
+                component="orchestrator",
+                actor_type="agent",
+                actor_id="main",
+                payload_json=json.dumps(payload),
+                payload_redacted_json=json.dumps(redact_payload(payload)),
+            ),
+        )
+        return message_id
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+
+    trace_id = "trc_build_finalize_failed"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550778")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "build it")
+        fid = _insert_feature(conn)
+        run_id = create_feature_build_run(
+            conn,
+            feature_id=fid,
+            created_by=user_id,
+            trace_id=trace_id,
+            thread_id=thread_id,
+        )
+        update_feature_build_run(conn, run_id, status="running")
+
+    agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, summary, attempt_count, retry_state, next_retry_at, "
+            "last_failure_reason "
+            "FROM feature_request_build_runs WHERE id=?",
+            (run_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["status"]) == "running"
+    assert str(row["retry_state"]) == "scheduled"
+    assert int(row["attempt_count"]) == 2
+    assert str(row["next_retry_at"]).strip()
+    assert (
+        str(row["last_failure_reason"]).strip()
+        == "placeholder_response_after_terminal_synthesis"
+    )
+    assert "retry scheduled" in str(row["summary"]).lower()
+
+
+def test_agent_step_finalizes_feature_build_run_failed_when_retry_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("FEATURE_BUILD_RETRY_ON_DEGRADED", "0")
+    get_settings.cache_clear()
+
+    async def fake_run_agent_step(*, conn, thread_id, trace_id, **_kwargs) -> str:
+        return insert_message(
+            conn,
+            thread_id,
+            "assistant",
+            (
+                "I hit an internal response issue while processing that request. "
+                f"Please try again. (ref: {trace_id})"
+            ),
+        )
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+
+    trace_id = "trc_build_finalize_failed_no_retry"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550779")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "build it")
+        fid = _insert_feature(conn)
+        run_id = create_feature_build_run(
+            conn,
+            feature_id=fid,
+            created_by=user_id,
+            trace_id=trace_id,
+            thread_id=thread_id,
+        )
+        update_feature_build_run(conn, run_id, status="running")
+
+    agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, summary, retry_state FROM feature_request_build_runs WHERE id=?",
+            (run_id,),
+        ).fetchone()
+    get_settings.cache_clear()
+    assert row is not None
+    assert str(row["status"]) == "failed"
+    assert str(row["retry_state"]) == "none"
+    assert "terminal response" in str(row["summary"]).lower()
+
+
+def test_agent_step_manual_continue_enqueues_exhausted_feature_build(monkeypatch) -> None:
+    class _StubTaskRunner:
+        def send_task(self, *_args, **_kwargs) -> bool:
+            return True
+
+    monkeypatch.setattr("jarvis.tasks.agent.get_task_runner", lambda: _StubTaskRunner())
+    monkeypatch.setattr("jarvis.tasks.runner.TaskRunner", _StubTaskRunner)
+
+    called = {"run": 0}
+
+    async def should_not_run(*, conn, thread_id, **_kwargs) -> str:
+        called["run"] += 1
+        return insert_message(conn, thread_id, "assistant", "unexpected run_agent_step execution")
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", should_not_run)
+
+    trace_id = new_id("trc")
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, f"15555550782_{new_id('usr')}")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "continue")
+        feature_id = _insert_feature(conn)
+        conn.execute(
+            "UPDATE bug_reports SET approval_status='approved' WHERE id=?",
+            (feature_id,),
+        )
+        old_run_id = create_feature_build_run(
+            conn,
+            feature_id=feature_id,
+            created_by=user_id,
+            trace_id="trc_old_exhausted",
+            thread_id=thread_id,
+        )
+        update_feature_build_run(
+            conn,
+            old_run_id,
+            status="failed",
+            attempt_count=5,
+            max_attempts=5,
+            retry_state="exhausted",
+            last_failure_reason="insufficient_deliverable_evidence",
+            terminal_reason="insufficient_deliverable_evidence",
+        )
+
+    message_id = agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+
+    with get_conn() as conn:
+        new_runs = conn.execute(
+            (
+                "SELECT id, status, retry_state, trace_id FROM feature_request_build_runs "
+                "WHERE feature_id=? ORDER BY created_at DESC LIMIT 2"
+            ),
+            (feature_id,),
+        ).fetchall()
+        evt_requested = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.retry.manual_requested' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+        evt_enqueued = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.retry.manual_enqueued' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+        msg_row = conn.execute(
+            "SELECT content FROM messages WHERE id=? LIMIT 1",
+            (message_id,),
+        ).fetchone()
+
+    assert len(new_runs) == 2
+    assert str(new_runs[0]["status"]) == "queued"
+    assert str(new_runs[0]["retry_state"]) == "none"
+    assert str(new_runs[1]["id"]) == old_run_id
+    assert called["run"] == 0
+    assert evt_requested is not None
+    assert evt_enqueued is not None
+    requested_payload = json.loads(str(evt_requested["payload_json"]))
+    enqueued_payload = json.loads(str(evt_enqueued["payload_json"]))
+    assert requested_payload["previous_run_id"] == old_run_id
+    assert enqueued_payload["previous_run_id"] == old_run_id
+    assert enqueued_payload["queued"] is True
+    assert msg_row is not None
+    assert "Queued manual retry for feature build" in str(msg_row["content"])
+
+
+def test_agent_step_continue_does_not_enqueue_when_latest_run_not_exhausted(monkeypatch) -> None:
+    called = {"run": 0}
+
+    async def fake_run_agent_step(*, conn, thread_id, **_kwargs) -> str:
+        called["run"] += 1
+        return insert_message(conn, thread_id, "assistant", "normal assistant flow")
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+
+    trace_id = new_id("trc")
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, f"15555550783_{new_id('usr')}")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "continue")
+        feature_id = _insert_feature(conn)
+        conn.execute(
+            "UPDATE bug_reports SET approval_status='approved' WHERE id=?",
+            (feature_id,),
+        )
+        run_id = create_feature_build_run(
+            conn,
+            feature_id=feature_id,
+            created_by=user_id,
+            trace_id="trc_latest_running",
+            thread_id=thread_id,
+        )
+        update_feature_build_run(conn, run_id, status="running", retry_state="none")
+
+    agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+
+    with get_conn() as conn:
+        evt_requested = conn.execute(
+            (
+                "SELECT id FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.retry.manual_requested' LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+        evt_enqueued = conn.execute(
+            (
+                "SELECT id FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.retry.manual_enqueued' LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+
+    assert called["run"] == 1
+    assert evt_requested is None
+    assert evt_enqueued is None
+
+
+def test_agent_step_feature_build_deliverable_gate_fails_without_diff(monkeypatch) -> None:
+    monkeypatch.setenv("FEATURE_BUILD_RETRY_ON_DEGRADED", "0")
+    monkeypatch.setenv("FEATURE_BUILD_DELIVERABLE_GATE_ENABLED", "1")
+    get_settings.cache_clear()
+    def fake_capture_dirty_files_snapshot() -> tuple[set[str], str | None]:
+        return {"existing/file.txt"}, None
+
+    def fake_git_changed_files(baseline: set[str] | None = None) -> tuple[list[str], str | None]:
+        assert baseline == {"existing/file.txt"}
+        return [], None
+
+    monkeypatch.setattr(
+        "jarvis.tasks.agent._capture_dirty_files_snapshot",
+        fake_capture_dirty_files_snapshot,
+    )
+    monkeypatch.setattr("jarvis.tasks.agent._git_changed_files", fake_git_changed_files)
+
+    async def fake_run_agent_step(*, conn, thread_id, **_kwargs) -> str:
+        return insert_message(conn, thread_id, "assistant", "Implemented all requested changes.")
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+
+    trace_id = "trc_build_deliverable_gate_fail"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550780")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "build it")
+        fid = _insert_feature(conn)
+        run_id = create_feature_build_run(
+            conn,
+            feature_id=fid,
+            created_by=user_id,
+            trace_id=trace_id,
+            thread_id=thread_id,
+        )
+        update_feature_build_run(conn, run_id, status="running")
+
+    agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+
+    with get_conn() as conn:
+        row = conn.execute(
+            (
+                "SELECT status, summary, retry_state, terminal_reason "
+                "FROM feature_request_build_runs WHERE id=?"
+            ),
+            (run_id,),
+        ).fetchone()
+        gate_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.deliverable_gate.failed' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+        synthesis_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.terminal_synthesis' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+        corrected_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.output.corrected' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+        corrected_msg = conn.execute(
+            (
+                "SELECT content FROM messages WHERE thread_id=? AND role='system' "
+                "AND content LIKE 'BUILD_OUTPUT_CORRECTION:%' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (thread_id,),
+        ).fetchone()
+        attempt_row = conn.execute(
+            (
+                "SELECT initial_dirty_files FROM agent_run_attempts "
+                "WHERE trace_id=? ORDER BY attempt DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+    get_settings.cache_clear()
+
+    assert row is not None
+    assert str(row["status"]) == "failed"
+    assert str(row["retry_state"]) == "none"
+    assert str(row["terminal_reason"]) == "insufficient_deliverable_evidence"
+    assert "insufficient_deliverable_evidence" in str(row["summary"])
+    assert gate_evt is not None
+    gate_payload = json.loads(str(gate_evt["payload_json"]))
+    assert gate_payload["reason"] == "insufficient_deliverable_evidence"
+    assert synthesis_evt is not None
+    synthesis_payload = json.loads(str(synthesis_evt["payload_json"]))
+    assert synthesis_payload["reason"] == "insufficient_deliverable_evidence"
+    assert synthesis_payload["deliverable_passed"] is False
+    assert corrected_evt is not None
+    corrected_payload = json.loads(str(corrected_evt["payload_json"]))
+    assert corrected_payload["prior_message_id"] is not None
+    assert "insufficient_deliverable_evidence" in corrected_payload["verification_failures"]
+    assert corrected_msg is not None
+    assert "Build output could not be verified" in str(corrected_msg["content"])
+    assert attempt_row is not None
+    assert json.loads(str(attempt_row["initial_dirty_files"])) == ["existing/file.txt"]
+
+
+def test_agent_step_feature_build_fail_fast_on_repeated_placeholder_reason(monkeypatch) -> None:
+    monkeypatch.setenv("FEATURE_BUILD_RETRY_ON_DEGRADED", "1")
+    monkeypatch.setenv("FEATURE_BUILD_FAIL_FAST_PLACEHOLDER_REPEAT", "1")
+    get_settings.cache_clear()
+
+    async def fake_run_agent_step(*, conn, thread_id, trace_id, **_kwargs) -> str:
+        message_id = insert_message(
+            conn,
+            thread_id,
+            "assistant",
+            (
+                "I completed tool execution but could not synthesize a final summary. "
+                f"Trace: {trace_id}. Review /admin/events for details and retry."
+            ),
+        )
+        payload = {"reason": "placeholder_response_after_tool_loop", "actor_id": "main"}
+        emit_event(
+            conn,
+            EventInput(
+                trace_id=trace_id,
+                span_id=new_id("spn"),
+                parent_span_id=None,
+                thread_id=thread_id,
+                event_type="agent.response.degraded",
+                component="orchestrator",
+                actor_type="agent",
+                actor_id="main",
+                payload_json=json.dumps(payload),
+                payload_redacted_json=json.dumps(redact_payload(payload)),
+            ),
+        )
+        return message_id
+
+    monkeypatch.setattr("jarvis.tasks.agent.run_agent_step", fake_run_agent_step)
+
+    trace_id = "trc_build_fail_fast_placeholder"
+    with get_conn() as conn:
+        ensure_system_state(conn)
+        user_id = ensure_user(conn, "15555550781")
+        channel_id = ensure_channel(conn, user_id, "web")
+        thread_id = ensure_open_thread(conn, user_id, channel_id)
+        insert_message(conn, thread_id, "user", "build it")
+        fid = _insert_feature(conn)
+        run_id = create_feature_build_run(
+            conn,
+            feature_id=fid,
+            created_by=user_id,
+            trace_id=trace_id,
+            thread_id=thread_id,
+        )
+        update_feature_build_run(
+            conn,
+            run_id,
+            status="running",
+            attempt_count=2,
+            max_attempts=5,
+            last_failure_reason="placeholder_response_after_tool_loop",
+        )
+
+    agent_step(trace_id=trace_id, thread_id=thread_id, actor_id="main")
+
+    with get_conn() as conn:
+        row = conn.execute(
+            (
+                "SELECT status, retry_state, terminal_reason, last_failure_reason "
+                "FROM feature_request_build_runs WHERE id=?"
+            ),
+            (run_id,),
+        ).fetchone()
+        denied_evt = conn.execute(
+            (
+                "SELECT payload_json FROM events WHERE trace_id=? "
+                "AND event_type='feature.build.retry.denied' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            (trace_id,),
+        ).fetchone()
+    get_settings.cache_clear()
+
+    assert row is not None
+    assert str(row["status"]) == "failed"
+    assert str(row["retry_state"]) == "exhausted"
+    assert str(row["terminal_reason"]) == "placeholder_response_after_tool_loop"
+    assert str(row["last_failure_reason"]) == "placeholder_response_after_tool_loop"
+    assert denied_evt is not None
+    denied_payload = json.loads(str(denied_evt["payload_json"]))
+    assert denied_payload["policy_action"] == "fail_fast"

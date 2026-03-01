@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 from pathlib import Path
+from typing import SupportsInt, cast
 
 import click
 
@@ -18,7 +18,10 @@ from jarvis.cli.chat import (
 )
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
+from jarvis.db.queries import update_feature_build_run
+from jarvis.formatting import format_int_human, format_timestamp_human
 from jarvis.memory.skills import SkillsService
+from jarvis.tools.feature_isolate import WorkspaceContext, validate_workspace
 
 
 @click.group()
@@ -35,7 +38,7 @@ def setup() -> None:
 
 
 @cli.command()
-@click.option("--json", "json_output", is_flag=True, help="Append JSON output to the report.")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON report only.")
 @click.option("--fix", is_flag=True, help="Try to auto-fix supported failed checks.")
 def doctor(json_output: bool, fix: bool) -> None:
     """Run diagnostic checks and print a health report."""
@@ -70,22 +73,13 @@ def _classify_cli_error(message: str) -> tuple[str, str]:
     return ("provider_unavailable", message)
 
 
-@cli.command("gemini-login")
-@click.option(
-    "--token-path",
-    type=click.Path(path_type=str),
-    default=None,
-    help="Override token cache path (default: GEMINI_CODE_ASSIST_TOKEN_PATH).",
-)
-def gemini_login(token_path: str | None) -> None:
-    """Run manual Gemini OAuth login and write Code Assist token cache."""
-    from jarvis.providers.google_gemini_cli import run_manual_login
-
-    settings = get_settings()
-    resolved = Path(token_path or settings.gemini_code_assist_token_path).expanduser()
-    result = asyncio.run(run_manual_login(resolved))
-    click.echo(f"token cache: {result['token_path']}")
-    click.echo(f"cloudaicompanionProject: {result['cloudaicompanion_project']}")
+def _as_int(value: object, default: int = 0) -> int:
+    try:
+        if isinstance(value, int | float | str | bytes | bytearray):
+            return int(value)
+        return int(cast(SupportsInt, value))
+    except (TypeError, ValueError):
+        return default
 
 
 @cli.command()
@@ -243,7 +237,7 @@ def export(thread_id: str, include_events: bool, output: str | None) -> None:
             (thread_id,),
         ).fetchone()
 
-    out = open(output, "w") if output else sys.stdout
+    out = open(output, "w", encoding="utf-8") if output else sys.stdout
     try:
         for msg in messages:
             out.write(json.dumps({
@@ -416,7 +410,7 @@ def maintenance_group() -> None:
 
 
 def _maintenance_status_payload() -> dict[str, object]:
-    from jarvis.tasks import is_periodic_scheduler_configured
+    from jarvis.tasks import is_periodic_scheduler_configured, stale_periodic_jobs
     from jarvis.tasks.maintenance import _commands_from_settings
 
     settings = get_settings()
@@ -437,6 +431,19 @@ def _maintenance_status_payload() -> dict[str, object]:
             "SELECT id, title, created_at, status FROM bug_reports "
             "WHERE title LIKE 'Local maintenance check failed:%' "
             "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        run_stats_row = conn.execute(
+            "SELECT "
+            "SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) AS running_count, "
+            "SUM(CASE WHEN status='retry_exhausted' THEN 1 ELSE 0 END) AS exhausted_count, "
+            "SUM(CASE WHEN status='abandoned' AND failure_kind='stale_timeout' "
+            "THEN 1 ELSE 0 END) AS stale_abandoned_count "
+            "FROM agent_run_attempts"
+        ).fetchone()
+        recoveries_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM events "
+            "WHERE event_type='agent.step.recovered' "
+            "AND created_at >= datetime('now', '-24 hours')"
         ).fetchone()
 
     latest: dict[str, str] | None = None
@@ -465,7 +472,21 @@ def _maintenance_status_payload() -> dict[str, object]:
         "workdir": settings.maintenance_workdir or str(Path.cwd()),
         "commands": commands,
         "periodic_scheduler_active": is_periodic_scheduler_configured(),
+        "stale_periodic_jobs": stale_periodic_jobs(),
         "last_heartbeat": last_heartbeat,
+        "agent_run_reaper_interval_seconds": int(settings.agent_run_reaper_interval_seconds),
+        "agent_run_stats": {
+            "running": int(run_stats_row["running_count"] or 0) if run_stats_row is not None else 0,
+            "retry_exhausted": (
+                int(run_stats_row["exhausted_count"] or 0) if run_stats_row is not None else 0
+            ),
+            "stale_abandoned": (
+                int(run_stats_row["stale_abandoned_count"] or 0) if run_stats_row is not None else 0
+            ),
+            "recovered_last_24h": (
+                int(recoveries_row["c"] or 0) if recoveries_row is not None else 0
+            ),
+        },
         "open_maintenance_bugs": int(open_count_row["cnt"]) if open_count_row is not None else 0,
         "latest_maintenance_bug": latest,
     }
@@ -480,9 +501,12 @@ def maintenance_status(json_output: bool) -> None:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
     click.echo(f"enabled: {payload['enabled']}")
-    click.echo(f"heartbeat_interval_seconds: {payload['heartbeat_interval_seconds']}")
-    click.echo(f"interval_seconds: {payload['interval_seconds']}")
-    click.echo(f"timeout_seconds: {payload['timeout_seconds']}")
+    click.echo(
+        "heartbeat_interval_seconds: "
+        f"{format_int_human(_as_int(payload['heartbeat_interval_seconds']))}"
+    )
+    click.echo(f"interval_seconds: {format_int_human(_as_int(payload['interval_seconds']))}")
+    click.echo(f"timeout_seconds: {format_int_human(_as_int(payload['timeout_seconds']))}")
     click.echo(f"create_bugs: {payload['create_bugs']}")
     click.echo(f"workdir: {payload['workdir']}")
     click.echo("commands:")
@@ -492,18 +516,42 @@ def maintenance_status(json_output: bool) -> None:
     for command in commands:
         click.echo(f"  - {command}")
     click.echo(f"periodic_scheduler_active: {payload['periodic_scheduler_active']}")
+    stale_jobs = payload.get("stale_periodic_jobs")
+    if isinstance(stale_jobs, list) and stale_jobs:
+        click.echo(f"stale_periodic_jobs: {len(stale_jobs)}")
+        for item in stale_jobs[:5]:
+            if isinstance(item, dict):
+                click.echo(f"  - {item.get('name')} reason={item.get('reason')}")
+    click.echo(f"agent_run_reaper_interval_seconds: {payload['agent_run_reaper_interval_seconds']}")
+    agent_run_stats = payload.get("agent_run_stats")
+    if isinstance(agent_run_stats, dict):
+        recovered = format_int_human(_as_int(agent_run_stats.get("recovered_last_24h", 0)))
+        stale = format_int_human(_as_int(agent_run_stats.get("stale_abandoned", 0)))
+        exhausted = format_int_human(_as_int(agent_run_stats.get("retry_exhausted", 0)))
+        click.echo(
+            "agent_run_stats: "
+            f"running={format_int_human(_as_int(agent_run_stats.get('running', 0)))} "
+            f"recovered_last_24h={recovered} "
+            f"stale_abandoned={stale} "
+            f"retry_exhausted={exhausted}"
+        )
     last_heartbeat = payload.get("last_heartbeat")
     if isinstance(last_heartbeat, dict):
+        created_at = str(last_heartbeat.get("created_at") or "")
         click.echo(
             "last_heartbeat: "
-            f"{last_heartbeat.get('created_at')} trace={last_heartbeat.get('trace_id')}"
+            f"{format_timestamp_human(created_at) if created_at else '-'} "
+            f"trace={last_heartbeat.get('trace_id')}"
         )
-    click.echo(f"open_maintenance_bugs: {payload['open_maintenance_bugs']}")
+    open_bugs = format_int_human(_as_int(payload["open_maintenance_bugs"]))
+    click.echo(f"open_maintenance_bugs: {open_bugs}")
     latest = payload["latest_maintenance_bug"]
     if isinstance(latest, dict):
+        created_at = str(latest.get("created_at") or "")
         click.echo(
             "latest_maintenance_bug: "
-            f"{latest.get('id')} {latest.get('status')} {latest.get('created_at')}"
+            f"{latest.get('id')} {latest.get('status')} "
+            f"{format_timestamp_human(created_at) if created_at else '-'}"
         )
 
 
@@ -536,6 +584,174 @@ def maintenance_enqueue() -> None:
         queue="agent_default",
     )
     click.echo("maintenance task queued" if ok else "failed to queue maintenance task")
+
+
+@cli.group("swarm")
+def swarm_group() -> None:
+    """DevSwarm worker orchestration controls."""
+
+
+@swarm_group.command("create")
+@click.option("--task", "task_description", required=True, help="Task description for the worker.")
+@click.option("--repo", "repo_path", required=True, type=click.Path(path_type=str))
+@click.option("--model", default=None, help="OpenCode model ID (defaults to LMSTUDIO_MODEL).")
+@click.option(
+    "--type",
+    "task_type",
+    default="feature",
+    show_default=True,
+    type=click.Choice(["feature", "bugfix", "refactor"], case_sensitive=False),
+)
+@click.option("--json", "json_output", is_flag=True, help="Print JSON result.")
+def swarm_create(
+    task_description: str,
+    repo_path: str,
+    model: str | None,
+    task_type: str,
+    json_output: bool,
+) -> None:
+    from jarvis.db.migrations.runner import run_migrations
+    from jarvis.tasks import devswarm
+
+    run_migrations()
+    result = devswarm.create_task(
+        description=task_description,
+        repo_path=repo_path,
+        model=model,
+        task_type=task_type,
+    )
+    if json_output:
+        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+    if not result.get("ok"):
+        raise click.ClickException(str(result.get("error") or "swarm create failed"))
+    click.echo(
+        f"created task {result.get('task_id')} status={result.get('status')} "
+        f"branch={result.get('branch')}"
+    )
+
+
+@swarm_group.command("status")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON result.")
+@click.option("--limit", default=50, show_default=True, type=int)
+def swarm_status(json_output: bool, limit: int) -> None:
+    from jarvis.db.migrations.runner import run_migrations
+    from jarvis.tasks import devswarm
+
+    run_migrations()
+    result = devswarm.status(limit=limit)
+    if json_output:
+        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+    items = result.get("items")
+    if not isinstance(items, list) or not items:
+        click.echo("no swarm tasks")
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        click.echo(
+            f"{item.get('id')} status={item.get('status')} branch={item.get('branch')} "
+            f"pr=#{item.get('pr_number') or '-'} "
+            f"attempts={item.get('attempt')}/{item.get('max_attempts')}"
+        )
+
+
+@swarm_group.command("nudge")
+@click.argument("task_id")
+@click.option("--message", required=True, help="Message to send to tmux session.")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON result.")
+def swarm_nudge(task_id: str, message: str, json_output: bool) -> None:
+    from jarvis.db.migrations.runner import run_migrations
+    from jarvis.tasks import devswarm
+
+    run_migrations()
+    result = devswarm.send_tmux(task_id, message)
+    if json_output:
+        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+    if not result.get("ok"):
+        raise click.ClickException(str(result.get("error") or "swarm nudge failed"))
+    click.echo(f"nudged {task_id}")
+
+
+@swarm_group.command("cleanup")
+@click.option("--task-id", default=None, help="Optional single task id to cleanup.")
+@click.option(
+    "--keep-worktrees",
+    is_flag=True,
+    help="Keep worktree directories (still kills tmux and marks task done).",
+)
+@click.option("--json", "json_output", is_flag=True, help="Print JSON result.")
+def swarm_cleanup(task_id: str | None, keep_worktrees: bool, json_output: bool) -> None:
+    from jarvis.db.migrations.runner import run_migrations
+    from jarvis.tasks import devswarm
+
+    run_migrations()
+    result = devswarm.cleanup(task_id=task_id, remove_worktrees=not keep_worktrees)
+    if json_output:
+        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+    if not result.get("ok"):
+        raw_failures = result.get("failures")
+        failure_count = len(raw_failures) if isinstance(raw_failures, list) else 0
+        click.echo(f"cleanup partial failures={failure_count}")
+        return
+    raw_removed = result.get("removed")
+    removed_count = len(raw_removed) if isinstance(raw_removed, list) else 0
+    click.echo(f"cleanup removed={removed_count}")
+
+
+@cli.group("feature")
+def feature_group() -> None:
+    """Feature build utilities."""
+
+
+@feature_group.command("validate")
+@click.option("--id", "feature_id", required=True, help="Feature request ID.")
+def feature_validate(feature_id: str) -> None:
+    """Validate the latest isolated workspace for a feature request."""
+    settings = get_settings()
+    with get_conn() as conn:
+        row = conn.execute(
+            (
+                "SELECT id, workspace_path, workspace_created_at, workspace_expires_at, "
+                "dependency_snapshot_json FROM feature_request_build_runs "
+                "WHERE feature_id=? ORDER BY created_at DESC LIMIT 1"
+            ),
+            (feature_id,),
+        ).fetchone()
+        if row is None:
+            raise click.ClickException(f"no build run found for feature: {feature_id}")
+        workspace = str(row["workspace_path"] or "").strip()
+        if not workspace:
+            raise click.ClickException(
+                f"latest run {row['id']} has no workspace metadata; isolation may be disabled"
+            )
+        raw_snapshot = str(row["dependency_snapshot_json"] or "{}").strip() or "{}"
+        try:
+            snapshot = json.loads(raw_snapshot)
+        except json.JSONDecodeError:
+            snapshot = {}
+        ctx = WorkspaceContext(
+            feature_id=feature_id,
+            workspace_path=Path(workspace),
+            created_at=str(row["workspace_created_at"] or ""),
+            expires_at=str(row["workspace_expires_at"] or ""),
+            dependency_snapshot=snapshot if isinstance(snapshot, dict) else {},
+        )
+        result = validate_workspace(ctx, min_free_gb=int(settings.feature_isolation_min_disk_gb))
+        update_feature_build_run(
+            conn,
+            str(row["id"]),
+            validation_status="passed" if result.ok else "failed",
+            validation_log_path=result.log_path,
+            validation_error=result.error,
+        )
+    if result.ok:
+        click.echo(f"validation passed (log: {result.log_path})")
+    else:
+        click.echo(f"validation failed: {result.error} (log: {result.log_path})")
 
 
 @cli.group("memory")
@@ -612,7 +828,7 @@ def memory_export(
                 ),
                 ((tier, max(1, int(limit))) if tier.strip() else (max(1, int(limit)),)),
             ).fetchall()
-    out = open(output, "w") if output else sys.stdout
+    out = open(output, "w", encoding="utf-8") if output else sys.stdout
     try:
         for row in rows:
             out.write(
