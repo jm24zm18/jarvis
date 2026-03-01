@@ -21,7 +21,7 @@ make setup-smoke-running
 ./start-dev.sh
 ```
 
-- API reloads with `uvicorn --reload`.
+- API reloads with `uvicorn --reload` and excludes `.jarvis/worktrees/*`, `.jarvis/logs/*`, and `.jarvis/prompts/*` to avoid DevSwarm-triggered restarts.
 - Web UI reloads via Vite HMR.
 - Periodic tasks run in-process inside the API lifespan.
 - `make setup-smoke` validates a reproducible local bootstrap path:
@@ -30,6 +30,7 @@ make setup-smoke-running
 - `make setup-smoke-running` is the same smoke path but skips the dev port preflight.
   Use it when local dependency services are intentionally already running.
 - `./start-dev.sh` runs dev preflight first, then:
+  - verifies `opencode` is installed, validates LM Studio reachability, discovers models, and writes valid JSON `opencode.json` (or `OPENCODE_CONFIG_PATH`) before dependency startup.
   - with `DEV_USE_HOST_OLLAMA=1` (default): starts Docker `searxng` + `sglang` and reuses host Ollama (`OLLAMA_BASE_URL`, default `http://localhost:11434`)
   - with `DEV_USE_HOST_OLLAMA=0`: runs full `make dev` (Docker Ollama + SearXNG + SGLang)
   The script then restarts `jarvis-baileys`, verifies Ollama/SearXNG health, and launches API + web dev servers.
@@ -41,7 +42,8 @@ make setup-smoke-running
 
 1. Start LM Studio locally and enable its OpenAI-compatible server.
 2. Set `.env` values:
-   - `LMSTUDIO_BASE_URL` (default: `http://127.0.0.1:1234/v1`)
+   - `LMSTUDIO_BASE_URL` (default: `http://127.0.0.1:1234`)
+   - optional `LMSTUDIO_OPENAI_BASE_URL` for OpenCode bootstrap (default: `${LMSTUDIO_BASE_URL}/v1`)
    - `LMSTUDIO_MODEL`
    - optional `LMSTUDIO_API_KEY`
 3. Restart API (`make api`).
@@ -53,7 +55,22 @@ make setup-smoke-running
 
 Notes:
 - Provider config saves update `.env` and reload API runtime provider settings immediately.
-- LM Studio health checks use `GET {LMSTUDIO_BASE_URL}/models`.
+- LM Studio health checks use `GET {LMSTUDIO_BASE_URL}/v1/models` (or `{LMSTUDIO_BASE_URL}/models` if URL already ends with `/v1`).
+
+### Run DevSwarm workers (optional)
+
+1. Ensure `GITHUB_TOKEN` is set and points to the target repo.
+2. Start API (`make api`) so the periodic monitor loop is active.
+3. Create a task:
+   - `uv run jarvis swarm create --task "implement X" --repo .`
+   - If OpenCode preflight fails (missing binary or invalid config JSON), create fails fast with explicit remediation error.
+   - Bare `LMSTUDIO_MODEL` values are normalized to `lmstudio/<model>` when launching OpenCode workers.
+4. Check monitor status:
+   - `uv run jarvis swarm status --json`
+5. Nudge active worker:
+   - `uv run jarvis swarm nudge <task_id> --message "re-run tests"`
+6. Optional web control plane:
+   - open `/admin/swarm` for task registry, gate diagnostics, nudge, and cleanup controls.
 
 ### Add a tool
 

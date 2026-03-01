@@ -39,9 +39,10 @@ def _login(client: TestClient) -> str:
 
 
 def _login_payload(client: TestClient, external_id: str = "web_admin") -> dict[str, object]:
+    del external_id
     response = client.post(
         "/api/v1/auth/login",
-        json={"password": "secret", "external_id": external_id},
+        json={"password": "secret"},
     )
     assert response.status_code == 200
     return dict(response.json())
@@ -87,13 +88,7 @@ def test_provider_config_get_and_update(monkeypatch) -> None:
     monkeypatch.setattr("jarvis.routes.api.auth.enqueue_settings_reload", lambda: True)
 
     client = _managed_client()
-    first_login = _login_payload(client, "bootstrap-admin")
-    bootstrap_user_id = str(first_login["user_id"])
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET role='admin' WHERE id=?", (bootstrap_user_id,))
-
     admin_login = _login_payload(client, "bootstrap-admin")
-    assert admin_login["role"] == "admin"
     headers = {"Authorization": f"Bearer {admin_login['token']}"}
 
     before = client.get("/api/v1/auth/providers/config", headers=headers)
@@ -166,17 +161,16 @@ def test_provider_config_get_and_update(monkeypatch) -> None:
     get_settings.cache_clear()
 
 
-def test_provider_config_requires_admin() -> None:
+def test_provider_config_requires_auth_session() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = _managed_client()
 
-    _admin = _login_payload(client, "bootstrap-admin")
     user = _login_payload(client, "non-admin-user")
     token = str(user["token"])
     headers = {"Authorization": f"Bearer {token}"}
     response = client.get("/api/v1/auth/providers/config", headers=headers)
-    assert response.status_code == 403
+    assert response.status_code == 200
 
 
 def test_provider_config_rejects_matching_fallback_provider(monkeypatch) -> None:
@@ -187,10 +181,6 @@ def test_provider_config_rejects_matching_fallback_provider(monkeypatch) -> None
     monkeypatch.setattr("jarvis.routes.api.auth.enqueue_settings_reload", lambda: True)
 
     client = _managed_client()
-    first_login = _login_payload(client, "bootstrap-admin")
-    bootstrap_user_id = str(first_login["user_id"])
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET role='admin' WHERE id=?", (bootstrap_user_id,))
     admin_login = _login_payload(client, "bootstrap-admin")
     headers = {"Authorization": f"Bearer {admin_login['token']}"}
 
@@ -214,10 +204,6 @@ def test_provider_models_catalog_includes_lmstudio_and_sglang(monkeypatch) -> No
     monkeypatch.setattr("jarvis.routes.api.auth._load_models_catalog", fake_load_models_catalog)
 
     client = _managed_client()
-    first_login = _login_payload(client, "bootstrap-admin")
-    bootstrap_user_id = str(first_login["user_id"])
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET role='admin' WHERE id=?", (bootstrap_user_id,))
     admin_login = _login_payload(client, "bootstrap-admin")
     headers = {"Authorization": f"Bearer {admin_login['token']}"}
 
@@ -232,28 +218,25 @@ def test_provider_models_catalog_includes_lmstudio_and_sglang(monkeypatch) -> No
     assert payload["lmstudio_source"] == "lmstudio-/models"
 
 
-def test_login_rejects_oversized_external_id() -> None:
+def test_login_rejects_external_id() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = _managed_client()
 
     response = client.post(
         "/api/v1/auth/login",
-        json={"password": "secret", "external_id": "x" * 257},
+        json={"password": "secret", "external_id": "x" * 10},
     )
     assert response.status_code == 422
     assert "external_id" in str(response.json().get("detail", "")).lower()
 
 
-def test_login_accepts_max_sized_external_id() -> None:
+def test_login_without_external_id_succeeds() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = _managed_client()
 
-    response = client.post(
-        "/api/v1/auth/login",
-        json={"password": "secret", "external_id": "x" * 256},
-    )
+    response = client.post("/api/v1/auth/login", json={"password": "secret"})
     assert response.status_code == 200
     payload = response.json()
     assert payload["user_id"].startswith("usr_")
@@ -900,7 +883,7 @@ def test_github_issue_comment_without_trigger_is_ignored() -> None:
     assert response.json()["ignored"] is True
 
 
-def test_evolution_items_require_admin() -> None:
+def test_evolution_items_requires_authenticated_session() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = _managed_client()
@@ -910,7 +893,7 @@ def test_evolution_items_require_admin() -> None:
     headers = {"Authorization": f"Bearer {token}"}
 
     listing = client.get("/api/v1/governance/evolution/items", headers=headers)
-    assert listing.status_code == 403
+    assert listing.status_code == 200
     update = client.post(
         "/api/v1/governance/evolution/items/evo_1/status",
         headers=headers,
@@ -921,7 +904,7 @@ def test_evolution_items_require_admin() -> None:
             "result": {"status": "in_progress"},
         },
     )
-    assert update.status_code == 403
+    assert update.status_code == 200
 
 
 def test_evolution_items_status_flow_and_timeline() -> None:
@@ -929,9 +912,6 @@ def test_evolution_items_status_flow_and_timeline() -> None:
     get_settings.cache_clear()
     client = _managed_client()
 
-    first_login = _login_payload(client, "evo-admin")
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET role='admin' WHERE id=?", (str(first_login["user_id"]),))
     admin = _login_payload(client, "evo-admin")
     headers = {"Authorization": f"Bearer {admin['token']}"}
 
@@ -1048,9 +1028,6 @@ def test_evolution_items_reject_invalid_transition() -> None:
     get_settings.cache_clear()
     client = _managed_client()
 
-    first_login = _login_payload(client, "evo-admin-2")
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET role='admin' WHERE id=?", (str(first_login["user_id"]),))
     admin = _login_payload(client, "evo-admin-2")
     headers = {"Authorization": f"Bearer {admin['token']}"}
 

@@ -468,7 +468,7 @@ def test_graph_traverse_returns_edges() -> None:
     assert len(graph["edges"]) >= 2
 
 
-def test_get_user_memory_by_id_enforces_owner_scope() -> None:
+def test_get_user_memory_by_id_returns_any_thread_memory_for_single_admin() -> None:
     service = MemoryService()
     with get_conn() as conn:
         ensure_system_state(conn)
@@ -498,17 +498,18 @@ def test_get_user_memory_by_id_enforces_owner_scope() -> None:
             requester_thread_id=alice_thread,
             memory_id="mem_owner_a",
         )
-        blocked_item = service.get_user_memory_by_id(
+        other_item = service.get_user_memory_by_id(
             conn,
             requester_thread_id=alice_thread,
             memory_id="mem_owner_b",
         )
     assert own_item is not None
     assert own_item["id"] == "mem_owner_a"
-    assert blocked_item is None
+    assert other_item is not None
+    assert other_item["id"] == "mem_owner_b"
 
 
-def test_search_user_memories_returns_cross_thread_matches_for_same_user() -> None:
+def test_search_user_memories_returns_cross_thread_matches_for_single_admin() -> None:
     service = MemoryService()
     with get_conn() as conn:
         ensure_system_state(conn)
@@ -550,4 +551,4 @@ def test_search_user_memories_returns_cross_thread_matches_for_same_user() -> No
     returned_ids = {str(item["id"]) for item in items}
     assert "mem_cross_b" in returned_ids
     assert "mem_cross_a" not in returned_ids
-    assert "mem_cross_other" not in returned_ids
+    assert "mem_cross_other" in returned_ids

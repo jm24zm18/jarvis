@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from jarvis.auth.dependencies import UserContext, require_admin
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.channels.whatsapp.baileys_client import BaileysClient
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
@@ -35,7 +35,7 @@ class WhatsAppReviewResolveInput(BaseModel):
 
 
 @router.get("/whatsapp/status")
-def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def whatsapp_status(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     settings = get_settings()
     client = BaileysClient()
@@ -124,7 +124,7 @@ def whatsapp_status(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
 @_limiter.limit("5/minute")
 def whatsapp_create(
     request: Request,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del request, ctx
     client = BaileysClient()
@@ -175,7 +175,7 @@ def whatsapp_create(
 
 
 @router.get("/whatsapp/qrcode")
-def whatsapp_qrcode(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def whatsapp_qrcode(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     client = BaileysClient()
     if not client.enabled:
@@ -198,7 +198,7 @@ def whatsapp_qrcode(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
 def whatsapp_pairing_code(
     input_data: PairingCodeInput,
     request: Request,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del request, ctx
     client = BaileysClient()
@@ -244,7 +244,7 @@ def whatsapp_pairing_code(
 @_limiter.limit("5/minute")
 def whatsapp_reset(
     request: Request,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     """Clear saved Baileys credentials and force a full re-pair."""
     del request, ctx
@@ -275,7 +275,7 @@ def whatsapp_reset(
 @_limiter.limit("3/minute")
 def whatsapp_restart(
     request: Request,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     """Restart the Baileys Node process. Docker restart:always revives it automatically."""
     del request, ctx
@@ -291,7 +291,7 @@ def whatsapp_restart(
 
 @router.post("/whatsapp/disconnect")
 def whatsapp_disconnect(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     client = BaileysClient()
@@ -321,7 +321,7 @@ def whatsapp_disconnect(
 def whatsapp_review_queue(
     status: str = "open",
     limit: int = 50,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     normalized_status = status.strip().lower()
@@ -336,7 +336,7 @@ def whatsapp_review_queue(
 def whatsapp_resolve_review_item(
     review_id: str,
     input_data: WhatsAppReviewResolveInput,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     with get_conn() as conn:
         decision: Literal["allow", "deny"] = (
@@ -354,7 +354,7 @@ def whatsapp_resolve_review_item(
     return {"ok": True, "item": resolved}
 
 @router.get("/telegram/status")
-def telegram_status(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def telegram_status(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     settings = get_settings()
     enabled = bool(settings.telegram_bot_token)

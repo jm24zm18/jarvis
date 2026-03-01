@@ -5,7 +5,7 @@ from datetime import UTC
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from jarvis.auth.dependencies import UserContext, require_admin, require_auth
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import create_feature_request as create_feature_request_row
 from jarvis.ids import new_id
@@ -60,9 +60,6 @@ def list_bugs(
 ) -> dict[str, object]:
     filters: list[str] = []
     params: list[object] = []
-    if not ctx.is_admin:
-        filters.append("reporter_id=?")
-        params.append(ctx.user_id)
     if status:
         filters.append("status=?")
         params.append(status)
@@ -179,9 +176,6 @@ def list_feature_requests(
         raise HTTPException(status_code=400, detail=f"Invalid approval_status: {approval_status}")
     filters: list[str] = ["kind='feature'"]
     params: list[object] = []
-    if not ctx.is_admin:
-        filters.append("reporter_id=?")
-        params.append(ctx.user_id)
     if status:
         filters.append("status=?")
         params.append(status)
@@ -265,8 +259,6 @@ def update_bug(
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Bug not found")
-        if not ctx.is_admin and str(row["reporter_id"]) != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
         conn.execute(
             f"UPDATE bug_reports SET {', '.join(updates)} WHERE id=?",
             tuple(params),
@@ -286,8 +278,6 @@ def delete_bug(
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Bug not found")
-        if not ctx.is_admin and str(row["reporter_id"]) != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
         conn.execute("DELETE FROM bug_reports WHERE id=?", (bug_id,))
     return {"ok": True}
 
@@ -319,7 +309,7 @@ class FeatureSplitBody(BaseModel):
 def set_feature_approval(
     feature_id: str,
     body: ApprovalDecisionBody,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     from jarvis.services.feature_requests import approve_feature_request
 
@@ -337,7 +327,7 @@ def set_feature_approval(
 @router.post("/feature-requests/{feature_id}/build")
 def trigger_feature_build(
     feature_id: str,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     from jarvis.services.feature_requests import enqueue_feature_build
 
@@ -355,7 +345,7 @@ def trigger_feature_build(
 def split_feature_request_endpoint(
     feature_id: str,
     body: FeatureSplitBody,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     from jarvis.services.feature_requests import split_feature_request
 
@@ -389,7 +379,7 @@ def split_feature_request_endpoint(
 def list_feature_build_runs_endpoint(
     feature_id: str,
     limit: int = Query(default=20, ge=1, le=100),
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     from jarvis.services.feature_requests import get_feature_build_runs
 
@@ -402,7 +392,7 @@ def list_feature_build_runs_endpoint(
 def reconcile_feature_build_runs_endpoint(
     stale_after_seconds: int = Query(default=900, ge=1, le=86400),
     limit: int = Query(default=200, ge=1, le=1000),
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     from jarvis.services.feature_requests import reconcile_feature_build_runs
@@ -420,7 +410,7 @@ def reconcile_feature_build_runs_endpoint(
 def recover_feature_build_children_endpoint(
     feature_id: str,
     run_id: str,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     from jarvis.services.feature_requests import recover_decomposed_child_builds
 

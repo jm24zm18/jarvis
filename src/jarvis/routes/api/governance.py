@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from jarvis.agents.loader import load_agent_registry, reset_loader_caches
 from jarvis.agents.registry import sync_tool_permissions
-from jarvis.auth.dependencies import UserContext, require_admin
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import (
@@ -139,7 +139,7 @@ def _evaluate_slo(
 
 
 @router.get("/agents")
-def list_agent_governance(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def list_agent_governance(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     with get_conn() as conn:
         rows = conn.execute(
@@ -163,7 +163,7 @@ def list_agent_governance(ctx: UserContext = Depends(require_admin)) -> dict[str
 
 
 @router.post("/reload")
-def reload_governance(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def reload_governance(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     reset_loader_caches()
     bundles = load_agent_registry(Path("agents"))
@@ -173,7 +173,7 @@ def reload_governance(ctx: UserContext = Depends(require_admin)) -> dict[str, ob
 
 
 @router.get("/audit")
-def memory_governance_audit(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def memory_governance_audit(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     with get_conn() as conn:
         rows = conn.execute(
@@ -200,7 +200,7 @@ def memory_governance_audit(ctx: UserContext = Depends(require_admin)) -> dict[s
 
 
 @router.get("/fitness/latest")
-def fitness_latest(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def fitness_latest(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     with get_conn() as conn:
         item = latest_system_fitness_snapshot(conn)
@@ -210,7 +210,7 @@ def fitness_latest(ctx: UserContext = Depends(require_admin)) -> dict[str, objec
 @router.get("/fitness/history")
 def fitness_history(
     limit: int = Query(default=12, ge=1, le=104),
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     with get_conn() as conn:
@@ -219,7 +219,7 @@ def fitness_history(
 
 
 @router.get("/slo")
-def governance_slo(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def governance_slo(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     thresholds = _slo_thresholds()
     with get_conn() as conn:
@@ -237,7 +237,7 @@ def governance_slo(ctx: UserContext = Depends(require_admin)) -> dict[str, objec
 @router.get("/slo/history")
 def governance_slo_history(
     limit: int = Query(default=12, ge=1, le=104),
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     thresholds = _slo_thresholds()
@@ -260,7 +260,7 @@ def governance_slo_history(
 
 @router.get("/dependency-steward")
 def dependency_steward_status(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     return run_dependency_steward()
@@ -268,7 +268,7 @@ def dependency_steward_status(
 
 @router.get("/release-candidate")
 def release_candidate_status(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     return build_release_candidate()
@@ -279,7 +279,7 @@ def decision_timeline(
     trace_id: str | None = Query(default=None),
     thread_id: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     filters: list[str] = [
@@ -355,7 +355,7 @@ def evolution_items(
     from_ts: str | None = Query(default=None, alias="from"),
     to_ts: str | None = Query(default=None, alias="to"),
     limit: int = Query(default=200, ge=1, le=1000),
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     with get_conn() as conn:
@@ -385,7 +385,7 @@ def evolution_items(
 def evolution_item_set_status(
     item_id: str,
     input_data: EvolutionItemStatusInput,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     normalized_item_id = item_id.strip()
     if not normalized_item_id:
@@ -459,7 +459,7 @@ def evolution_item_set_status(
 @router.get("/patch-lifecycle/{trace_id}")
 def patch_lifecycle(
     trace_id: str,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     with get_conn() as conn:
@@ -503,7 +503,7 @@ def patch_lifecycle(
 def learning_loop(
     window_days: int = Query(default=14, ge=1, le=90),
     refresh: bool = Query(default=True),
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     refresh_result: dict[str, object] | None = None
@@ -536,7 +536,7 @@ def learning_loop(
 def remediation_feedback(
     remediation_id: str,
     payload: Annotated[dict[str, object] | None, Body()] = None,
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     raw_payload = payload if isinstance(payload, dict) else {}
     feedback = str(raw_payload.get("feedback", "")).strip().lower()

@@ -45,8 +45,7 @@ def list_messages(
         if owner_row is None:
             raise HTTPException(status_code=404, detail="thread not found")
         thread_user_id = str(owner_row["user_id"])
-        if not ctx.is_admin:
-            verify_thread_owner(conn, thread_id, ctx.user_id)
+        verify_thread_owner(conn, thread_id, ctx.user_id)
         user_name = get_user_name(conn, thread_user_id)
         if before:
             rows = conn.execute(
@@ -160,8 +159,6 @@ async def send_message(
         if thread_row is None:
             raise HTTPException(status_code=404, detail="thread not found")
         thread_user_id = str(thread_row["user_id"])
-        if not ctx.is_admin and thread_user_id != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
         message_id = insert_message(conn, thread_id, "user", content)
         conn.execute(
             (
@@ -224,8 +221,6 @@ def get_thread_onboarding_status(
         if thread_row is None:
             raise HTTPException(status_code=404, detail="thread not found")
         thread_user_id = str(thread_row["user_id"])
-        if not ctx.is_admin and thread_user_id != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
         return get_onboarding_status(conn, user_id=thread_user_id)
 
 
@@ -240,8 +235,6 @@ async def start_thread_onboarding(
         if thread_row is None:
             raise HTTPException(status_code=404, detail="thread not found")
         thread_user_id = str(thread_row["user_id"])
-        if not ctx.is_admin and thread_user_id != ctx.user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
         settings = get_settings()
         router = ProviderRouter(
             build_primary_provider(settings),

@@ -6,7 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from jarvis.auth.dependencies import require_admin
+from jarvis.auth.dependencies import require_auth
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ async def run_git(*args: str) -> tuple[str, str, int]:
 
 
 @router.get("/status")
-async def repo_status(admin: Annotated[dict[str, Any], Depends(require_admin)]) -> dict[str, Any]:
+async def repo_status(admin: Annotated[dict[str, Any], Depends(require_auth)]) -> dict[str, Any]:
     stdout, _, code = await run_git("status", "--porcelain=v1", "-b")
     if code != 0:
         raise HTTPException(status_code=500, detail="Failed to retrieve git status")
@@ -104,7 +104,7 @@ async def repo_status(admin: Annotated[dict[str, Any], Depends(require_admin)]) 
 
 @router.get("/log")
 async def repo_log(
-    admin: Annotated[dict[str, Any], Depends(require_admin)],
+    admin: Annotated[dict[str, Any], Depends(require_auth)],
     limit: int = 50,
 ) -> list[dict[str, str]]:
     stdout, _, code = await run_git(
@@ -129,7 +129,7 @@ async def repo_log(
 
 @router.get("/branches")
 async def repo_branches(
-    admin: Annotated[dict[str, Any], Depends(require_admin)],
+    admin: Annotated[dict[str, Any], Depends(require_auth)],
 ) -> dict[str, Any]:
     stdout, _, code = await run_git(
         "branch", "-a", "--format=%(refname:short)|%(HEAD)"
@@ -163,7 +163,7 @@ async def repo_branches(
 
 @router.get("/diff")
 async def repo_diff(
-    admin: Annotated[dict[str, Any], Depends(require_admin)],
+    admin: Annotated[dict[str, Any], Depends(require_auth)],
     mode: str = "working",
     path: str | None = None,
 ) -> str:
@@ -181,7 +181,7 @@ async def repo_diff(
 
 @router.post("/checkout")
 async def repo_checkout(
-    admin: Annotated[dict[str, Any], Depends(require_admin)],
+    admin: Annotated[dict[str, Any], Depends(require_auth)],
     branch: Annotated[str | None, Body()] = None,
     create_branch: Annotated[str | None, Body()] = None,
 ) -> dict[str, str]:
@@ -207,7 +207,7 @@ async def repo_checkout(
 
 @router.post("/stage")
 async def repo_stage(
-    admin: Annotated[dict[str, Any], Depends(require_admin)],
+    admin: Annotated[dict[str, Any], Depends(require_auth)],
     paths: Annotated[list[str] | None, Body()] = None,
     all: Annotated[bool, Body()] = False,
 ) -> dict[str, str]:
@@ -232,7 +232,7 @@ async def repo_stage(
 @router.post("/unstage")
 async def repo_unstage(
     paths: Annotated[list[str], Body(...)],
-    admin: Annotated[dict[str, Any], Depends(require_admin)],
+    admin: Annotated[dict[str, Any], Depends(require_auth)],
 ) -> dict[str, str]:
     if not paths:
         raise HTTPException(status_code=400, detail="Must provide paths")
@@ -251,7 +251,7 @@ async def repo_unstage(
 @router.post("/commit")
 async def repo_commit(
     message: Annotated[dict[str, Any], Body(...)],
-    admin: Annotated[dict[str, Any], Depends(require_admin)],
+    admin: Annotated[dict[str, Any], Depends(require_auth)],
 ) -> dict[str, str]:
     msg_str = message.get("message", "")
     if not msg_str.strip():
@@ -268,7 +268,7 @@ async def repo_commit(
 
 @router.post("/push")
 async def repo_push(
-    admin: Annotated[dict[str, Any], Depends(require_admin)],
+    admin: Annotated[dict[str, Any], Depends(require_auth)],
     set_upstream: Annotated[dict[str, Any] | None, Body()] = None,
 ) -> dict[str, str]:
     if set_upstream is None:

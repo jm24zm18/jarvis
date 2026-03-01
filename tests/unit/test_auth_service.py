@@ -23,7 +23,7 @@ def test_create_session_retries_on_transient_db_lock(monkeypatch: pytest.MonkeyP
     )
     monkeypatch.setattr("jarvis.auth.service.time.sleep", lambda _seconds: None)
 
-    session_id, token = create_session(fake_conn, "usr_test", "user")
+    session_id, token = create_session(fake_conn, "usr_test")
 
     assert session_id.startswith("wss_")
     assert token
@@ -34,7 +34,7 @@ def test_create_session_re_raises_non_lock_operational_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeConn:
-        def execute(self, _query: str, _params: tuple[str, str, str, str, str, str]) -> None:
+        def execute(self, _query: str, _params: tuple[str, ...]) -> None:
             raise sqlite3.OperationalError("disk I/O error")
 
     fake_conn = FakeConn()
@@ -45,4 +45,4 @@ def test_create_session_re_raises_non_lock_operational_errors(
     monkeypatch.setattr("jarvis.auth.service.time.sleep", lambda _seconds: None)
 
     with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
-        create_session(fake_conn, "usr_test", "user")
+        create_session(fake_conn, "usr_test")

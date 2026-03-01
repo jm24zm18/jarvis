@@ -143,7 +143,7 @@ ENV_GROUPS: list[EnvGroup] = [
             EnvVarDef(
                 "LMSTUDIO_BASE_URL",
                 "LM Studio OpenAI-compatible base URL",
-                default="http://127.0.0.1:1234/v1",
+                default="http://127.0.0.1:1234",
             ),
             EnvVarDef(
                 "LMSTUDIO_MODEL",

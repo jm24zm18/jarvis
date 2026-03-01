@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from jarvis.auth.dependencies import UserContext, require_scope
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.media.service import MediaService
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/media", tags=["api-media"])
 async def upload_media(
     file: Annotated[UploadFile, File(...)],
     thread_id: Annotated[str | None, Form()] = None,
-    ctx: UserContext = Depends(require_scope("media:write")),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     """Upload a media file and return its attachment ID and access URL."""
     del thread_id
@@ -61,7 +61,7 @@ async def upload_media(
 @router.get("/{attachment_id}")
 def download_media(
     attachment_id: str,
-    ctx: UserContext = Depends(require_scope("media:read")),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> FileResponse:
     """Stream a media attachment, enforcing ownership."""
     service = MediaService()
@@ -71,7 +71,7 @@ def download_media(
     if item is None:
         raise HTTPException(status_code=404, detail="attachment not found")
 
-    if not ctx.is_admin and str(item["owner_id"]) != ctx.user_id:
+    if str(item["owner_id"]) != ctx.user_id:
         raise HTTPException(status_code=403, detail="forbidden")
 
     file_path = Path(str(item["file_path"]))
@@ -88,7 +88,7 @@ def download_media(
 @router.get("/{attachment_id}/thumb")
 def download_thumbnail(
     attachment_id: str,
-    ctx: UserContext = Depends(require_scope("media:read")),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> FileResponse:
     """Stream a thumbnail for an image attachment."""
     service = MediaService()
@@ -98,7 +98,7 @@ def download_thumbnail(
     if item is None:
         raise HTTPException(status_code=404, detail="attachment not found")
 
-    if not ctx.is_admin and str(item["owner_id"]) != ctx.user_id:
+    if str(item["owner_id"]) != ctx.user_id:
         raise HTTPException(status_code=403, detail="forbidden")
 
     thumb_path_raw = item.get("thumbnail_path")

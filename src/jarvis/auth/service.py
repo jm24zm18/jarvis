@@ -1,7 +1,6 @@
 """Token-based session authentication helpers for web UI."""
 
 import hashlib
-import json
 import secrets
 import sqlite3
 import time
@@ -21,31 +20,26 @@ def _token_hash(raw_token: str) -> str:
 def create_session(
     conn: sqlite3.Connection,
     user_id: str,
-    role: str,
-    scopes: list[str] | None = None,
 ) -> tuple[str, str]:
     settings = get_settings()
     session_id = new_id("wss")
     raw_token = secrets.token_urlsafe(48)
     created_at = datetime.now(UTC)
     expires_at = created_at + timedelta(hours=max(1, settings.web_auth_token_ttl_hours))
-    scopes_json = json.dumps(scopes) if scopes is not None else '["*"]'
     for attempt in range(1, _LOCK_RETRY_ATTEMPTS + 1):
         try:
             conn.execute(
                 (
                     "INSERT INTO web_sessions("
-                    "id, user_id, role, token_hash, created_at, expires_at, scopes"
-                    ") VALUES(?,?,?,?,?,?,?)"
+                    "id, user_id, token_hash, created_at, expires_at"
+                    ") VALUES(?,?,?,?,?)"
                 ),
                 (
                     session_id,
                     user_id,
-                    role,
                     _token_hash(raw_token),
                     created_at.isoformat(),
                     expires_at.isoformat(),
-                    scopes_json,
                 ),
             )
             break
@@ -59,10 +53,10 @@ def create_session(
 
 def validate_token(
     conn: sqlite3.Connection, raw_token: str
-) -> tuple[str, str, frozenset[str]] | None:
+) -> str | None:
     hashed = _token_hash(raw_token)
     row = conn.execute(
-        "SELECT id, user_id, role, scopes, expires_at FROM web_sessions WHERE token_hash=? LIMIT 1",
+        "SELECT id, user_id, expires_at FROM web_sessions WHERE token_hash=? LIMIT 1",
         (hashed,),
     ).fetchone()
     if row is None:
@@ -86,49 +80,7 @@ def validate_token(
         conn.execute("DELETE FROM web_sessions WHERE id=?", (str(row["id"]),))
         return None
 
-    try:
-        raw_scopes = row["scopes"]
-        parsed = json.loads(raw_scopes) if isinstance(raw_scopes, str) and raw_scopes else ["*"]
-        scopes = frozenset(parsed) if isinstance(parsed, list) else frozenset({"*"})
-    except (json.JSONDecodeError, TypeError):
-        scopes = frozenset({"*"})
-
-    return str(row["user_id"]), str(row["role"]), scopes
-
-
-def mint_restricted_token(
-    conn: sqlite3.Connection,
-    user_id: str,
-    scopes: list[str],
-    ttl_minutes: int = 15,
-) -> str:
-    """Create a short-lived restricted-scope session token.
-
-    Always uses role="user" regardless of the user's actual role.
-    Returns the raw (unhashed) token string.
-    """
-    session_id = new_id("wss")
-    raw_token = secrets.token_urlsafe(48)
-    created_at = datetime.now(UTC)
-    expires_at = created_at + timedelta(minutes=max(1, ttl_minutes))
-    scopes_json = json.dumps(scopes)
-    conn.execute(
-        (
-            "INSERT INTO web_sessions("
-            "id, user_id, role, token_hash, created_at, expires_at, scopes"
-            ") VALUES(?,?,?,?,?,?,?)"
-        ),
-        (
-            session_id,
-            user_id,
-            "user",
-            _token_hash(raw_token),
-            created_at.isoformat(),
-            expires_at.isoformat(),
-            scopes_json,
-        ),
-    )
-    return raw_token
+    return str(row["user_id"])
 
 
 def delete_session(conn: sqlite3.Connection, session_id: str) -> None:
@@ -148,3 +100,15 @@ def session_from_token(conn: sqlite3.Connection, raw_token: str) -> tuple[str, s
     if row is None:
         return None
     return str(row["id"]), str(row["user_id"])
+
+
+def mint_restricted_token(
+    conn: sqlite3.Connection,
+    user_id: str,
+    scopes: list[str],
+    ttl_minutes: int = 15,
+) -> str:
+    del scopes
+    del ttl_minutes
+    _session_id, token = create_session(conn, user_id)
+    return token

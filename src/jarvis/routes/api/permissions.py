@@ -2,14 +2,14 @@
 
 from fastapi import APIRouter, Depends
 
-from jarvis.auth.dependencies import UserContext, require_admin
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.db.connection import get_conn
 
 router = APIRouter(prefix="/permissions", tags=["api-permissions"])
 
 
 @router.get("")
-def get_permissions(ctx: UserContext = Depends(require_admin)) -> dict[str, object]:  # noqa: B008
+def get_permissions(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     del ctx
     with get_conn() as conn:
         rows = conn.execute(
@@ -40,7 +40,7 @@ def get_permissions(ctx: UserContext = Depends(require_admin)) -> dict[str, obje
 def set_permission(
     principal_id: str,
     tool_name: str,
-    ctx: UserContext = Depends(require_admin),  # TODO: admin-only now  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # TODO: admin-only now  # noqa: B008
 ) -> dict[str, bool]:
     del ctx
     with get_conn() as conn:
@@ -59,7 +59,7 @@ def set_permission(
 def delete_permission(
     principal_id: str,
     tool_name: str,
-    ctx: UserContext = Depends(require_admin),  # TODO: admin-only now  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # TODO: admin-only now  # noqa: B008
 ) -> dict[str, bool]:
     del ctx
     with get_conn() as conn:

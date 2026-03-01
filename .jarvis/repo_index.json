@@ -118,6 +118,12 @@
       "skill_list",
       "skill_read",
       "skill_write"
+    ],
+    "zoe": [
+      "devswarm.check_tasks",
+      "devswarm.cleanup",
+      "devswarm.send_tmux",
+      "devswarm.spawn_worker"
     ]
   },
   "api_routes": [
@@ -139,6 +145,7 @@
     "src/jarvis/routes/api/schedules.py",
     "src/jarvis/routes/api/selfupdate.py",
     "src/jarvis/routes/api/stories.py",
+    "src/jarvis/routes/api/swarm.py",
     "src/jarvis/routes/api/system.py",
     "src/jarvis/routes/api/threads.py",
     "src/jarvis/routes/api/webhooks.py"
@@ -150,7 +157,7 @@
     },
     {
       "recipe": [
-        "uv run uvicorn jarvis.main:app --host 0.0.0.0 --reload --app-dir src"
+        "uv run uvicorn jarvis.main:app --host 0.0.0.0 --reload --app-dir src --reload-exclude '.jarvis/worktrees/*' --reload-exclude '.jarvis/logs/*' --reload-exclude '.jarvis/prompts/*'"
       ],
       "target": "api"
     },
@@ -313,7 +320,7 @@
     "src/jarvis/main.py",
     "web/src/App.tsx"
   ],
-  "generated_at": "2026-02-28T19:34:53.439522+00:00",
+  "generated_at": "2026-03-01T00:40:18.570064+00:00",
   "invariant_checks": [
     "append-only database migrations",
     "deny-by-default tool policy",
@@ -649,6 +656,14 @@
     {
       "file": "src/jarvis/db/migrations/086_task_lesson_extraction_type.sql",
       "number": 86
+    },
+    {
+      "file": "src/jarvis/db/migrations/087_devswarm_tasks.sql",
+      "number": 87
+    },
+    {
+      "file": "src/jarvis/db/migrations/088_single_admin_auth.sql",
+      "number": 88
     }
   ],
   "protected_modules": [

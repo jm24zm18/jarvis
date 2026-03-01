@@ -53,7 +53,7 @@ uv run jarvis skill install <path>
 - Core request path: webhook -> DB dedup/persist -> `channel.inbound` event -> `agent_step` task -> orchestrator/provider/tools -> outbound.
 - Tool execution is deny-by-default and gated by policy + agent permissions.
 - Lockdown and restart state are enforced via `system_state`.
-- Web auth sessions carry `user`/`admin` role + CBAC scopes, and routes enforce ownership scoping.
+- Web auth sessions are single-admin (`system:root`) and protected by session-token authentication.
 
 ## Invariants
 

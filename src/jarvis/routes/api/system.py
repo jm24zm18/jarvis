@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends
 
 from jarvis.agents.loader import reset_loader_caches
-from jarvis.auth.dependencies import UserContext, require_admin, require_auth
+from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
 from jarvis.db.queries import ensure_system_state, get_system_state, now_iso
@@ -130,7 +130,7 @@ async def system_status(ctx: UserContext = Depends(require_auth)) -> dict[str, o
 @router.post("/lockdown")
 def toggle_lockdown(
     payload: dict[str, object],
-    ctx: UserContext = Depends(require_admin),  # TODO: admin-only now  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # TODO: admin-only now  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     enabled = bool(payload.get("lockdown", False))
@@ -149,7 +149,7 @@ def toggle_lockdown(
 
 @router.post("/reset-db")
 def reset_db(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, bool]:
     del ctx
     with get_conn() as conn:
@@ -172,7 +172,7 @@ def reset_db(
 
 @router.post("/reload-agents")
 def reload_agents(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, bool]:
     del ctx
     reset_loader_caches()
@@ -181,7 +181,7 @@ def reload_agents(
 
 @router.get("/repo-index")
 def repo_index(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     root = Path.cwd()

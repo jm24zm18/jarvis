@@ -20,6 +20,7 @@ from jarvis.providers.router import ProviderRouter
 SUMMARY_MARKER = "<!-- jarvis:pr-summary -->"
 CHAT_MARKER = "<!-- jarvis:pr-chat -->"
 FEATURE_VALIDATION_MARKER = "<!-- jarvis:feature-validation -->"
+SWARM_STATUS_MARKER = "<!-- jarvis:swarm-status -->"
 
 
 def _github_headers(token: str) -> dict[str, str]:
@@ -583,6 +584,60 @@ def github_feature_validation_comment(
         "ok": True,
         "feature_id": feature_id,
         "issue_number": issue_number,
+        "result": result,
+    }
+
+
+def github_pr_swarm_status_comment(
+    *,
+    owner: str,
+    repo: str,
+    pull_number: int,
+    task_id: str,
+    status: str,
+    checks: dict[str, object],
+) -> dict[str, object]:
+    settings = get_settings()
+    token = settings.github_token.strip()
+    if not token:
+        return {"ok": False, "error": "missing GITHUB_TOKEN"}
+    base_url = settings.github_api_base_url.rstrip("/")
+    gates = checks.get("gates")
+    gate_lines: list[str] = []
+    if isinstance(gates, dict):
+        for name, value in gates.items():
+            mark = "PASS" if bool(value) else "FAIL"
+            gate_lines.append(f"- `{name}`: **{mark}**")
+    if not gate_lines:
+        gate_lines.append("- No gate details available.")
+
+    ci_state = str(checks.get("ci_state") or "unknown")
+    pr_url = str(checks.get("pr_url") or "")
+    body = (
+        f"{SWARM_STATUS_MARKER}\n"
+        "## Jarvis Swarm Status\n"
+        f"- task_id: `{task_id}`\n"
+        f"- status: **{status.upper()}**\n"
+        f"- PR: {pr_url or '(none)'}\n"
+        f"- CI: `{ci_state}`\n\n"
+        "### Deterministic Gates\n"
+        f"{chr(10).join(gate_lines)}\n\n"
+        "_Automated swarm monitor. No approve/merge actions are performed._"
+    )
+    with httpx.Client(timeout=10.0, headers=_github_headers(token)) as client:
+        result = _upsert_issue_comment_with_marker(
+            client=client,
+            base_url=base_url,
+            owner=owner,
+            repo=repo,
+            number=int(pull_number),
+            marker=SWARM_STATUS_MARKER,
+            body=body,
+        )
+    return {
+        "ok": True,
+        "repo": f"{owner}/{repo}",
+        "pull_number": int(pull_number),
         "result": result,
     }
 

@@ -36,6 +36,14 @@ SCOPE_TOOL_MAP: dict[str, frozenset[str]] = {
     "media:read": frozenset(),   # API-tier scope; no agent tools require it
     "media:write": frozenset(),  # API-tier scope; no agent tools require it
     "tools:exec": frozenset({"exec_host", "web_search", "echo", "create_feature_request"}),
+    "swarm:write": frozenset(
+        {
+            "devswarm.spawn_worker",
+            "devswarm.send_tmux",
+            "devswarm.check_tasks",
+            "devswarm.cleanup",
+        }
+    ),
 }
 
 

@@ -9,9 +9,8 @@ from jarvis.main import app
 
 
 def _login(client: TestClient, external_id: str | None = None) -> tuple[str, str]:
+    del external_id
     payload: dict[str, str] = {"password": "secret"}
-    if external_id is not None:
-        payload["external_id"] = external_id
     response = client.post("/api/v1/auth/login", json=payload)
     assert response.status_code == 200
     body = response.json()
@@ -68,7 +67,7 @@ def _seed_state_item(
     )
 
 
-def test_memory_state_search_and_export_are_owner_scoped() -> None:
+def test_memory_state_search_and_export_are_available_for_authenticated_session() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = TestClient(app)
@@ -99,7 +98,7 @@ def test_memory_state_search_and_export_are_owner_scoped() -> None:
         headers=_headers(alice_token),
     )
     assert denied_search.status_code == 200
-    assert denied_search.json()["items"] == []
+    assert any(str(item["uid"]) == "st_bob_1" for item in denied_search.json()["items"])
 
     own_export = client.get(
         "/api/v1/memory/export",
@@ -115,7 +114,7 @@ def test_memory_state_search_and_export_are_owner_scoped() -> None:
         headers=_headers(alice_token),
     )
     assert denied_export.status_code == 200
-    assert denied_export.json()["items"] == []
+    assert any("st_bob_1" in line for line in denied_export.json()["items"])
 
     # Admin can still access cross-thread state surfaces.
     admin_export = client.get(
@@ -128,7 +127,7 @@ def test_memory_state_search_and_export_are_owner_scoped() -> None:
     _ = bob_token
 
 
-def test_memory_state_graph_is_owner_scoped() -> None:
+def test_memory_state_graph_is_available_for_authenticated_session() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = TestClient(app)
@@ -184,12 +183,11 @@ def test_memory_state_graph_is_owner_scoped() -> None:
     )
     assert denied.status_code == 200
     denied_payload = denied.json()
-    assert denied_payload["nodes"] == []
-    assert denied_payload["edges"] == []
+    assert "st_bob_root" in denied_payload["nodes"]
     _ = bob_token
 
 
-def test_non_admin_cannot_access_admin_memory_state_surfaces() -> None:
+def test_authenticated_session_can_access_memory_state_admin_surfaces() -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     get_settings.cache_clear()
     client = TestClient(app)
@@ -198,13 +196,13 @@ def test_non_admin_cannot_access_admin_memory_state_surfaces() -> None:
 
     assert (
         client.get("/api/v1/memory/state/failures", headers=_headers(alice_token)).status_code
-        == 403
+        == 200
     )
     assert (
         client.get(
             "/api/v1/memory/state/review/conflicts", headers=_headers(alice_token)
         ).status_code
-        == 403
+        == 200
     )
     assert (
         client.post(
@@ -212,19 +210,19 @@ def test_non_admin_cannot_access_admin_memory_state_surfaces() -> None:
             headers=_headers(alice_token),
             json={"resolution": "approve"},
         ).status_code
-        == 403
+        in (200, 404)
     )
     assert (
         client.get(
             "/api/v1/memory/state/consistency/report", headers=_headers(alice_token)
         ).status_code
-        == 403
+        == 200
     )
     assert (
         client.get(
             "/api/v1/memory/state/stats", headers=_headers(alice_token)
         ).status_code
-        == 403
+        == 200
     )
 
 

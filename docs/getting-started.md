@@ -44,6 +44,8 @@ If you want one command that starts dependencies and launches API + web dev serv
 
 `start-dev.sh` defaults to host-Ollama mode (`DEV_USE_HOST_OLLAMA=1`), so local
 `ollama serve` on `11434` is reused while Docker starts SearXNG + SGLang.
+Before dependency startup, it verifies OpenCode + LM Studio, discovers LM Studio
+models, and writes valid JSON `opencode.json` (or `OPENCODE_CONFIG_PATH`).
 To force Docker-managed Ollama instead:
 
 ```bash

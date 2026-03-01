@@ -433,7 +433,10 @@ def run_feature_build(
         )
         parent_id = str(feature_row["parent_id"] or "").strip() if feature_row is not None else ""
         if not parent_id:
-            broad_scope = _is_broad_scope_feature(title=feature_title, description=feature_description)
+            broad_scope = _is_broad_scope_feature(
+                title=feature_title,
+                description=feature_description,
+            )
             force_decompose = (
                 not rlm_config.active
                 and broad_scope

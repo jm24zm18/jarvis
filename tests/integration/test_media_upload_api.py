@@ -31,9 +31,10 @@ def _cleanup_managed_clients():
 
 
 def _login(client: TestClient, external_id: str) -> dict[str, str]:
+    del external_id
     response = client.post(
         "/api/v1/auth/login",
-        json={"password": "secret", "external_id": external_id},
+        json={"password": "secret"},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -68,7 +69,7 @@ def test_media_upload_and_download_round_trip(tmp_path: Path) -> None:
     assert "text/plain" in str(download.headers.get("content-type", ""))
 
 
-def test_media_download_enforces_ownership(tmp_path: Path) -> None:
+def test_media_download_is_available_to_authenticated_session(tmp_path: Path) -> None:
     os.environ["WEB_AUTH_SETUP_PASSWORD"] = "secret"
     os.environ["MEDIA_STORAGE_DIR"] = str(tmp_path / "media")
     get_settings.cache_clear()
@@ -84,8 +85,8 @@ def test_media_download_enforces_ownership(tmp_path: Path) -> None:
     assert upload.status_code == 200
     url = str(upload.json()["url"])
 
-    forbidden = client.get(url, headers=_headers(bob["token"]))
-    assert forbidden.status_code == 403
+    allowed = client.get(url, headers=_headers(bob["token"]))
+    assert allowed.status_code == 200
 
 
 def test_messages_list_includes_media_array(

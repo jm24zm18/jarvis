@@ -206,11 +206,11 @@ def cleanup_expired_workspaces(
     cutoff = time.time() - (max(1, int(ttl_hours)) * 3600)
     removed = 0
     for candidate in parent.iterdir():
-        if not candidate.is_dir():
-            continue
-        if not candidate.name.startswith(stem + "-"):
-            continue
         try:
+            if not candidate.is_dir():
+                continue
+            if not candidate.name.startswith(stem + "-"):
+                continue
             mtime = candidate.stat().st_mtime
         except OSError:
             continue

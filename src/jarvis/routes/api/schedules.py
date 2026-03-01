@@ -13,20 +13,14 @@ router = APIRouter(prefix="/schedules", tags=["api-schedules"])
 @router.get("")
 def list_schedules(ctx: UserContext = Depends(require_auth)) -> dict[str, object]:  # noqa: B008
     with get_conn() as conn:
-        if ctx.is_admin:
-            rows = conn.execute(
-                "SELECT id, thread_id, cron_expr, payload_json, enabled, last_run_at, "
-                "created_at, max_catchup FROM schedules ORDER BY created_at DESC"
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT s.id, s.thread_id, s.cron_expr, s.payload_json, s.enabled, s.last_run_at, "
-                "s.created_at, s.max_catchup "
-                "FROM schedules s JOIN threads t ON t.id=s.thread_id "
-                "WHERE t.user_id=? "
-                "ORDER BY s.created_at DESC",
-                (ctx.user_id,),
-            ).fetchall()
+        rows = conn.execute(
+            "SELECT s.id, s.thread_id, s.cron_expr, s.payload_json, s.enabled, s.last_run_at, "
+            "s.created_at, s.max_catchup "
+            "FROM schedules s JOIN threads t ON t.id=s.thread_id "
+            "WHERE t.user_id=? "
+            "ORDER BY s.created_at DESC",
+            (ctx.user_id,),
+        ).fetchall()
     return {
         "items": [
             {
@@ -99,10 +93,7 @@ def update_schedule(
         if row is None:
             raise HTTPException(status_code=404, detail="schedule not found")
         owner = row["thread_user_id"]
-        if owner is None:
-            if not ctx.is_admin:
-                raise HTTPException(status_code=403, detail="forbidden")
-        elif not ctx.is_admin and str(owner) != ctx.user_id:
+        if owner is None or str(owner) != ctx.user_id:
             raise HTTPException(status_code=403, detail="forbidden")
         if "enabled" in payload:
             conn.execute(
@@ -140,10 +131,7 @@ def list_dispatches(
         if schedule_row is None:
             raise HTTPException(status_code=404, detail="schedule not found")
         owner = schedule_row["thread_user_id"]
-        if owner is None:
-            if not ctx.is_admin:
-                raise HTTPException(status_code=403, detail="forbidden")
-        elif not ctx.is_admin and str(owner) != ctx.user_id:
+        if owner is None or str(owner) != ctx.user_id:
             raise HTTPException(status_code=403, detail="forbidden")
         rows = conn.execute(
             (

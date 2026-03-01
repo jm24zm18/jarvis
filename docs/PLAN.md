@@ -4,6 +4,245 @@
 **Rebaseline:** 2026-02-18 (repo/test evidence alignment pass)
 **Canonical source note:** This file supersedes fragmented plan docs as the execution source of truth.
 
+## Execution Update (2026-03-01, DevSwarm model-id normalization for OpenCode)
+
+- Completed:
+  - Root cause observed in live swarm launches: OpenCode v1.2.x requires `--model` in `provider/model` format, while DevSwarm could pass bare model IDs (for example `qwen3.5-122b-a10b`), causing `ProviderModelNotFoundError` and immediate worker exit.
+  - Updated `src/jarvis/tasks/devswarm.py`:
+    - added `_normalize_opencode_model(...)`:
+      - bare model IDs -> `lmstudio/<model>`
+      - already-qualified models pass through unchanged
+      - empty model fails fast with explicit runtime error
+    - `_opencode_command(...)` now uses normalized model for both:
+      - default OpenCode command assembly
+      - custom `DEVSWARM_OPENCODE_COMMAND_TEMPLATE` formatting (`{model}`)
+  - Added/updated tests in `tests/unit/test_devswarm.py`:
+    - command generation now asserts normalized model usage
+    - helper coverage for bare/qualified/empty model inputs
+  - Updated docs:
+    - `docs/configuration.md`
+    - `docs/local-development.md`
+
+- Missing tasks discovered during implementation:
+  - Add `jarvis doctor` check to flag likely OpenCode model-format incompatibilities before swarm launch.
+  - Consider surfacing normalized model string in swarm task detail payload for easier operator debugging.
+
+- Remaining tasks before handoff:
+  - Run focused verification:
+    - `uv run pytest tests/unit/test_devswarm.py -q`
+    - `uv run pytest tests/integration/test_swarm_api.py -q`
+    - `uv run ruff check src/jarvis/tasks/devswarm.py tests/unit/test_devswarm.py`
+    - `uv run mypy src/jarvis/tasks/devswarm.py`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
+## Execution Update (2026-03-01, DevSwarm OpenCode preflight hardening)
+
+- Completed:
+  - Fixed `start-dev.sh` OpenCode bootstrap writer to emit valid JSON newline terminator (`"\n"`), avoiding malformed `opencode.json`.
+  - Hardened DevSwarm OpenCode runtime checks in `src/jarvis/tasks/devswarm.py`:
+    - added explicit OpenCode preflight validation for binary availability and config JSON validity (`opencode.json` / `OPENCODE_CONFIG_PATH`).
+    - `create_task(...)` now fails fast and returns structured error payload when preflight fails.
+    - `spawn_worker(...)` now preflights before tmux launch and surfaces actionable failure details.
+  - Updated fallback OpenCode command assembly to avoid message/file parsing ambiguity:
+    - changed fallback to `opencode run -m ... -f <file> -- "<message>"`.
+  - Tightened early worker liveness checks after launch:
+    - extended initial tmux wait window and added short follow-up alive check to reduce false `running` states.
+  - Added tests:
+    - `tests/unit/test_devswarm.py`: preflight invalid-config rejection, fail-fast create behavior, fallback command delimiter assertion.
+    - `tests/integration/test_swarm_api.py`: create endpoint returns `400` when DevSwarm preflight returns error.
+  - Updated docs:
+    - `docs/getting-started.md`
+    - `docs/local-development.md`
+    - `docs/configuration.md`
+
+- Missing tasks discovered during implementation:
+  - Add `jarvis doctor` check coverage for OpenCode config JSON validity so failures are caught before swarm usage.
+  - Consider adding a lightweight admin endpoint exposing DevSwarm preflight diagnostics for `/admin/swarm`.
+
+- Remaining tasks before handoff:
+  - Run focused verification:
+    - `uv run pytest tests/unit/test_devswarm.py -q`
+    - `uv run pytest tests/integration/test_swarm_api.py -q`
+    - `uv run ruff check src/jarvis/tasks/devswarm.py tests/unit/test_devswarm.py tests/integration/test_swarm_api.py`
+    - `uv run mypy src/jarvis/tasks/devswarm.py`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
+## Execution Update (2026-02-28, DevSwarm web UI + API parity)
+
+- Completed:
+  - Added authenticated DevSwarm HTTP surface:
+    - `GET /api/v1/swarm/tasks`
+    - `POST /api/v1/swarm/tasks`
+    - `POST /api/v1/swarm/tasks/{task_id}/nudge`
+    - `POST /api/v1/swarm/tasks/{task_id}/cleanup`
+  - Added route module `src/jarvis/routes/api/swarm.py` and router wiring in API v1 aggregator.
+  - Extended `src/jarvis/tasks/devswarm.py`:
+    - shared task-row normalization helper for stable API/UI payload shape.
+    - new `get_task_detail(...)` helper.
+    - system web-notification emission for live admin updates:
+      - `system.swarm.task.created`
+      - `system.swarm.task.updated`
+      - `system.swarm.task.nudged`
+      - `system.swarm.task.cleaned`
+      - `system.swarm.monitor.tick`
+  - Added web admin page `/admin/swarm` with:
+    - task registry + detail panel
+    - create form
+    - nudge action
+    - cleanup action (default keep-worktrees behavior)
+    - `subscribe_system` WebSocket live refresh on `system.swarm.*`
+  - Updated web app/nav/client types:
+    - `web/src/App.tsx`
+    - `web/src/components/layout/Shell.tsx`
+    - `web/src/api/endpoints.ts`
+    - `web/src/types/index.ts`
+  - Added tests:
+    - `tests/integration/test_swarm_api.py`
+    - `web/tests/adminSwarmContracts.test.mjs`
+    - extended `tests/integration/test_admin_api.py` endpoint smoke coverage.
+  - Updated docs:
+    - `docs/web-admin-guide.md`
+    - `docs/api-usage-guide.md`
+    - `docs/architecture.md`
+    - `docs/local-development.md`
+
+- Missing tasks discovered during implementation:
+  - Add filtering/search controls on `/admin/swarm` (status, task type, PR presence) for high-volume registries.
+  - Add optional per-task log tail endpoint/UI action for fast tmux/session triage.
+
+- Remaining tasks before handoff:
+  - Run focused verification:
+    - `uv run pytest tests/integration/test_swarm_api.py tests/integration/test_admin_api.py -q`
+    - `node --test web/tests/adminSwarmContracts.test.mjs`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
+## Execution Update (2026-02-28, Single-admin auth conversion)
+
+- Completed:
+  - Added migration `088_single_admin_auth.sql` to collapse persisted ownership to `system:root`, delete non-root users, and remove `users.role/scopes` and `web_sessions.role/scopes`.
+  - Updated auth service/dependencies/login flow to single-admin sessions:
+    - login rejects `external_id` and mints root-admin sessions only.
+    - `/api/v1/auth/me` now returns `user_id` only.
+    - websocket `auth.ok` payload now returns `user_id` only.
+  - Collapsed runtime `ensure_user(...)` behavior to root identity and removed role-based DB checks in command/approval services.
+  - Updated web auth store/client API typings to remove role dependency.
+  - Updated core docs (`README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/api-usage-guide.md`, `docs/architecture.md`, `docs/web-admin-guide.md`) to reflect single-admin semantics.
+
+- Missing tasks discovered during implementation:
+  - Rewrite/replace legacy integration suites that explicitly validate non-admin ownership/RBAC behavior.
+  - Remove or refactor residual CBAC token-scope tests/docs that no longer apply to web session auth.
+  - Add explicit migration regression coverage for pre-existing multi-user datasets upgraded through migration `088`.
+
+- Remaining tasks before handoff:
+  - Run focused verification:
+    - `uv run pytest tests/unit/test_auth_service.py tests/unit/test_cbac.py -q`
+    - `uv run pytest tests/integration/test_web_api.py::test_web_auth_login_me_logout_flow tests/integration/test_websocket.py -q`
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
+## Execution Update (2026-02-28, Single-admin docs drift cleanup)
+
+- Completed:
+  - Updated operational docs that still described legacy user/non-admin RBAC behavior:
+    - `docs/runbook.md`
+    - `docs/channels/whatsapp-ui.md`
+    - `docs/release-checklist.md`
+  - Standardized wording to single-admin auth semantics (`system:root`) and authenticated-vs-unauthenticated checks.
+
+- Missing tasks discovered during implementation:
+  - Align historical evidence docs that reference old RBAC terminology (kept as historical artifacts for now).
+
+- Remaining tasks before handoff:
+  - Run doc gate:
+    - `make docs-check`
+
+## Execution Update (2026-02-28, Auth shim removal pass)
+
+- Completed:
+  - Removed compatibility shims from `src/jarvis/auth/dependencies.py`:
+    - dropped `UserContext.is_admin`
+    - dropped `UserContext.role`
+    - removed `require_admin(...)`
+    - removed `require_scope(...)`
+  - Refactored API route dependencies to `Depends(require_auth)` directly.
+  - Simplified stale admin/non-admin conditional branches in API handlers to match single-admin semantics.
+
+- Validation run:
+  - `make lint`
+  - `make typecheck`
+  - `uv run pytest tests/integration/test_authorization.py tests/integration/test_web_api.py::test_web_auth_login_me_logout_flow tests/integration/test_media_upload_api.py tests/integration/test_memory_api_state_surfaces.py tests/integration/test_repo_api.py -q`
+
+- Missing tasks discovered during implementation:
+  - Historical docs and reports still contain pre-migration RBAC language and should be treated as archival context.
+
+## Execution Update (2026-02-28, DevSwarm MVP + deterministic PR readiness monitor)
+
+- Completed:
+  - Added migration `087_devswarm_tasks.sql` and DB query helpers for task registry persistence.
+  - Implemented DevSwarm runtime module:
+    - `src/jarvis/tasks/devswarm.py` with worktree/tmux worker spawn, deterministic monitor checks, tmux nudge, and cleanup flow.
+    - Required gates for `ready_for_review`: PR exists, PR base is `dev`, CI green, branch mergeability/up-to-date gate.
+    - Status transitions emit `devswarm.*` events and update persisted `checks_json`.
+  - Added GitHub PR status comment integration:
+    - `github_pr_swarm_status_comment(...)` in `src/jarvis/tasks/github.py`
+    - single-marker upsert comment (`<!-- jarvis:swarm-status -->`).
+  - Added WhatsApp transition notifications (`needs_attention`, `ready_for_review`) using existing channel/task pipeline.
+  - Added CLI commands:
+    - `jarvis swarm create`
+    - `jarvis swarm status`
+    - `jarvis swarm nudge`
+    - `jarvis swarm cleanup`
+  - Added tool namespace handlers in runtime:
+    - `devswarm.spawn_worker`
+    - `devswarm.send_tmux`
+    - `devswarm.check_tasks`
+    - `devswarm.cleanup`
+    - plus Zoe agent bundle (`agents/zoe/*`) with `allowed_tools` restricted to `devswarm.*`.
+  - Wired periodic monitor into in-process scheduler via `DEVSWARM_MONITOR_INTERVAL_SECONDS` (default 600s).
+  - Updated `start-dev.sh` bootstrap contract:
+    - checks `opencode` availability
+    - validates LM Studio endpoint
+    - discovers models from `/v1/models`
+    - writes OpenCode config (`opencode.json` or `OPENCODE_CONFIG_PATH`).
+  - Updated docs:
+    - `README.md`
+    - `docs/getting-started.md`
+    - `docs/local-development.md`
+    - `docs/cli-reference.md`
+    - `docs/architecture.md`
+    - `docs/configuration.md`
+    - `docs/github-pr-automation.md`
+
+- Missing tasks discovered during implementation:
+  - Add integration tests for GitHub PR monitor edge cases (`mergeable_state` transitions, CI pending/failure/success matrix).
+  - Add explicit admin UI page for DevSwarm task registry and per-task gate diagnostics.
+  - Add optional HTTP API surface (`/api/v1/swarm/tasks*`) with ownership/auth semantics for non-CLI operators.
+
+- Remaining tasks before handoff:
+  - Run focused checks:
+    - `bash -n start-dev.sh`
+    - `uv run pytest tests/unit -k devswarm -v` (or equivalent targeted suite if no dedicated file yet)
+  - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
 ## Ralph Sprint v2.0 (2026-02-22 → 2026-02-28)
 
 - [ ] Add admin API and UI drilldown for human_escalations queue visibility and replay controls
@@ -2036,6 +2275,46 @@ Rollback policy:
     - `uv run jarvis skill info web-research`
     - `uv run jarvis skill info skill-orchestration`
   - Run full quality gates:
+    - `make lint`
+    - `make typecheck`
+    - `make test-gates`
+    - `make docs-check`
+
+## Execution Update (2026-03-01, DevSwarm launcher compatibility + status accuracy)
+
+- Discovered issue:
+  - DevSwarm workers could appear stuck in `running` while doing nothing when `opencode run` rejected
+    `--prompt-file` and exited immediately.
+  - API dev reload watched `.jarvis/worktrees/*`, causing frequent restarts during swarm activity.
+- Completed:
+  - Added `opencode run` compatibility fallback in `src/jarvis/tasks/devswarm.py`:
+    - custom `DEVSWARM_OPENCODE_COMMAND_TEMPLATE` still takes priority
+    - empty template now auto-detects support for `--prompt-file` and falls back to `-f` when needed
+    - invalid template placeholders now return explicit runtime error.
+  - Added immediate post-spawn tmux liveness verification and log-tail error capture:
+    - fast worker exits now mark task `needs_attention` with actionable `last_error`.
+  - Added `refresh_task_status(task_id)` and reused it in:
+    - `create_task` (immediate state correction)
+    - `send_tmux` failure path (fresh status included in response)
+    - `check_tasks` periodic monitor loop (single-path state update logic).
+  - Updated defaults/docs:
+    - `src/jarvis/config.py`: `DEVSWARM_OPENCODE_COMMAND_TEMPLATE` default set to empty (auto mode)
+    - `.env.example`: template default cleared
+    - `Makefile`: `make api` now excludes `.jarvis/worktrees/*`, `.jarvis/logs/*`, `.jarvis/prompts/*` from reload.
+    - `docs/configuration.md`, `docs/local-development.md` updated to match behavior.
+  - Added/updated tests:
+    - `tests/unit/test_devswarm.py` now covers:
+      - prompt-file supported path
+      - fallback `-f` path
+      - custom template override
+      - invalid template placeholder failure.
+- Verification run:
+  - `uv run pytest tests/unit/test_devswarm.py -q`
+  - `uv run pytest tests/integration/test_swarm_api.py -q`
+  - `uv run ruff check src/jarvis/tasks/devswarm.py tests/unit/test_devswarm.py`
+  - `uv run mypy src/jarvis/tasks/devswarm.py`
+- Remaining tasks before handoff:
+  - Run full repo gates:
     - `make lint`
     - `make typecheck`
     - `make test-gates`

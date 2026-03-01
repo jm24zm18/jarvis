@@ -10,7 +10,7 @@ preflight-dev-ports:
 	python3 scripts/dev_preflight_ports.py
 
 api:
-	uv run uvicorn jarvis.main:app --host 0.0.0.0 --reload --app-dir src
+	uv run uvicorn jarvis.main:app --host 0.0.0.0 --reload --app-dir src --reload-exclude '.jarvis/worktrees/*' --reload-exclude '.jarvis/logs/*' --reload-exclude '.jarvis/prompts/*'
 
 test:
 	uv run pytest tests

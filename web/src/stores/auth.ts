@@ -3,19 +3,17 @@ import { create } from "zustand";
 interface AuthStore {
   isAuthenticated: boolean;
   userId: string;
-  role: string;
-  setAuth: (userId: string, role: string) => void;
+  setAuth: (userId: string) => void;
   clearAuth: () => void;
 }
 
 export const useAuthStore = create<AuthStore>((set) => ({
   isAuthenticated: false,
   userId: "",
-  role: "user",
-  setAuth: (userId, role) => {
-    set({ isAuthenticated: true, userId, role });
+  setAuth: (userId) => {
+    set({ isAuthenticated: true, userId });
   },
   clearAuth: () => {
-    set({ isAuthenticated: false, userId: "", role: "user" });
+    set({ isAuthenticated: false, userId: "" });
   },
 }));

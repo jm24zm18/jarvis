@@ -18,7 +18,7 @@ def _assert_thread_access(conn: sqlite3.Connection, thread_id: str, ctx: UserCon
     if row is None:
         raise HTTPException(status_code=404, detail="thread not found")
     owner_id = str(row["user_id"])
-    if not ctx.is_admin and owner_id != ctx.user_id:
+    if owner_id != ctx.user_id:
         raise HTTPException(status_code=403, detail="forbidden")
     return owner_id
 

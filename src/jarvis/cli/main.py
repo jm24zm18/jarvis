@@ -586,6 +586,122 @@ def maintenance_enqueue() -> None:
     click.echo("maintenance task queued" if ok else "failed to queue maintenance task")
 
 
+@cli.group("swarm")
+def swarm_group() -> None:
+    """DevSwarm worker orchestration controls."""
+
+
+@swarm_group.command("create")
+@click.option("--task", "task_description", required=True, help="Task description for the worker.")
+@click.option("--repo", "repo_path", required=True, type=click.Path(path_type=str))
+@click.option("--model", default=None, help="OpenCode model ID (defaults to LMSTUDIO_MODEL).")
+@click.option(
+    "--type",
+    "task_type",
+    default="feature",
+    show_default=True,
+    type=click.Choice(["feature", "bugfix", "refactor"], case_sensitive=False),
+)
+@click.option("--json", "json_output", is_flag=True, help="Print JSON result.")
+def swarm_create(
+    task_description: str,
+    repo_path: str,
+    model: str | None,
+    task_type: str,
+    json_output: bool,
+) -> None:
+    from jarvis.db.migrations.runner import run_migrations
+    from jarvis.tasks import devswarm
+
+    run_migrations()
+    result = devswarm.create_task(
+        description=task_description,
+        repo_path=repo_path,
+        model=model,
+        task_type=task_type,
+    )
+    if json_output:
+        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+    if not result.get("ok"):
+        raise click.ClickException(str(result.get("error") or "swarm create failed"))
+    click.echo(
+        f"created task {result.get('task_id')} status={result.get('status')} "
+        f"branch={result.get('branch')}"
+    )
+
+
+@swarm_group.command("status")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON result.")
+@click.option("--limit", default=50, show_default=True, type=int)
+def swarm_status(json_output: bool, limit: int) -> None:
+    from jarvis.db.migrations.runner import run_migrations
+    from jarvis.tasks import devswarm
+
+    run_migrations()
+    result = devswarm.status(limit=limit)
+    if json_output:
+        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+    items = result.get("items")
+    if not isinstance(items, list) or not items:
+        click.echo("no swarm tasks")
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        click.echo(
+            f"{item.get('id')} status={item.get('status')} branch={item.get('branch')} "
+            f"pr=#{item.get('pr_number') or '-'} "
+            f"attempts={item.get('attempt')}/{item.get('max_attempts')}"
+        )
+
+
+@swarm_group.command("nudge")
+@click.argument("task_id")
+@click.option("--message", required=True, help="Message to send to tmux session.")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON result.")
+def swarm_nudge(task_id: str, message: str, json_output: bool) -> None:
+    from jarvis.db.migrations.runner import run_migrations
+    from jarvis.tasks import devswarm
+
+    run_migrations()
+    result = devswarm.send_tmux(task_id, message)
+    if json_output:
+        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+    if not result.get("ok"):
+        raise click.ClickException(str(result.get("error") or "swarm nudge failed"))
+    click.echo(f"nudged {task_id}")
+
+
+@swarm_group.command("cleanup")
+@click.option("--task-id", default=None, help="Optional single task id to cleanup.")
+@click.option(
+    "--keep-worktrees",
+    is_flag=True,
+    help="Keep worktree directories (still kills tmux and marks task done).",
+)
+@click.option("--json", "json_output", is_flag=True, help="Print JSON result.")
+def swarm_cleanup(task_id: str | None, keep_worktrees: bool, json_output: bool) -> None:
+    from jarvis.db.migrations.runner import run_migrations
+    from jarvis.tasks import devswarm
+
+    run_migrations()
+    result = devswarm.cleanup(task_id=task_id, remove_worktrees=not keep_worktrees)
+    if json_output:
+        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+    if not result.get("ok"):
+        raw_failures = result.get("failures")
+        failure_count = len(raw_failures) if isinstance(raw_failures, list) else 0
+        click.echo(f"cleanup partial failures={failure_count}")
+        return
+    raw_removed = result.get("removed")
+    removed_count = len(raw_removed) if isinstance(raw_removed, list) else 0
+    click.echo(f"cleanup removed={removed_count}")
+
+
 @cli.group("feature")
 def feature_group() -> None:
     """Feature build utilities."""

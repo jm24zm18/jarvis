@@ -15,7 +15,7 @@ Path: `/admin/channels`
   relink diagnostics (`relink_required`, `can_reconnect`) when available.
 - Disconnect action.
 - Restart sidecar action.
-- All channel actions require admin auth and are blocked for non-admin users.
+- All channel actions require authenticated single-admin web sessions (`system:root`).
 
 ## Troubleshooting
 

@@ -78,20 +78,8 @@ def test_admin_subscribe_system_receives_system_events() -> None:
     get_settings.cache_clear()
     client = _managed_client()
 
-    login = client.post(
-        "/api/v1/auth/login",
-        json={"password": "secret", "external_id": "bootstrap-admin"},
-    )
+    login = client.post("/api/v1/auth/login", json={"password": "secret"})
     assert login.status_code == 200
-    bootstrap_user_id = str(login.json()["user_id"])
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET role='admin' WHERE id=?", (bootstrap_user_id,))
-    login = client.post(
-        "/api/v1/auth/login",
-        json={"password": "secret", "external_id": "bootstrap-admin"},
-    )
-    assert login.status_code == 200
-    assert login.json()["role"] == "admin"
 
     user_id = str(login.json()["user_id"])
     with get_conn() as conn:
@@ -114,7 +102,6 @@ def test_admin_subscribe_system_receives_system_events() -> None:
     with client.websocket_connect("/ws") as ws:
         auth_event = ws.receive_json()
         assert auth_event["type"] == "auth.ok"
-        assert auth_event["role"] == "admin"
         ws.send_json({"action": "subscribe_system"})
         ack = ws.receive_json()
         assert ack["type"] == "subscribed.system"

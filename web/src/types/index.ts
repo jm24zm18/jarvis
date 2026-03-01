@@ -326,6 +326,36 @@ export interface RepoCommit {
   authored_at: string;
 }
 
+export interface DevSwarmTask {
+  id: string;
+  task_type: "feature" | "bugfix" | "refactor" | string;
+  description: string;
+  status:
+    | "queued"
+    | "running"
+    | "needs_attention"
+    | "ready_for_review"
+    | "done"
+    | "failed"
+    | string;
+  repo_path: string;
+  worktree_path: string;
+  branch: string;
+  base_branch: string;
+  model: string;
+  provider: string;
+  tmux_session: string;
+  pr_number?: number | null;
+  pr_url: string;
+  attempt: number;
+  max_attempts: number;
+  last_error: string;
+  checks?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
 export interface RepoBranchSet {
   current: string;
   local: string[];

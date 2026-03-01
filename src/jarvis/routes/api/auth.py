@@ -8,7 +8,6 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, 
 from jarvis.auth.dependencies import (
     UserContext,
     extract_session_token,
-    require_admin,
     require_auth,
 )
 from jarvis.auth.service import (
@@ -19,13 +18,12 @@ from jarvis.auth.service import (
 )
 from jarvis.config import get_settings
 from jarvis.db.connection import get_conn
-from jarvis.db.queries import ensure_user
+from jarvis.db.queries import ensure_root_user
 from jarvis.providers.factory import resolve_fallback_provider_name, resolve_primary_provider_name
 from jarvis.tasks.system import enqueue_settings_reload
 
 router = APIRouter(prefix="/auth", tags=["api-auth"])
 _ALLOWED_PRIMARY_PROVIDERS = {"openrouter", "sglang", "lmstudio"}
-_MAX_EXTERNAL_ID_LENGTH = 256
 
 
 def _load_env(path: object) -> list[str]:
@@ -92,7 +90,10 @@ def _parse_bool(value: object) -> bool:
 
 
 async def _load_models_catalog(base_url: str, api_key: str = "") -> list[str]:
-    endpoint = f"{base_url.rstrip('/')}/models"
+    normalized = base_url.rstrip("/")
+    if not normalized.endswith("/v1"):
+        normalized = f"{normalized}/v1"
+    endpoint = f"{normalized}/models"
     try:
         headers: dict[str, str] = {}
         if api_key.strip():
@@ -157,23 +158,14 @@ def login(payload: dict[str, str], request: Request, response: Response) -> dict
     if password != setup_password:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
-    external_id = str(payload.get("external_id", "web_admin")).strip() or "web_admin"
-    if len(external_id) > _MAX_EXTERNAL_ID_LENGTH:
+    if "external_id" in payload:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"external_id must be at most {_MAX_EXTERNAL_ID_LENGTH} characters",
+            detail="external_id is no longer supported",
         )
     with get_conn() as conn:
-        user_id = ensure_user(conn, external_id)
-        admin_count_row = conn.execute(
-            "SELECT COUNT(*) AS n FROM users WHERE role='admin' AND external_id != 'system:root'"
-        ).fetchone()
-        admin_count = int(admin_count_row["n"]) if admin_count_row is not None else 0
-        if admin_count == 0:
-            conn.execute("UPDATE users SET role='admin' WHERE id=?", (user_id,))
-        role_row = conn.execute("SELECT role FROM users WHERE id=? LIMIT 1", (user_id,)).fetchone()
-        role = str(role_row["role"]) if role_row is not None else "user"
-        session_id, token = create_session(conn, user_id, role)
+        user_id = ensure_root_user(conn)
+        session_id, token = create_session(conn, user_id)
     ttl_hours = max(1, settings.web_auth_token_ttl_hours)
     response.set_cookie(
         key="jarvis_session",
@@ -184,12 +176,12 @@ def login(payload: dict[str, str], request: Request, response: Response) -> dict
         max_age=ttl_hours * 3600,
         path="/",
     )
-    return {"token": token, "session_id": session_id, "user_id": user_id, "role": role}
+    return {"token": token, "session_id": session_id, "user_id": user_id}
 
 
 @router.get("/me")
 def me(ctx: UserContext = Depends(require_auth)) -> dict[str, str]:  # noqa: B008
-    return {"user_id": ctx.user_id, "role": ctx.role}
+    return {"user_id": ctx.user_id}
 
 
 @router.post("/logout")
@@ -214,7 +206,7 @@ def logout(
 
 @router.get("/providers/config")
 def providers_config(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     settings = get_settings()
@@ -240,7 +232,7 @@ def providers_config(
 
 @router.get("/providers/models")
 async def providers_models(
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     settings = get_settings()
@@ -264,7 +256,7 @@ async def providers_models(
 @router.post("/providers/config")
 def update_providers_config(
     payload: dict[str, object],
-    ctx: UserContext = Depends(require_admin),  # noqa: B008
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
 ) -> dict[str, object]:
     del ctx
     settings = get_settings()

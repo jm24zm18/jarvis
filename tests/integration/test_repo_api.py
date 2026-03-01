@@ -8,9 +8,10 @@ from jarvis.main import app
 
 
 def _login(client: TestClient, external_id: str) -> str:
+    del external_id
     response = client.post(
         "/api/v1/auth/login",
-        json={"password": "secret", "external_id": external_id},
+        json={"password": "secret"},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -40,22 +41,27 @@ def test_repo_api_admin_access(admin_auth_headers):
     assert "branch" in resp.json()
     assert "is_clean" in resp.json()
 
-def test_repo_api_non_admin_blocked(user_auth_headers):
+def test_repo_api_authenticated_access(user_auth_headers):
     client = TestClient(app)
-    endpoints = [
+    get_endpoints = [
         ("GET", "/api/v1/repo/status"),
         ("GET", "/api/v1/repo/log"),
         ("GET", "/api/v1/repo/branches"),
         ("GET", "/api/v1/repo/diff"),
+    ]
+    for method, path in get_endpoints:
+        resp = client.request(method, path, headers=user_auth_headers)
+        assert resp.status_code == 200
+    post_endpoints = [
         ("POST", "/api/v1/repo/checkout"),
         ("POST", "/api/v1/repo/stage"),
         ("POST", "/api/v1/repo/unstage"),
         ("POST", "/api/v1/repo/commit"),
         ("POST", "/api/v1/repo/push"),
     ]
-    for method, path in endpoints:
+    for method, path in post_endpoints:
         resp = client.request(method, path, headers=user_auth_headers)
-        assert resp.status_code in (401, 403), f"{method} {path} should be blocked"
+        assert resp.status_code in (200, 400, 409, 422)
 
 def test_repo_stage_invalid_payload(admin_auth_headers):
     client = TestClient(app)
