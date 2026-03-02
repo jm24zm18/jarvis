@@ -1,10 +1,12 @@
 """System status + lockdown API routes."""
 
 import json
+import socket
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
 
+from jarvis.__init__ import __version__
 from jarvis.agents.loader import reset_loader_caches
 from jarvis.auth.dependencies import UserContext, require_auth
 from jarvis.config import get_settings
@@ -188,3 +190,28 @@ def repo_index(
     out_path, _hash_path = write_repo_index(root)
     payload = read_repo_index(root) or {}
     return {"ok": True, "path": str(out_path), "index": payload}
+
+
+@router.get("/health")
+def health_check(
+    ctx: UserContext = Depends(require_auth),  # noqa: B008
+) -> dict[str, object]:
+    del ctx
+
+    runner = get_task_runner()
+
+    with get_conn() as conn:
+        state = get_system_state(conn)
+        lockdown = state.get("lockdown", False)
+
+    return {
+        "status": "healthy",
+        "version": __version__,
+        "hostname": socket.gethostname(),
+        "task_runner": {
+            "in_flight": runner.in_flight,
+            "max_concurrent": runner.max_concurrent,
+        },
+        "database": "connected",
+        "lockdown_mode": lockdown,
+    }
